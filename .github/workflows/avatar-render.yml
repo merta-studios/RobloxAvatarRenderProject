@@ -97,6 +97,14 @@ jobs:
             || echo "::warning::zstandard/lz4 konnten nicht installiert werden"
           python3 -c "import zstandard, lz4.block; print('RBXM-Module OK (zstandard, lz4)')" \
             || echo "::warning::zstandard/lz4 nicht verfuegbar - RBXM via zlib-Fallback"
+          # DracoPy dekodiert FileMesh-7.00-Meshes (moderne UGC-Items wie
+          # das Bricksmith-Badge). Nicht fatal: ohne das Paket werden
+          # solche Meshes nur uebersprungen (Begruendung im Manifest).
+          python3 -m pip install --quiet DracoPy \
+            || python3 -m pip install --quiet --break-system-packages DracoPy \
+            || echo "::warning::DracoPy nicht installierbar - FileMesh 7.00 wird uebersprungen"
+          python3 -c "import DracoPy; print('DracoPy OK (FileMesh 7.00)')" \
+            || echo "::warning::DracoPy nicht verfuegbar - v7-Meshes werden uebersprungen"
 
       - name: 4) Avatar laden und Rig bauen
         id: build

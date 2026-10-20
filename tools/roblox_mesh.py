@@ -12,7 +12,8 @@ Unterstuetzt:
   * version 3.00 / 3.01  (binaer + LODs)
   * version 4.00 / 4.01  (binaer + Bones/Skinning)
   * version 5.00         (binaer + FACS-Daten am Dateiende)
-  * version 6.00 / 7.00  (binaer, experimentell - neuere Meshes)
+  * version 6.00 / 7.00  (Chunk-Container; 7.00 zusaetzlich
+                          Draco-komprimiert, braucht Paket "DracoPy")
 
 Koordinatensystem: Roblox ist Y-up, rechtshaendig, "vorne" ist -Z. OBJ ist
 ebenfalls Y-up, daher werden Positionen und Normalen unveraendert uebernommen.
@@ -258,7 +259,7 @@ def _parse_by_version(data: bytes, version: str) -> MeshData:
     elif version == "5.00":
         mesh = _parse_v5(data, version)
     elif version in ("6.00", "7.00"):
-        mesh = _parse_v4(data, version)  # gleiches Header-Schema, Header-Groesse beachten
+        mesh = _parse_chunked(data, version)
     else:
         raise MeshParseError(f"Nicht unterstuetzte FileMesh-Version {version}")
     return mesh
@@ -383,7 +384,7 @@ def _parse_v3(data: bytes, version: str) -> MeshData:
 
 
 def _parse_v4(data: bytes, version: str) -> MeshData:
-    """Gilt fuer v4.00, v4.01 und (Header-kompatibel) v6.00/v7.00."""
+    """Gilt fuer v4.00 und v4.01 (v6/v7 siehe _parse_chunked)."""
     off = 13
     hdr_size = struct.unpack_from("<H", data, off)[0]
     if hdr_size < 24:
@@ -427,6 +428,184 @@ def _parse_v5(data: bytes, version: str) -> MeshData:
     if main:
         faces = faces[:main]
     return MeshData(positions, normals, uvs, faces, colors, version)
+
+
+def _parse_chunked(data: bytes, version: str) -> MeshData:
+    """FileMesh 6.00/7.00: Chunk-Container statt festem Header.
+
+    Nach der Versionszeile folgen Chunks
+    ``char name[8] | uint32 chunkVersion | uint32 size | byte data[size]``
+    bis zum Dateiende (Spec: devforum "Roblox FileMesh Format
+    Specification", Revision 3/30/2025). Nur "COREMESH" (Geometrie) und
+    "LODS" (Face-Bereiche) werden ausgewertet.
+    """
+    off = 13  # "version 6.00\n" / "version 7.00\n"
+    coremesh = None
+    coremesh_version = 0
+    lod_offsets: List[int] = []
+    while off + 16 <= len(data):
+        raw_name = data[off:off + 8]
+        name = raw_name.rstrip(b"\x00 ").decode("ascii", "replace")
+        chunk_version, size = struct.unpack_from("<II", data, off + 8)
+        off += 16
+        payload = data[off:off + size]
+        if len(payload) < size:
+            raise MeshParseError(
+                f"version {version}: Chunk '{name}' ist abgeschnitten")
+        off += size
+        if name == "COREMESH":
+            coremesh, coremesh_version = payload, chunk_version
+        elif name == "LODS":
+            lod_offsets = _parse_lods_chunk(payload)
+    if coremesh is None:
+        raise MeshParseError(f"version {version}: kein COREMESH-Chunk")
+
+    if coremesh_version >= 2:
+        mesh = _parse_coremesh_draco(coremesh, version)
+    else:
+        mesh = _parse_coremesh_v1(coremesh, version)
+    main = _main_lod_face_count(lod_offsets)
+    if main:
+        mesh.faces = mesh.faces[:main]
+    return mesh
+
+
+def _parse_lods_chunk(payload: bytes) -> List[int]:
+    """LODS v1: ushort lodType | byte numHQ | uint count | uint offsets[]."""
+    for header in (7, 8):  # 8 = mit Alignment-Byte vor dem count
+        if len(payload) < header:
+            continue
+        count = struct.unpack_from("<I", payload, header - 4)[0]
+        if header + count * 4 == len(payload) and count < 10000:
+            return list(struct.unpack_from("<%dI" % count, payload, header))
+    return []
+
+
+def _parse_coremesh_v1(payload: bytes, version: str) -> MeshData:
+    """COREMESH v1 (FileMesh 6.00): uint numVerts, Verts, uint numFaces, Faces."""
+    if len(payload) < 8:
+        raise MeshParseError(f"version {version}: COREMESH zu kurz")
+    num_verts = struct.unpack_from("<I", payload, 0)[0]
+    if num_verts <= 0:
+        raise MeshParseError(f"version {version}: Mesh ohne Vertices")
+    for stride in (40, 36):
+        faces_off = 4 + num_verts * stride
+        if faces_off + 4 > len(payload):
+            continue
+        num_faces = struct.unpack_from("<I", payload, faces_off)[0]
+        if faces_off + 4 + num_faces * 12 == len(payload):
+            positions, normals, uvs, colors = _unpack_vertices(
+                payload, 4, num_verts, stride)
+            faces = _read_faces(payload, faces_off + 4, num_faces, num_verts)
+            return MeshData(positions, normals, uvs, faces, colors, version)
+    raise MeshParseError(
+        f"version {version}: COREMESH-Groesse passt zu keiner Vertex-Stride "
+        f"(36/40) bei {num_verts} Vertices")
+
+
+def _parse_coremesh_draco(payload: bytes, version: str) -> MeshData:
+    """COREMESH v2 (FileMesh 7.00): uint dracoSize + Draco-Bitstrom."""
+    if len(payload) < 4:
+        raise MeshParseError(f"version {version}: COREMESH zu kurz")
+    size = struct.unpack_from("<I", payload, 0)[0]
+    stream = payload[4:4 + size]
+    if len(stream) < size:
+        raise MeshParseError(f"version {version}: Draco-Strom abgeschnitten")
+    try:
+        import DracoPy
+    except ImportError as exc:
+        raise MeshParseError(
+            "FileMesh 7.00 ist Draco-komprimiert - bitte Paket 'DracoPy' "
+            "installieren (pip install DracoPy)") from exc
+    try:
+        decoded = DracoPy.decode_buffer_to_mesh(bytes(stream))
+    except Exception as exc:  # noqa: BLE001 - fremde Exception-Typen kapseln
+        raise MeshParseError(f"Draco-Dekompression fehlgeschlagen: {exc}") from exc
+
+    positions = [tuple(float(v) for v in p) for p in decoded.points]
+    faces = [tuple(int(i) for i in f) for f in decoded.faces]
+    raw_normals = getattr(decoded, "normals", None)
+    if raw_normals is not None and len(raw_normals) == len(positions):
+        normals = [tuple(float(v) for v in n) for n in raw_normals]
+    else:
+        normals = []
+    raw_uv = getattr(decoded, "tex_coord", None)
+    if raw_uv is not None and len(raw_uv) == len(positions):
+        uvs = [(float(u), float(v)) for u, v in raw_uv]
+    else:
+        uvs = [(0.0, 0.0)] * len(positions)
+    raw_colors = getattr(decoded, "colors", None)
+    colors = None
+    if raw_colors is not None and len(raw_colors) == len(positions):
+        colors = []
+        for c in raw_colors:
+            rgba = tuple(int(v) for v in c)
+            colors.append(rgba if len(rgba) == 4 else rgba + (255,))
+    if not normals:
+        normals = _smooth_normals(positions, faces)
+    return MeshData(positions, normals, uvs, faces, colors, version)
+
+
+def _smooth_normals(positions, faces):
+    """Glatte Vertex-Normalen aus den Face-Normalen mitteln."""
+    acc = [[0.0, 0.0, 0.0] for _ in positions]
+    for a, b, c in faces:
+        if max(a, b, c) >= len(positions):
+            continue
+        n = _face_normal(positions[a], positions[b], positions[c])
+        for index in (a, b, c):
+            acc[index][0] += n[0]
+            acc[index][1] += n[1]
+            acc[index][2] += n[2]
+    normals = []
+    for x, y, z in acc:
+        length = math.sqrt(x * x + y * y + z * z)
+        if length < 1e-12:
+            normals.append((0.0, 1.0, 0.0))
+        else:
+            normals.append((x / length, y / length, z / length))
+    return normals
+
+
+def merge_meshes(items, source_version: str = "merged") -> MeshData:
+    """Mehrere Meshes (z. B. R15-Segmente eines RBXM) zu einem verbinden.
+
+    ``items``: Liste aus ``(MeshData, size|None, position|None)``. Jedes
+    Mesh wird pro Achse auf ``size`` gebracht (falls gegeben) und so
+    verschoben, dass sein Box-Zentrum auf ``position`` liegt (RBXM:
+    CFrame-Position; Drehungen werden ignoriert - Naeherung fuer die
+    aufrechte Standardpose).
+    """
+    positions: List[Vec3] = []
+    normals: List[Vec3] = []
+    uvs: List[Tuple[float, float]] = []
+    faces: List[Tuple[int, int, int]] = []
+    colors: List[Tuple[int, int, int, int]] = []
+    all_colors = True
+    for mesh, size, position in items:
+        part = mesh
+        if size:
+            current = mesh.size()
+            factors = tuple(
+                float(size[i]) / current[i] if current[i] > 1e-9 else 1.0
+                for i in range(3))
+            part = mesh.transform(factors)
+        if position is not None:
+            c = part.center()
+            part = part.transform(
+                1.0, (position[0] - c[0], position[1] - c[1],
+                      position[2] - c[2]))
+        base = len(positions)
+        positions.extend(part.positions)
+        normals.extend(part.normals or [(0.0, 1.0, 0.0)] * len(part.positions))
+        uvs.extend(part.uvs or [(0.0, 0.0)] * len(part.positions))
+        faces.extend((a + base, b + base, c_ + base) for a, b, c_ in part.faces)
+        if part.colors:
+            colors.extend(part.colors)
+        else:
+            all_colors = False
+    return MeshData(positions, normals, uvs, faces,
+                    colors if all_colors and colors else None, source_version)
 
 
 def _guess_stride(data: bytes, off: int, num_verts: int, num_faces: int,

@@ -161,8 +161,20 @@ Besonderheiten:
 * **Animationen** (AssetTypen 24, 48–56, 61, 78) werden gar nicht erst
   heruntergeladen, nur gezählt (im Manifest unter
   `stats.ignored_animations`) – sie tauchen **nicht** als „übersprungen“ auf.
+* **R15-Segmente:** Körperteil-Bundles (z. B. Korblox) liefern pro Asset
+  mehrere Segmente (`RightUpperArm`, `RightLowerLeg`, `RightFoot` …).
+  Die Pipeline wählt die R15-Segmente per Name aus und führt sie über
+  ihre RBXM-Positionen zu einem zusammenhängenden Körperteil zusammen.
+  Drehungen der Segmente werden ignoriert (aufrechte Standardpose).
+* **Moderne Meshes (FileMesh 6.00/7.00):** Neuere Assets nutzen ein
+  Chunk-Format; Version 7.00 ist zusätzlich **Draco-komprimiert**.
+  Der Parser liest beides; für 7.00 installiert der Workflow das Paket
+  `DracoPy` (ohne das Paket werden nur diese Meshes übersprungen, der
+  Grund steht dann im Manifest).
 * **Headless:** Ein `DynamicHead`-Asset ohne sichtbare Geometrie
-  (< 20 Faces, z. B. „Headless Head“) bedeutet: Der Avatar trägt keinen
+  (z. B. „Headless Head“ – erkannt an kaum vorhandener Geometrie,
+  winziger Part-Größe im RBXM oder versteckter Punkt-Geometrie)
+  bedeutet: Der Avatar trägt keinen
   Kopf. Die Pipeline lässt den Rig-Kopf dann weg und vermerkt das als
   „Headless/DynamicHead erkannt“ in Manifest und Step Summary.
 * **Sanity-Check:** Mesh-Einheiten aus RBXM-Dateien sind nicht immer

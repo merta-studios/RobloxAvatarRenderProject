@@ -509,12 +509,19 @@ def _parse_binary(data: bytes) -> List[Dict[str, Any]]:
     return entries
 
 
+# Legacy-URL-Form: klassische Shirt-/Pants-Templates stehen oft als
+# "http://www.roblox.com/asset/?id=123" in der Datei.
+_URL_ID_RE = re.compile(rb"asset/\?[^\"'\x00]{0,40}?[?&]id=(\d+)|[?&]id=(\d+)")
+
+
 def _scan_for_asset_ids(payloads: List[bytes]) -> List[Dict[str, Any]]:
-    """Notnagel: dekomprimierte Chunks nach `rbxassetid://`-Strings absuchen.
+    """Notnagel: dekomprimierte Chunks nach Asset-IDs im Klartext absuchen.
 
     Nur aktiv, wenn die strukturierte Auswertung gar keine IDs fand
-    (z. B. unbekannte kuenftige Property-Kodierung). Ob eine gefundene ID
-    ein Mesh oder eine Textur ist, entscheidet der Aufrufer nach dem
+    (z. B. unbekannte kuenftige Property-Kodierung). Gesucht wird
+    ``rbxassetid://NNN`` und - falls das nichts ergibt - die
+    Legacy-URL-Form ``.../asset/?id=NNN``. Ob eine gefundene ID ein
+    Mesh oder eine Textur ist, entscheidet der Aufrufer nach dem
     Download anhand der Magic-Bytes.
     """
     found: List[int] = []
@@ -525,6 +532,13 @@ def _scan_for_asset_ids(payloads: List[bytes]) -> List[Dict[str, Any]]:
             if number > 0 and number not in seen:
                 seen.add(number)
                 found.append(number)
+    if not found:
+        for payload in payloads:
+            for match in _URL_ID_RE.finditer(payload):
+                number = int(match.group(1) or match.group(2))
+                if number > 100 and number not in seen:
+                    seen.add(number)
+                    found.append(number)
     return [
         {"class": "Unbekannt", "name": "", "mesh_id": number,
          "texture_id": None, "size": None, "position": None}

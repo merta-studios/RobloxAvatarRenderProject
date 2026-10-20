@@ -15,6 +15,7 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import struct
 import sys
 
 import pytest
@@ -76,6 +77,44 @@ def _pants_rbxm(template_id):
                        "Parent": None}])
 
 
+def _rbxm_arm_segments():
+    """R15-Arm als zwei Segmente (UpperArm oben, Hand unten).
+
+    So liefern echte Bundle-RBXMs die Koerperteile aus - die Pipeline
+    muss sie per CFrame-Position zusammenfuehren, statt nur das erste
+    Segment zu benutzen (im echten Lauf war der Korblox-Arm nur eine
+    schwebende Klaue)."""
+    upper = {"class": "MeshPart",
+             "props": {"Name": "LeftUpperArm",
+                       "MeshId": "rbxassetid://900000002",
+                       "size": (1.0, 1.0, 1.0), "CFrame": (0.0, 1.5, 0.0)},
+             "Parent": None}
+    hand = {"class": "MeshPart",
+            "props": {"Name": "LeftHand",
+                      "MeshId": "rbxassetid://900000022",
+                      "size": (0.8, 0.6, 0.8), "CFrame": (0.0, 0.3, 0.0)},
+            "Parent": None}
+    return make_rbxm([upper, hand])
+
+
+def _badge_mesh_bytes():
+    """Badge als echtes FileMesh 7.00 (Draco), ohne DracoPy als v2.
+
+    Das echte Bricksmith-Badge (Mesh 110536326812594) ist ein v7-Mesh
+    und scheiterte frueher mit 'Datei zu kurz'."""
+    badge = roblox_mesh.make_box(0.6, 0.6, 0.2)
+    try:
+        import DracoPy
+        import numpy as np
+    except ImportError:
+        return encode_v2(badge)
+    blob = DracoPy.encode(np.array(badge.positions, dtype=float),
+                        faces=np.array(badge.faces, dtype=np.uint32))
+    core = struct.pack("<I", len(blob)) + blob
+    return (b"version 7.00\n" + b"COREMESH"
+            + struct.pack("<II", 2, len(core)) + core)
+
+
 def _merta_downloads():
     box = lambda w, h, d: encode_v2(roblox_mesh.make_box(w, h, d))  # noqa: E731
     sphere = encode_v2(roblox_mesh.make_sphere(1.0, 12, 8))
@@ -83,8 +122,9 @@ def _merta_downloads():
         # Koerperteile (RBXM) + nachgeladene Meshes
         27112025: _rbxm_torso_specialmesh(900000001),
         900000001: box(3.0, 1.0, 0.5),
-        27112052: _rbxm_meshpart("LeftArm", 900000002),
-        900000002: box(1.0, 2.0, 1.0),
+        27112052: _rbxm_arm_segments(),   # LeftArm: UpperArm + Hand
+        900000002: box(1.0, 1.0, 1.0),
+        900000022: box(0.8, 0.6, 0.8),
         139607625: _rbxm_meshpart("RightArm", 900000003),
         900000003: sphere,
         134082507: _rbxm_meshpart("LeftLeg", 900000004),
@@ -101,7 +141,7 @@ def _merta_downloads():
         900000012: box(1.4, 1.2, 1.4),
         72574684946317: _rbxm_meshpart("Bricksmith Badge", 900000013,
                                        size=(0.6, 0.6, 0.2)),
-        900000013: box(0.6, 0.6, 0.2),
+        900000013: _badge_mesh_bytes(),   # FileMesh 7.00 wie in echt
         # Headless Head: RBXM zeigt auf ein degeneriertes Mesh (1 Face)
         15093053680: _rbxm_meshpart("Head", 900000014, size=(0.01, 0.01, 0.01)),
         900000014: encode_v2(_tiny_mesh()),
@@ -177,6 +217,8 @@ def test_merta_avatar_keine_uebersprungen(merta_avatar, monkeypatch, tmp_path):
         assert part["kind"] == "body"
         assert "Echtes Mesh aus RBXM" in (part.get("note") or "")
         assert (tmp_path / part["obj"]).stat().st_size > 50
+    # Der linke Arm wurde aus seinen zwei R15-Segmenten zusammengefuehrt
+    assert "2 R15-Segmente" in (by_name["links_arm"].get("note") or "")
     assert by_name["torso"]["texture"].endswith("13576957688.png")
     # Hosen-Textur wurde aus dem Pants-RBXM (PantsTemplate) nachgeladen
     assert by_name["links_bein"]["texture"].endswith("900000021.png")
