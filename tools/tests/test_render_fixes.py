@@ -570,3 +570,35 @@ def test_beine_sind_nicht_breiter_als_der_torso(monkeypatch, tmp_path):
     # beide Beine zusammen bleiben innerhalb der Torso-Breite
     assert width("links_bein") + width("rechts_bein") <= width("torso") * 1.05
     assert any("Proportionen" in w for w in manifest["warnings"])
+
+
+def test_dunkle_kopf_textur_faellt_auf_koerperfarbe_zurueck(monkeypatch, tmp_path):
+    """Eine fast schwarze Karte ist meist Roughness/Normal - kein Farbbild."""
+    avatar = _base_avatar([{"id": 79, "name": "Head", "assetType": {"id": 79}}])
+    head = make_rbxm([_meshpart("Head", 7901, (1.0, 1.0, 1.0),
+                                (0.0, 5.0, 0.0), texture_id=7902)])
+    dark_map = png_rgba(32, 32, lambda x, y: (3, 3, 3, 255))
+    _install(monkeypatch, avatar, {
+        79: head, 7901: encode_v2(roblox_mesh.make_sphere(0.5, 16, 12)),
+        7902: dark_map,
+    })
+    manifest = build_avatar.build("Test", str(tmp_path), verbose=False)
+    kopf = next(p for p in manifest["parts"] if p["name"] == "kopf_mesh")
+    assert not kopf.get("texture")
+    # Koerperfarbe des Kopfes (hell) statt Schwarz
+    assert int(kopf["color"][1:3], 16) > 100
+    assert any("Zusatz-Map" in w for w in manifest["warnings"])
+
+
+def test_helle_kopf_textur_bleibt_erhalten(monkeypatch, tmp_path):
+    avatar = _base_avatar([{"id": 79, "name": "Head", "assetType": {"id": 79}}])
+    head = make_rbxm([_meshpart("Head", 7901, (1.0, 1.0, 1.0),
+                                (0.0, 5.0, 0.0), texture_id=7902)])
+    skin = png_rgba(32, 32, lambda x, y: (240, 200, 170, 255))
+    _install(monkeypatch, avatar, {
+        79: head, 7901: encode_v2(roblox_mesh.make_sphere(0.5, 16, 12)),
+        7902: skin,
+    })
+    manifest = build_avatar.build("Test", str(tmp_path), verbose=False)
+    kopf = next(p for p in manifest["parts"] if p["name"] == "kopf_mesh")
+    assert kopf["texture"] == "textures/7902.png"

@@ -449,6 +449,36 @@ def texture_average_color(path: str, fallback: str,
     return "#%02x%02x%02x" % (total_r // count, total_g // count, total_b // count)
 
 
+def _luminance(hex_color: str) -> float:
+    """Relative Helligkeit einer Hex-Farbe (0 = schwarz, 1 = weiss)."""
+    value = (hex_color or "#000000").lstrip("#")
+    try:
+        r, g, b = (int(value[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    except (ValueError, IndexError):
+        return 0.5
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+# Texturen unter dieser Helligkeit sind fuer Koepfe unbrauchbar: echte
+# Gesichts-/Hautkarten sind hell, eine fast schwarze Karte ist meist eine
+# Roughness-/Normal-Map aus dem RBXM (dann bleibt der Kopf sonst schwarz).
+DARK_TEXTURE_LUMINANCE = 0.12
+
+
+def _usable_head_texture(texture: Optional[str], out_dir: str,
+                         body_color: str) -> Optional[str]:
+    """Kopf-Textur nur uebernehmen, wenn sie wie ein Farbbild aussieht."""
+    if not texture:
+        return None
+    path = os.path.join(out_dir, texture)
+    color = texture_average_color(path, "", alpha_min=32)
+    if not color:
+        return texture          # nicht dekodierbar -> unveraendert lassen
+    if _luminance(color) < DARK_TEXTURE_LUMINANCE and _luminance(body_color) > 0.2:
+        return None
+    return texture
+
+
 def _texture_color_hint(texture: Optional[str], body_color: str,
                         out_dir: str) -> str:
     """Farbe fuer ein Teil: Durchschnitt der Textur, sonst Koerperfarbe."""
@@ -919,15 +949,22 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 placed = sanity_check(placed, target, "Kopf", warnings)
                 fname = "kopf_mesh.obj"
                 placed.write_obj(os.path.join(parts_dir, fname))
-                farbe = _texture_color_hint(head_mesh.get("texture_file"),
-                                            part.color, out_dir)
+                kopf_textur = _usable_head_texture(
+                    head_mesh.get("texture_file"), out_dir, part.color)
+                if head_mesh.get("texture_file") and not kopf_textur:
+                    warnings.append(
+                        "Kopf-Textur wirkt wie eine dunkle Zusatz-Map "
+                        "(Roughness/Normal) - der Kopf nutzt die "
+                        "Koerperfarbe des Avatars."
+                    )
+                farbe = _texture_color_hint(kopf_textur, part.color, out_dir)
                 parts.append({
                     "name": "kopf_mesh",
                     "obj": f"parts/{fname}",
                     "color": farbe,
                     "kind": "body",
                     "smooth": True,
-                    "texture": (head_mesh.get("texture_file")
+                    "texture": (kopf_textur
                                 or texture_for_part.get("kopf_mesh")),
                     "asset_id": head_mesh["asset_id"],
                     "note": ("Echtes Kopf-Mesh des Avatars"
