@@ -1,6 +1,10 @@
-# Abhaengigkeiten fuer lokale Entwicklung/Tests (die Pipeline selbst braucht nur die Standardbibliothek)
+# Abhaengigkeiten fuer lokale Entwicklung/Tests (die Pipeline selbst laeuft
+# mit der Standardbibliothek; lz4/zstandard werden nur fuer komprimierte
+# RBXM-Chunks gebraucht und im Workflow automatisch installiert)
 pytest>=8.0
 PyYAML>=6.0
+lz4>=4.3
+zstandard>=0.22
 
 # Optional, nur fuer lokale Render-Tests ohne installiertes Blender:
 # bpy==4.2.0
