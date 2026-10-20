@@ -1,0 +1,38 @@
+name: Roblox-Diagnose
+
+# Prüft jederzeit (ohne Render), ob die Roblox-Endpunkte erreichbar sind und
+# ob das Secret ROBLOX_OPEN_CLOUD_API_KEY die nötigen Rechte für Asset-Downloads
+# hat. Nützlich bei HTTP 401/403 oder wenn der Render "leer" aussieht.
+on:
+  workflow_dispatch:
+    inputs:
+      username:
+        description: "Roblox-Username zum Testen (leer = username.txt)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    name: API-Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Username bestimmen
+        id: username
+        env:
+          INPUT_USERNAME: ${{ github.event.inputs.username }}
+        run: |
+          set -euo pipefail
+          RAW="${INPUT_USERNAME:-}"
+          [ -n "${RAW// /}" ] || RAW="$(cat username.txt 2>/dev/null || echo Builderman)"
+          echo "username=$(printf '%s' "$RAW" | tr -d '\r' | head -n 1 | xargs)" >> "$GITHUB_OUTPUT"
+
+      - name: Diagnose ausführen
+        env:
+          ROBLOX_OPEN_CLOUD_API_KEY: ${{ secrets.ROBLOX_OPEN_CLOUD_API_KEY }}
+        run: python3 tools/diagnose.py --username "${{ steps.username.outputs.username }}"

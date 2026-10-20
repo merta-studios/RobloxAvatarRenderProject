@@ -36,6 +36,7 @@ vermutlich fehl (401) – es wird dann ein Platzhalter-Körper gerendert.
 | 4 | `tools/roblox_mesh.py` | Roblox-`.mesh`-Parser (v1.00–v7.00) → OBJ |
 | 5 | `tools/avatar_rig.py` | Stand-Pose-Rig, Accessoire-Platzierung |
 | 6 | `blender/render_glass.py` | Cycles-Glasmaterial, Kamera, Licht, Render |
+| – | `tools/diagnose.py` | prüft Endpunkte/Key-Rechte (Workflow *Roblox-Diagnose*) |
 
 Ergebnis im Build-Ordner: `manifest.json`, `parts/*.obj`, `textures/*`,
 `summary.md` (landet in der GitHub-Step-Summary).
@@ -54,6 +55,12 @@ python3 tools/build_avatar.py --username Builderman --out build
 blender -b --factory-startup --python blender/render_glass.py -- \
   --manifest build/manifest.json --out render_avatar.png \
   --resolution 1280x720 --samples 64
+```
+
+Verbindungs- und Key-Test (zeigt HTTP-Status aller Roblox-Endpunkte):
+
+```bash
+python3 tools/diagnose.py --username Builderman
 ```
 
 Tests (ohne Netzwerk, ohne Blender):

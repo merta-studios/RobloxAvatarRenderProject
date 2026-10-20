@@ -381,7 +381,8 @@ def test_wichtige_dateien_existieren():
     for rel in ("username.txt", ".github/workflows/avatar-render.yml",
                 ".github/workflows/auto-merge.yml", "blender/render_glass.py",
                 "tools/build_avatar.py", "tools/roblox_api.py",
-                "tools/roblox_mesh.py", "tools/avatar_rig.py", "ANLEITUNG.md"):
+                "tools/roblox_mesh.py", "tools/avatar_rig.py", "tools/diagnose.py",
+                ".github/workflows/diagnose.yml", "ANLEITUNG.md"):
         assert (ROOT / rel).exists(), rel
 
 
@@ -392,7 +393,7 @@ def test_username_txt_ist_gueltig():
 
 def test_workflows_sind_gueltiges_yaml():
     yaml = pytest.importorskip("yaml")
-    for name in ("avatar-render.yml", "auto-merge.yml"):
+    for name in ("avatar-render.yml", "auto-merge.yml", "tests.yml", "diagnose.yml"):
         path = ROOT / ".github/workflows" / name
         with open(path, encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
