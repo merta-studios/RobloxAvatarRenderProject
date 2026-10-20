@@ -331,7 +331,7 @@ def test_layered_kleidung_wird_zur_huellen(monkeypatch, tmp_path):
               (tmp_path / part["obj"]).read_text().splitlines()
               if line.startswith("v ")]
         return max(xs) - min(xs)
-    assert width(jacket_part) > width(torso) * 0.9
+    assert width(jacket_part) > width(torso) * 1.15
 
 
 # ---------------------------------------------------------------------------

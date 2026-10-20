@@ -437,6 +437,31 @@ def upright_limb(mesh: MeshData, part_name: str) -> Tuple[MeshData, str]:
     return rotated, note
 
 
+def _fit_shell_uniform(mesh: MeshData, lo, hi, max_squash: float = 0.75) -> MeshData:
+    """Zieht ein Kleidungsstueck ueber den Koerper, ohne es zu verzerren.
+
+    Die Breite wird form-erhaltend auf den Koerper (inkl. Aermel) gebracht;
+    Tiefe und Hoehe werden nur so weit gestaucht, wie es die Ziel-Box
+    verlangt - hoechstens aber auf ``max_squash`` (25 % Stauchung). Eine
+    achsweise Streckung auf die Box macht aus Aermeln und Schultern
+    flache Platten ("lose Schulterklappen").
+    """
+    size = mesh.size()
+    if max(size) <= 1e-9:
+        return mesh
+    target = tuple(float(hi[i]) - float(lo[i]) for i in range(3))
+    factors = [1.0, 1.0, 1.0]
+    factors[0] = target[0] / size[0]
+    for axis in (1, 2):
+        if size[axis] > 1e-9 and size[axis] * factors[0] > target[axis]:
+            factors[axis] = max(max_squash, target[axis] / (size[axis] * factors[0]))
+    scaled = mesh.transform(tuple(factors))
+    center = scaled.center()
+    target_center = tuple((float(lo[i]) + float(hi[i])) / 2.0 for i in range(3))
+    return scaled.transform(1.0, tuple(target_center[i] - center[i]
+                                       for i in range(3)))
+
+
 def _shell_box(anchor: str, metrics: BodyMetrics):
     """Ziel-Box fuer Kleidungs-Huellen (Layered-Kleidung).
 
@@ -491,10 +516,13 @@ def place_accessory(mesh: MeshData, asset_type_id: int,
 
     shell = _shell_box(layout["anchor"], metrics)
     if shell is not None:
-        # Kleidungs-Huelle: achsweise auf den Koerper ziehen (wie ein
-        # Kleidungsstueck, das ueber dem Koerper liegt).
+        # Kleidungs-Huelle: **form-erhaltend** ueber den Koerper ziehen.
+        # Achsweise gestreckt werden Aermel und Schulterpartie zu flachen
+        # Platten (im Render als lose Schulterklappen sichtbar); Roblox
+        # nutzt fuer Layered-Kleidung ebenfalls einen Cage, keine
+        # Verzerrung.
         lo, hi = shell
-        placed = fit_mesh_to_part(mesh, lo, hi)
+        placed = _fit_shell_uniform(mesh, lo, hi)
         size = placed.size()
         note = (f"{layout['label']}: als Huelle um den Koerper gezogen "
                 f"({_de(size[0])}x{_de(size[1])}x{_de(size[2])} Studs), "
