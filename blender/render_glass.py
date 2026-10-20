@@ -284,6 +284,15 @@ def make_material(name: str, body_rgb, tint_rgb, texture_path: str = "",
     base_out, tex_node = make_textured_base(
         nodes, links, image, body_linear, cloth_linear, 0.0,
         os.path.basename(texture_path))
+    # Etwas weniger Glanz auf Textilien: die Textur soll klar lesbar sein,
+    # nicht hinter Reflexen verschwinden.
+    if kind != "accessory":
+        for socket_name, value in (("Specular IOR Level", 0.2),
+                                   ("Specular", 0.2)):
+            socket = bsdf.inputs.get(socket_name)
+            if socket is not None:
+                socket.default_value = value
+                break
     # Dunkle Kleidung (schwarzes Shirt, dunkle Hose) versinkt im Glas sonst
     # komplett. Ein Gamma-Knoten hebt die Mitteltöne an, ohne die Farben
     # zu verschieben - die Textur wird dadurch klar erkennbar.
