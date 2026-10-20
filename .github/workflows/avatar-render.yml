@@ -74,6 +74,13 @@ jobs:
           echo "username=$USERNAME" >> "$GITHUB_OUTPUT"
           echo "### Roblox-Username: \`$USERNAME\`" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: "2b) Roblox-Endpunkte und Key prüfen (Diagnose)"
+        continue-on-error: true
+        env:
+          ROBLOX_OPEN_CLOUD_API_KEY: ${{ secrets.ROBLOX_OPEN_CLOUD_API_KEY }}
+          USERNAME: ${{ steps.username.outputs.username }}
+        run: python3 tools/diagnose.py --username "$USERNAME"
+
       - name: 3) Python-Umgebung prüfen
         run: |
           set -euo pipefail
