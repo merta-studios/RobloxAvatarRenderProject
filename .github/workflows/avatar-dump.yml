@@ -1,0 +1,42 @@
+name: Avatar-Dump (Debug)
+
+# Temporärer Debug-Workflow: baut den Avatar und lädt den kompletten
+# build/-Ordner (OBJ + Texturen + Manifest) als Artifact hoch, damit die
+# Pipeline lokal ohne Roblox-Zugriff nachvollzogen werden kann.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/avatar-dump.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python-Module
+        run: |
+          python3 -m pip install --quiet --break-system-packages zstandard lz4 DracoPy numpy || true
+
+      - name: Build
+        env:
+          ROBLOX_OPEN_CLOUD_API_KEY: ${{ secrets.ROBLOX_OPEN_CLOUD_API_KEY }}
+        run: |
+          set -uo pipefail
+          USERNAME="$(tr -d '\r' < username.txt | head -n 1 | xargs)"
+          python3 tools/build_avatar.py --username "$USERNAME" --out build
+          cat build/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+          du -sh build || true
+          find build -type f | head -50
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: avatar-build
+          path: build/
+          retention-days: 3
+          if-no-files-found: error
