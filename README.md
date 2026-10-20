@@ -107,7 +107,9 @@ python3 -m pytest tools/tests -q
   und Gesicht liegen als Dekals vor Brust bzw. Gesicht.
 * **Farben:** Das Manifest speichert die Durchschnittsfarbe jeder Textur,
   damit bekleidete Teile im Glas in ihrer echten Farbe leuchten; unbekleidete
-  Teile bleiben klares Glas.
+  Teile bleiben klares Glas. Damit Texturen überhaupt sichtbar sind, mischt
+  das Material einen deckenden Textur-Shader mit Glas (`--texture-strength`,
+  Standard 0,7 – reines Glas zeigt von einer Textur fast nichts).
 * **Körperteile:** R15-Bundles liefern echte Maße – der Rig stapelt Beine,
   Torso, Hals und Kopf lückenlos und richtet in T-Pose gelieferte Arme auf.
 

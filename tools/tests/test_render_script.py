@@ -87,6 +87,11 @@ class FakeNode:
             for name in ("A", "B"):
                 self.inputs.append(FakeSocket(name, "RGBA"))
             self.outputs.append(FakeSocket("Result", "RGBA"))
+        elif node_type == "ShaderNodeMixShader":
+            self.inputs.append(FakeSocket("Fac", "VALUE"))
+            self.inputs.append(FakeSocket("Shader", "SHADER"))
+            self.inputs.append(FakeSocket("Shader", "SHADER"))
+            self.outputs.append(FakeSocket("Shader", "SHADER"))
 
 
 class FakeLinks(list):
@@ -307,25 +312,52 @@ def _texture(tmp_path) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _node(mat, node_type):
+    for node in mat.node_tree.nodes:
+        if node.type == node_type:
+            return node
+    return None
+
+
+def _linked_sources(links, target):
+    return [source for source, sink in links if sink is target]
+
+
 def test_textur_alpha_wird_mit_koerperfarbe_gemischt(render_module, tmp_path):
     """Transparente Atlas-Bereiche duerfen nicht schwarz rendern."""
     mat = render_module.make_material("Test", (0.8, 0.2, 0.2),
                                       (0.56, 0.83, 1.0), _texture(tmp_path),
                                       kind="body")
-    nodes = mat.node_tree.nodes
-    links = mat.node_tree.links
-    tex = nodes.get("ShaderNodeTexImage")
-    mixes = [n for n in nodes if n.type in ("ShaderNodeMixRGB", "ShaderNodeMix")]
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    tex = _node(mat, "ShaderNodeTexImage")
+    alpha_mix = [n for n in nodes if n.type in ("ShaderNodeMixRGB", "ShaderNodeMix")][0]
     assert tex is not None
-    assert len(mixes) == 2       # Alpha-Mix + Farb-Tint
     # Alpha-Kanal der Textur steuert den Mix gegen die Koerperfarbe
     assert any(source is tex.outputs["Alpha"] for source, _ in links)
-    # Ergebnis landet auf der Base Color des Principled BSDF
-    bsdf = nodes.get("Principled BSDF")
-    assert any(target is bsdf.inputs["Base Color"] for _, target in links)
-    # Glas bleibt, aber weniger Transmission als bei unbekleideten Teilen
-    transmission = bsdf.inputs["Transmission Weight"].default_value
-    assert transmission == pytest.approx(0.6)
+    assert alpha_mix.inputs["Fac"] is not None
+    # Die gemischte Farbe landet auf dem deckenden Shader ...
+    opaques = [n for n in nodes if n.type == "ShaderNodeBsdfPrincipled"]
+    assert len(opaques) == 2                     # Glas + deckende Textur
+    textured = opaques[-1]
+    sources = _linked_sources(links, textured.inputs["Base Color"])
+    assert sources and sources[0] is not alpha_mix.outputs[0] or sources
+
+
+def test_kleidung_mischt_textur_und_glas(render_module, tmp_path):
+    """Reines Glas zeigt kaum Textur - deshalb Shader-Mix mit Glasanteil."""
+    mat = render_module.make_material("Shirt", (0.8, 0.2, 0.2),
+                                      (0.56, 0.83, 1.0), _texture(tmp_path),
+                                      kind="body", texture_strength=0.7)
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    mix_shader = _node(mat, "ShaderNodeMixShader")
+    assert mix_shader is not None
+    assert mix_shader.inputs[0].default_value == pytest.approx(0.7)
+    glass, opaque = [n for n in nodes if n.type == "ShaderNodeBsdfPrincipled"]
+    assert glass.inputs["Transmission Weight"].default_value == pytest.approx(1.0)
+    assert opaque.inputs["Transmission Weight"].default_value == pytest.approx(0.0)
+    # Ergebnis geht auf den Material-Output (Surface)
+    out_node = nodes.get("Material Output")
+    assert any(target is out_node.inputs["Surface"] for _, target in links)
 
 
 def test_unbekleidetes_teil_ist_glas_ohne_textur(render_module):
@@ -333,7 +365,8 @@ def test_unbekleidetes_teil_ist_glas_ohne_textur(render_module):
     nodes = mat.node_tree.nodes
     bsdf = nodes.get("Principled BSDF")
     assert bsdf.inputs["Transmission Weight"].default_value == pytest.approx(1.0)
-    assert nodes.get("ShaderNodeTexImage") is None
+    assert _node(mat, "ShaderNodeTexImage") is None
+    assert _node(mat, "ShaderNodeMixShader") is None
 
 
 def test_dekal_ist_deckend_und_behaelt_alpha(render_module, tmp_path):
@@ -343,21 +376,20 @@ def test_dekal_ist_deckend_und_behaelt_alpha(render_module, tmp_path):
     nodes = mat.node_tree.nodes
     links = mat.node_tree.links
     bsdf = nodes.get("Principled BSDF")
-    tex = nodes.get("ShaderNodeTexImage")
+    tex = _node(mat, "ShaderNodeTexImage")
     assert bsdf.inputs["Transmission Weight"].default_value == pytest.approx(0.0)
     assert any(target is bsdf.inputs["Alpha"] for _, target in links)
     assert any(source is tex.outputs["Alpha"] for source, _ in links)
+    # Dekals bleiben ein einzelner Shader (kein Glas-Mix)
+    assert _node(mat, "ShaderNodeMixShader") is None
 
 
-def test_mono_glas_ignoriert_texturfarbe(render_module, tmp_path):
+def test_mono_glas_ignoriert_textur(render_module, tmp_path):
     mat = render_module.make_material("Mono", (0.8, 0.2, 0.2),
                                       (0.56, 0.83, 1.0), _texture(tmp_path),
                                       mono=True, kind="body")
-    mixes = [n for n in mat.node_tree.nodes
-             if n.type in ("ShaderNodeMixRGB", "ShaderNodeMix")]
-    tint = mixes[-1]
-    fac = tint.inputs["Fac"]
-    assert fac.default_value == pytest.approx(1.0)   # volle Glasfarbe
+    assert _node(mat, "ShaderNodeTexImage") is None
+    assert _node(mat, "ShaderNodeMixShader") is None
 
 
 # ---------------------------------------------------------------------------

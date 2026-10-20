@@ -224,8 +224,12 @@ def make_sphere(radius: float = 0.5, segments: int = 24, rings: int = 16,
         for j in range(segments):
             a = i * (segments + 1) + j
             b = a + segments + 1
-            faces.append((a, a + 1, b))
-            faces.append((a + 1, b + 1, b))
+            # An den Polen fallen je zwei Vertices zusammen - solche
+            # Null-Flaechen-Dreiecke erst gar nicht erzeugen.
+            if i > 0:
+                faces.append((a, a + 1, b))
+            if i < rings - 1:
+                faces.append((a + 1, b + 1, b))
     return MeshData(positions=positions, normals=normals, uvs=uvs, faces=faces,
                     source_version="generated-sphere")
 
@@ -255,9 +259,15 @@ def make_plane(width: float, height: float, center: Vec3 = (0, 0, 0),
         normal = (0.0, sign, 0.0)
     positions = [(cx + x, cy + y, cz + z) for (x, y, z) in corners]
     uvs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    # Wickelrichtung passend zur Normale: sonst verschwindet die Flaeche
+    # bei Backface-Culling bzw. wird von innen beleuchtet.
+    faces = [(0, 1, 2), (0, 2, 3)]
+    if _face_normal(*positions[:3], positions[3])[0] * normal[0] \
+            + _face_normal(*positions[:3], positions[3])[1] * normal[1] \
+            + _face_normal(*positions[:3], positions[3])[2] * normal[2] < 0:
+        faces = [(0, 2, 1), (0, 3, 2)]
     return MeshData(positions=positions, normals=[normal] * 4, uvs=uvs,
-                    faces=[(0, 1, 2), (0, 2, 3)],
-                    source_version="generated-plane")
+                    faces=faces, source_version="generated-plane")
 
 
 def make_sphere_patch(radius: float, center: Vec3 = (0, 0, 0),
@@ -291,8 +301,8 @@ def make_sphere_patch(radius: float, center: Vec3 = (0, 0, 0),
         for j in range(segments):
             a = i * (segments + 1) + j
             b = a + segments + 1
-            faces.append((a, b, a + 1))
-            faces.append((a + 1, b, b + 1))
+            faces.append((a, a + 1, b))
+            faces.append((a + 1, b + 1, b))
     return MeshData(positions=positions, normals=normals, uvs=uvs, faces=faces,
                     source_version="generated-sphere-patch")
 

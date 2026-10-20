@@ -225,6 +225,7 @@ def project_atlas_uvs(mesh: MeshData, part_name: str, inset: float = 1.0,
     # Pro Flaeche (6 Achsen) die Projektion einmal berechnen - sonst
     # waere das fuer grosse Meshes quadratisch (Faces x Vertices).
     frame_cache: Dict[str, Dict[str, Any]] = {}
+    assigned = [False] * count
     for _ in range(max(1, smooth_passes)):
         assignments = [None] * count
         for face in faces:
@@ -267,6 +268,17 @@ def project_atlas_uvs(mesh: MeshData, part_name: str, inset: float = 1.0,
         for index, value in enumerate(assignments):
             if value is not None:
                 uvs[index] = value
+                assigned[index] = True
+
+    # Vertices ohne Flaeche (z. B. Pole einer Kugel) bekommen die mittlere
+    # Panel-UV - so bleibt das OBJ konsistent und nichts landet bei (0,0).
+    used = [uv for uv, flag in zip(uvs, assigned) if flag]
+    if used and not all(assigned):
+        mean_u = sum(uv[0] for uv in used) / len(used)
+        mean_v = sum(uv[1] for uv in used) / len(used)
+        for index, flag in enumerate(assigned):
+            if not flag:
+                uvs[index] = (mean_u, mean_v)
     return MeshData(
         positions=list(positions),
         normals=list(mesh.normals),

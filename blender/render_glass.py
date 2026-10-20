@@ -60,8 +60,9 @@ def parse_args() -> argparse.Namespace:
                         help="Farbe fuer metallisch glaenzende Accessoires")
     parser.add_argument("--mono-glass", action="store_true",
                         help="alle Teile in derselben hellblauen Glasfarbe")
-    parser.add_argument("--texture-strength", type=float, default=0.78,
-                        help="0 = Texturen kaum sichtbar, 1 = Textur pur")
+    parser.add_argument("--texture-strength", type=float, default=0.7,
+                        help="Anteil der deckenden Textur am Glas "
+                             "(0 = reines Glas, 1 = Textur pur)")
     parser.add_argument("--camera-azimuth", type=float, default=24.0,
                         help="Drehung um den Avatar in Grad (0 = frontal)")
     parser.add_argument("--camera-elevation", type=float, default=9.0,
@@ -162,13 +163,13 @@ def new_mix_rgb(nodes, blend_type: str = "MIX", fac: float = 1.0,
 
 
 def make_textured_base(nodes, links, image, body_rgb_linear, tint_linear,
-                       texture_strength: float, name: str):
+                       tint_amount: float, name: str):
     """Textur -> Grundfarbe: transparente Pixel werden Koerperfarbe.
 
     Klassische Kleidung (585x559) ist aussenrum transparent. Ohne die
     Alpha-Mischung rendert Blender diese Bereiche schwarz - genau die
-    dunklen Balken aus dem alten Render. Zum Schluss wird leicht mit der
-    Glasfarbe getoent, damit der Glaseindruck bleibt.
+    dunklen Balken aus dem alten Render. ``tint_amount`` mischt zusaetzlich
+    die Glasfarbe darueber (0 = Textur pur).
     """
     tex = nodes.new("ShaderNodeTexImage")
     tex.image = image
@@ -184,8 +185,9 @@ def make_textured_base(nodes, links, image, body_rgb_linear, tint_linear,
     links.new(tex.outputs["Color"], sockets["b"])
     links.new(tex.outputs["Alpha"], sockets["fac"])
 
-    tint_mix, tint_sockets, tint_out = new_mix_rgb(nodes, "MIX",
-                                                   1.0 - texture_strength,
+    if tint_amount <= 0.0:
+        return alpha_out, tex
+    tint_mix, tint_sockets, tint_out = new_mix_rgb(nodes, "MIX", tint_amount,
                                                    "Tint")
     tint_mix.location = (-420, 220)
     links.new(alpha_out, tint_sockets["a"])
@@ -194,26 +196,42 @@ def make_textured_base(nodes, links, image, body_rgb_linear, tint_linear,
     return tint_out, tex
 
 
+def _surface_socket(out_node):
+    if out_node is None:
+        return None
+    return out_node.inputs.get("Surface") or out_node.inputs.get("Volume") or None
+
+
 def make_material(name: str, body_rgb, tint_rgb, texture_path: str = "",
                   mono: bool = False, kind: str = "body",
-                  texture_strength: float = 0.78):
-    """Material fuer ein Teil: Glas (Koerper) oder Satin/Metall (Accessoire).
+                  texture_strength: float = 0.7):
+    """Material fuer ein Teil: Glas mit sichtbarer Textur.
+
+    ``texture_strength`` ist der Anteil des **deckenden** Textur-Shaders.
+    Ein reines Glas (Transmission 1.0) zeigt von einer Textur kaum etwas -
+    die Umgebung wird durchgelassen. Deshalb wird das Material aus zwei
+    Shadern gemischt:
+
+    * Glas-Shader (Transmission, Coat, IOR) fuer den Glaseindruck,
+    * deckender Principled-Shader mit der Textur (Alpha gegen Koerperfarbe).
+
+    ``texture_strength=0.7`` heisst: 70 % Textur, 30 % Glas. Ohne Textur
+    (oder mit ``--mono-glass``) bleibt es beim reinen Glas.
 
     * ``kind="decal"``: flache Textur (T-Shirt-Grafik, Gesicht), deckend.
     * ``kind="accessory"``: mit Textur seidig-metallisch, sonst Metall.
-    * sonst: Glas; mit Textur etwas weniger Transmission, damit die
-      Kleidung klar erkennbar bleibt.
     """
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
     tree = mat.node_tree
     nodes, links = tree.nodes, tree.links
 
+    out_node = nodes.get("Material Output")
     bsdf = nodes.get("Principled BSDF")
     if bsdf is None:  # pragma: no cover - sehr alte Blender-Version
         bsdf = nodes.new("ShaderNodeBsdfPrincipled")
-        out = nodes.get("Material Output") or nodes.new("ShaderNodeOutputMaterial")
-        links.new(bsdf.outputs[0], out.inputs[0])
+        out_node = out_node or nodes.new("ShaderNodeOutputMaterial")
+        links.new(bsdf.outputs[0], out_node.inputs[0])
 
     has_texture = bool(texture_path) and os.path.exists(texture_path)
     image = None
@@ -229,60 +247,88 @@ def make_material(name: str, body_rgb, tint_rgb, texture_path: str = "",
     if mono:
         body_linear = tint_linear
 
-    if has_texture:
-        base_out, tex_node = make_textured_base(
-            nodes, links, image, body_linear, tint_linear,
-            0.0 if mono else texture_strength, os.path.basename(texture_path))
+    # --- Glas-Shader einrichten -------------------------------------------
+    glass_color = mix(tint_linear, body_linear, 0.45)
+    set_input(bsdf, "Base Color", (glass_color[0], glass_color[1],
+                                   glass_color[2], 1.0))
+    set_input(bsdf, "Roughness", 0.05)
+    set_input(bsdf, "IOR", 1.45)
+    set_input(bsdf, ("Transmission Weight", "Transmission"), 1.0)
+    set_input(bsdf, ("Specular IOR Level", "Specular"), 0.5)
+    set_input(bsdf, "Metallic", 0.0)
+    set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.2)
+    set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.02)
+    set_input(bsdf, ("Subsurface Weight", "Subsurface"), 0.0)
+
+    if not has_texture or mono:
+        # Ohne Textur (oder mit --mono-glass) bleibt es beim reinen Glas.
+        return mat
+
+    # Kein Glas-Tint auf der Textur: die Glasfarbe kommt ueber den
+    # Shader-Mix (siehe unten), so bleibt die Textur farbecht.
+    base_out, tex_node = make_textured_base(
+        nodes, links, image, body_linear, tint_linear, 0.0,
+        os.path.basename(texture_path))
+    try:
+        tex_node.image.colorspace_settings.name = "sRGB"
+    except (AttributeError, TypeError):  # pragma: no cover
+        pass
+
+    if kind == "decal":
+        # Dekals sind flach und deckend: Textur + Alpha direkt auf dem BSDF.
         base_socket = bsdf.inputs.get("Base Color")
         if base_socket is not None:
             links.new(base_out, base_socket)
-        try:
-            tex_node.image.colorspace_settings.name = "sRGB"
-        except (AttributeError, TypeError):  # pragma: no cover
-            pass
-        if kind == "decal":
-            # Dekals sollen deckend sein und ihre Alpha-Kanaele behalten.
-            alpha_in = bsdf.inputs.get("Alpha")
-            if alpha_in is not None:
-                links.new(tex_node.outputs["Alpha"], alpha_in)
-            set_input(bsdf, "Roughness", 0.45)
-            set_input(bsdf, "Metallic", 0.0)
-            set_input(bsdf, ("Specular IOR Level", "Specular"), 0.35)
-            set_input(bsdf, ("Transmission Weight", "Transmission"), 0.0)
-            for attr, value in (("blend_method", "BLEND"),
-                                ("surface_render_method", "BLENDED")):
-                if hasattr(mat, attr):
-                    try:
-                        setattr(mat, attr, value)
-                    except (TypeError, ValueError):
-                        pass
-            if hasattr(mat, "use_backface_culling"):
-                mat.use_backface_culling = True
-            return mat
-    else:
-        color = mix(tint_linear, body_linear, 0.45)
-        set_input(bsdf, "Base Color", (color[0], color[1], color[2], 1.0))
-
-    if kind == "accessory":
-        # Accessoires mit Textur: seidig, Textur bleibt sichtbar.
-        transmission = 0.25 if has_texture else 0.0
-        set_input(bsdf, ("Transmission Weight", "Transmission"), transmission)
-        set_input(bsdf, "Metallic", 0.2 if has_texture else 0.95)
-        set_input(bsdf, "Roughness", 0.22 if has_texture else 0.12)
-        set_input(bsdf, ("Specular IOR Level", "Specular"), 0.5)
+        alpha_in = bsdf.inputs.get("Alpha")
+        if alpha_in is not None:
+            links.new(tex_node.outputs["Alpha"], alpha_in)
+        set_input(bsdf, "Roughness", 0.45)
+        set_input(bsdf, "Metallic", 0.0)
+        set_input(bsdf, ("Specular IOR Level", "Specular"), 0.35)
+        set_input(bsdf, ("Transmission Weight", "Transmission"), 0.0)
+        for attr, value in (("blend_method", "BLEND"),
+                            ("surface_render_method", "BLENDED")):
+            if hasattr(mat, attr):
+                try:
+                    setattr(mat, attr, value)
+                except (TypeError, ValueError):
+                    pass
+        # Kein Backface-Culling: ein einseitiges Dekal darf nie
+        # verschwinden, falls die Wickelrichtung mal abweicht.
+        if hasattr(mat, "use_backface_culling"):
+            mat.use_backface_culling = False
         return mat
 
-    # Koerper: Glas. Bekleidete Teile etwas weniger Transmission, damit
-    # die Textur nicht von der Umgebung ueberstrahlt wird.
-    transmission = 0.6 if has_texture else 1.0
-    set_input(bsdf, ("Transmission Weight", "Transmission"), transmission)
-    set_input(bsdf, "Roughness", 0.08 if has_texture else 0.05)
-    set_input(bsdf, "IOR", 1.45)
-    set_input(bsdf, ("Specular IOR Level", "Specular"), 0.5)
-    set_input(bsdf, "Metallic", 0.0)
-    set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.15)
-    set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.02)
-    set_input(bsdf, ("Subsurface Weight", "Subsurface"), 0.0)
+    # --- Kleidung/Koerper mit Textur: deckender Shader + Glas mischen -----
+    opaque = nodes.new("ShaderNodeBsdfPrincipled")
+    opaque.location = (-200, -260)
+    link_base = opaque.inputs.get("Base Color")
+    if link_base is not None:
+        links.new(base_out, link_base)
+    if kind == "accessory":
+        set_input(opaque, "Roughness", 0.28)
+        set_input(opaque, "Metallic", 0.35)      # seidiger Glanz
+        set_input(opaque, ("Coat Weight", "Clearcoat"), 0.5)
+    else:
+        set_input(opaque, "Roughness", 0.38)
+        set_input(opaque, "Metallic", 0.0)
+        set_input(opaque, ("Coat Weight", "Clearcoat"), 0.8)
+        set_input(opaque, ("Coat Roughness", "Clearcoat Roughness"), 0.05)
+    set_input(opaque, ("Specular IOR Level", "Specular"), 0.5)
+    set_input(opaque, ("Transmission Weight", "Transmission"), 0.0)
+
+    mix_shader = nodes.new("ShaderNodeMixShader")
+    mix_shader.location = (60, -60)
+    amount = max(0.0, min(1.0, float(texture_strength)))
+    try:
+        mix_shader.inputs[0].default_value = amount
+    except (IndexError, TypeError):  # pragma: no cover
+        pass
+    links.new(bsdf.outputs[0], mix_shader.inputs[1])
+    links.new(opaque.outputs[0], mix_shader.inputs[2])
+    surface = _surface_socket(out_node)
+    target = surface if surface is not None else out_node.inputs[0]
+    links.new(mix_shader.outputs[0], target)
     return mat
 
 

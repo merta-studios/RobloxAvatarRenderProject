@@ -478,3 +478,46 @@ def test_mesh_eigene_textur_bleibt_mit_mesh_uvs(monkeypatch, tmp_path):
     torso = next(p for p in manifest["parts"] if p["name"] == "torso")
     assert torso["texture"] == "textures/2709.png"
     assert torso["uv"] == "mesh"
+
+
+# ---------------------------------------------------------------------------
+# Geometrie-Primitive: Wickelrichtung passend zur Normale
+# ---------------------------------------------------------------------------
+
+
+def _geometric_normal(mesh, face):
+    a, b, c = (mesh.positions[i] for i in face)
+    u = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+    v = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
+    n = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
+         u[0] * v[1] - u[1] * v[0])
+    length = math.sqrt(sum(x * x for x in n)) or 1.0
+    return tuple(x / length for x in n)
+
+
+@pytest.mark.parametrize("facing", ["-Z", "+Z", "-X", "+X", "+Y", "-Y"])
+def test_plane_winding_passt_zur_normale(facing):
+    plane = roblox_mesh.make_plane(2.0, 3.0, (0.0, 1.0, 0.0), facing)
+    normal = plane.normals[0]
+    for face in plane.faces:
+        assert sum(_geometric_normal(plane, face)[i] * normal[i]
+                   for i in range(3)) > 0.9
+
+
+def test_sphere_patch_zeigt_nach_aussen():
+    patch = roblox_mesh.make_sphere_patch(1.0)
+    for face in patch.faces:
+        normal = _geometric_normal(patch, face)
+        assert sum(normal[i] * patch.normals[face[0]][i] for i in range(3)) > 0.0
+    # Patch liegt vorne (-Z) und traegt UVs 0..1
+    lo, hi = patch.bbox()
+    assert lo[2] < -0.5 and hi[2] < 0.0
+    assert min(u for u, *_ in patch.uvs) == pytest.approx(0.0)
+    assert max(u for u, *_ in patch.uvs) == pytest.approx(1.0)
+
+
+def test_sphere_winding_zeigt_nach_aussen():
+    sphere = roblox_mesh.make_sphere(1.0, 16, 12)
+    for face in sphere.faces:
+        assert sum(_geometric_normal(sphere, face)[i]
+                   * sphere.normals[face[0]][i] for i in range(3)) > 0.0

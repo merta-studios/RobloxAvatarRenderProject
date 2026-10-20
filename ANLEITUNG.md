@@ -173,11 +173,15 @@ Render. Zusätzlich speichert das Manifest als `color` die
 Durchschnittsfarbe der Textur, damit das Glas in der Kleidungsfarbe und
 nicht in Hautfarbe leuchtet.
 
-**Texturen im Glas.** Bekleidete Teile sind weniger durchsichtig
-(Transmission ca. 0,45) als unbekleidete (1,0). Transparente Bereiche des
-Kleidungs-Atlasses werden mit der Körperfarbe gemischt – sonst rendert
-Blender sie schwarz. Mit `--texture-strength 1.0` wirken Texturen am
-kräftigsten, `--mono-glass` ignoriert sie ganz.
+**Texturen im Glas.** Reines Glas (Transmission 1,0) lässt die Umgebung
+durch und zeigt von einer Textur fast nichts – genau deshalb wirkte der
+Avatar grau/blau. Deshalb wird das Material aus zwei Shadern gemischt:
+einem Glas-Shader (Transmission, Coat, IOR) für den Glaseindruck und einem
+deckenden Shader mit der Textur. `--texture-strength` steuert den Anteil
+(Standard `0.7` = 70 % Textur, `0` = reines Glas, `1` = Textur pur).
+Transparente Bereiche des Kleidungs-Atlasses werden mit der Körperfarbe
+gemischt, sonst rendert Blender sie schwarz. `--mono-glass` ignoriert
+Texturen ganz.
 
 **Körperteile.** Bringt der Avatar echte R15-Körper-Meshes mit (Bundles),
 werden deren RBXM-Maße für Torso, Arme, Beine und Kopf verwendet und die
