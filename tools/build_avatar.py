@@ -68,6 +68,10 @@ HEAD_ASSET_TYPE = 17
 DYNAMIC_HEAD_TYPE = 79
 # Ein DynamicHead mit weniger Faces ist praktisch unsichtbar ("Headless")
 HEADLESS_MAX_FACES = 20
+# ... oder mit winziger Part-Groesse im RBXM (echte Koepfe: > 0,8 Studs)
+HEADLESS_MAX_SIZE = 0.25
+# ... oder winziger Datei-Geometrie
+HEADLESS_MAX_MESH_SIZE = 0.05
 # Obergrenze fuer Downloads, die erst durch RBXM-Inhalte bekannt werden
 MAX_FOLLOWUP_DOWNLOADS = 40
 # Sanity-Check: plausible Groesse eines einzelnen Teils in Studs
@@ -86,6 +90,95 @@ def fmt_de(value: Any, nd: int = 2) -> str:
     except (TypeError, ValueError):
         return str(value)
     return f"{number:.{nd}f}".replace(".", ",")
+
+
+def _trimmed_size(mesh) -> tuple:
+    """Robuste Ausdehnung: 1%- bis 99%-Perzentil je Achse.
+
+    Erkennt "Speck"-Geometrie: fast alle Vertices an einem Punkt, nur
+    wenige Ausreisser spannen eine grosse Bounding-Box auf (so
+    verstecken manche "Headless"-Meshes ihre Unsichtbarkeit).
+    """
+    if not mesh.positions:
+        return (0.0, 0.0, 0.0)
+    out = []
+    for axis in range(3):
+        values = sorted(p[axis] for p in mesh.positions)
+        n = len(values)
+        lo_i = min(n - 1, int(n * 0.01))
+        hi_i = max(0, int(n * 0.99) - 1)
+        out.append(values[hi_i] - values[lo_i] if hi_i >= lo_i else 0.0)
+    return tuple(out)
+
+
+def head_geometry_info(mesh, rbxm_size=None):
+    """Kennzahlen eines Kopf-Meshes + Headless-Verdikt.
+
+    "Headless"-DynamicHeads (z. B. Asset 'Headless Head') verstecken
+    den Kopf auf mehrere Arten - alle werden geprueft:
+      * kaum Geometrie (< HEADLESS_MAX_FACES Faces)
+      * winzige Part-Groesse im RBXM (< 0,25 Studs; echte Koepfe > 0,8)
+      * winzige Datei-Geometrie (< 0,05 Einheiten)
+      * "Speck": getrimmte Ausdehnung winzig gegenueber der BBox
+      * Geometrie weit weg vom Ursprung (im Koerper versteckt)
+
+    Rueckgabe: (ist_headless: bool, begruendung: str, kennzahlen: str)
+    """
+    size = mesh.size()
+    center = mesh.center()
+    trimmed = _trimmed_size(mesh)
+    max_dim = max(size) if size else 0.0
+    size_txt = "x".join(fmt_de(v, 3) for v in size)
+    center_txt = "/".join(fmt_de(v, 2) for v in center)
+    rbxm_txt = ("x".join(fmt_de(v, 3) for v in rbxm_size)
+                if rbxm_size else "unbekannt")
+    info = (f"{len(mesh.faces)} Faces, Mesh-BBox {size_txt}, "
+            f"Zentrum {center_txt}, RBXM-Groesse {rbxm_txt} Studs")
+
+    if len(mesh.faces) < HEADLESS_MAX_FACES:
+        return True, "kaum Geometrie", info
+    if rbxm_size and max(rbxm_size) < HEADLESS_MAX_SIZE:
+        return True, "winzige Part-Groesse im RBXM", info
+    if max_dim < HEADLESS_MAX_MESH_SIZE:
+        return True, "winzige Datei-Geometrie", info
+    if max_dim > 0 and max(trimmed) < 0.02 * max_dim:
+        return True, "Punkt-Geometrie in grosser BBox versteckt", info
+    if max_dim > 0 and max(abs(v) for v in center) > 3.0 * max_dim:
+        return True, "Geometrie weit ausserhalb des Ursprungs versteckt", info
+    return False, "", info
+
+
+# Erwartete R15-Segmentnamen je Rig-Koerperteil. Bundle-RBXMs enthalten
+# oft mehrere Varianten (R6/R15/LOD) - nur diese Segmente gehoeren zum
+# sichtbaren R15-Koerperteil.
+R15_SEGMENT_NAMES = {
+    "torso": ["UpperTorso", "LowerTorso"],
+    "links_arm": ["LeftUpperArm", "LeftLowerArm", "LeftHand"],
+    "rechts_arm": ["RightUpperArm", "RightLowerArm", "RightHand"],
+    "links_bein": ["LeftUpperLeg", "LeftLowerLeg", "LeftFoot"],
+    "rechts_bein": ["RightUpperLeg", "RightLowerLeg", "RightFoot"],
+}
+
+
+def _normalize_name(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def _pick_r15_segments(group: list, expected_names: list) -> list:
+    """Aus einer Mesh-Gruppe die R15-Segmente per Instanzname auswaehlen.
+
+    Je erwartetem Segmentnamen wird der erste passende Eintrag
+    genommen (Namensgleichheit nach Normalisierung, z. B.
+    'LeftUpperArm' ~ 'leftupperarm'). Liefert [] wenn nichts passt.
+    """
+    picked: list = []
+    for expected in expected_names:
+        wanted = _normalize_name(expected)
+        for mesh_part in group:
+            if _normalize_name(mesh_part.get("label") or "") == wanted:
+                picked.append(mesh_part)
+                break
+    return picked
 
 
 # ---------------------------------------------------------------------------
@@ -190,12 +283,14 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     ignored: List[Dict[str, Any]] = []
     avatar_raw: Dict[str, Any] = {}
     mesh_parts: List[Dict[str, Any]] = []
-    headless = {"active": False, "label": ""}
+    headless = {"active": False, "label": "", "reason": "", "info": ""}
 
-    def set_headless(label: str) -> None:
+    def set_headless(label: str, reason: str = "", info: str = "") -> None:
         if not headless["active"]:
             headless["active"] = True
             headless["label"] = label
+            headless["reason"] = reason
+            headless["info"] = info
 
     # ---- Avatar-Daten -----------------------------------------------------
     if dry_run:
@@ -281,7 +376,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
 
         def add_mesh(raw: bytes, parent_asset_id: int, mesh_asset_id: int,
                      type_id: int, type_name: str, label: str,
-                     rbxm_size: Optional[Any], texture_file: Optional[str]) -> None:
+                     rbxm_size: Optional[Any], texture_file: Optional[str],
+                     rbxm_position: Optional[Any] = None) -> None:
             """Parst ein FileMesh und reiht es in mesh_parts ein."""
             try:
                 mesh = roblox_mesh.parse(raw)
@@ -290,11 +386,14 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                                 "asset_type": type_name,
                                 "reason": f"Mesh nicht lesbar: {exc}"})
                 return
-            if type_id == DYNAMIC_HEAD_TYPE and (
-                    mesh.is_empty or len(mesh.faces) < HEADLESS_MAX_FACES):
-                # DynamicHead ohne sichtbare Geometrie = "Headless"-Avatar
-                set_headless(label or type_name)
-                return
+            head_info = ""
+            if type_id == DYNAMIC_HEAD_TYPE:
+                is_headless, reason, head_info = head_geometry_info(
+                    mesh, rbxm_size)
+                if mesh.is_empty or is_headless:
+                    # DynamicHead ohne sichtbare Geometrie = "Headless"
+                    set_headless(label or type_name, reason, head_info)
+                    return
             if mesh.is_empty:
                 skipped.append({"asset_id": mesh_asset_id, "name": label,
                                 "asset_type": type_name,
@@ -308,7 +407,9 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 "label": label,
                 "mesh": mesh,
                 "rbxm_size": rbxm_size,
+                "rbxm_position": rbxm_position,
                 "texture_file": texture_file,
+                "head_info": head_info,
             })
 
         def process_rbxm(data: bytes, parent_asset_id: int, type_id: int,
@@ -368,7 +469,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 log(f"      + Mesh {mesh_id} aus RBXM ({entry.get('class', '?')}"
                     f"{', mit Textur' if texture_file else ''})")
                 add_mesh(raw, parent_asset_id, mesh_id, type_id, type_name,
-                         entry_label, entry.get("size"), texture_file)
+                         entry_label, entry.get("size"), texture_file,
+                         entry.get("position"))
 
             if (len(mesh_parts) == parts_before and len(skipped) == skips_before
                     and len(textures) == textures_before
@@ -454,19 +556,49 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         for target in CLOTHING_TARGETS.get(int(tex["type_id"]), []):
             texture_for_part.setdefault(target, tex["file"])
 
-    # Echte Koerperteil-Meshes (Typ 27-31) den Rig-Teilen zuordnen
-    body_replacements: Dict[str, Dict[str, Any]] = {}
+    # Echte Koerperteil-Meshes (Typ 27-31) den Rig-Teilen zuordnen.
+    # R15-Bundles liefern pro Asset mehrere Segmente (z. B. LeftArm =
+    # UpperArm + LowerArm + Hand, teils in mehreren Varianten). Die
+    # R15-Segmente werden anhand ihrer Instanznamen ausgewaehlt und per
+    # RBXM-Position zu einem Koerperteil zusammengefuehrt - statt wie
+    # frueher nur das erste Segment (z. B. nur die Hand) zu verwenden.
+    body_groups: Dict[str, list] = {}
     for mesh_part in mesh_parts:
         rig_name = BODY_PART_TYPES.get(int(mesh_part["type_id"]))
-        if rig_name is None:
+        if rig_name is not None:
+            body_groups.setdefault(rig_name, []).append(mesh_part)
+
+    body_replacements: Dict[str, Dict[str, Any]] = {}
+    for rig_name, group in body_groups.items():
+        if len(group) == 1:
+            body_replacements[rig_name] = group[0]
             continue
-        if rig_name in body_replacements:
-            warnings.append(
-                f"Zweites Mesh fuer Koerperteil '{rig_name}' ignoriert "
-                f"(Asset {mesh_part['asset_id']})."
-            )
+        segments = _pick_r15_segments(group, R15_SEGMENT_NAMES.get(rig_name, []))
+        mergeable = segments if len(segments) >= 2 else group
+        if len(mergeable) <= 6 and all(
+                mp.get("rbxm_size") and mp.get("rbxm_position")
+                for mp in mergeable):
+            merged = roblox_mesh.merge_meshes(
+                [(mp["mesh"], mp["rbxm_size"], mp["rbxm_position"])
+                 for mp in mergeable],
+                source_version="merged-rbxm")
+            pseudo = dict(mergeable[0])
+            pseudo["mesh"] = merged
+            pseudo["texture_file"] = next(
+                (mp["texture_file"] for mp in mergeable
+                 if mp.get("texture_file")), None)
+            pseudo["note_suffix"] = (
+                f", {len(mergeable)} R15-Segmente per RBXM-Position "
+                f"zusammengefuehrt")
+            body_replacements[rig_name] = pseudo
         else:
-            body_replacements[rig_name] = mesh_part
+            largest = max(group, key=lambda mp: max(mp["mesh"].size()))
+            body_replacements[rig_name] = largest
+            warnings.append(
+                f"Koerperteil '{rig_name}': {len(group)} Meshes gefunden, "
+                f"aber nicht zusammenfuehrbar (fehlende RBXM-Positionen) - "
+                f"nur das groesste Segment verwendet "
+                f"(Asset {largest['asset_id']}).")
 
     # Kopf: echtes Head-/DynamicHead-Mesh suchen (DynamicHead hat Vorrang).
     # Degenerierte DynamicHead-Meshes (< HEADLESS_MAX_FACES) sind bereits
@@ -504,7 +636,9 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                     "texture": head_mesh.get("texture_file")
                                or texture_for_part.get("kopf_mesh"),
                     "asset_id": head_mesh["asset_id"],
-                    "note": "Echtes Kopf-Mesh des Avatars",
+                    "note": ("Echtes Kopf-Mesh des Avatars"
+                             + (f" ({head_mesh['head_info']})"
+                                if head_mesh.get("head_info") else "")),
                 })
                 warnings.append("Kopf wurde durch das echte Head-Mesh des Avatars ersetzt.")
                 continue
@@ -526,7 +660,9 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 "texture": replacement.get("texture_file")
                            or texture_for_part.get(part.name),
                 "asset_id": replacement["asset_id"],
-                "note": f"Echtes Mesh aus RBXM (Mesh-Asset {replacement['mesh_asset_id']})",
+                "note": (f"Echtes Mesh aus RBXM (Mesh-Asset "
+                         f"{replacement['mesh_asset_id']})"
+                         + replacement.get("note_suffix", "")),
             })
             body_parts_from_mesh += 1
             continue
@@ -543,10 +679,15 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         })
 
     if headless["active"]:
+        detail = ""
+        if headless["reason"]:
+            detail += f" Grund: {headless['reason']}."
+        if headless["info"]:
+            detail += f" Kennzahlen: {headless['info']}."
         warnings.append(
             "Headless/DynamicHead erkannt: Das Kopf-Asset "
             f"'{headless['label']}' enthaelt keine sichtbare Geometrie - "
-            "der Rig-Kopf wird nicht gerendert."
+            f"der Rig-Kopf wird nicht gerendert.{detail}"
         )
 
     # Accessoires platzieren

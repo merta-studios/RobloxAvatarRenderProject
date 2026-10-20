@@ -146,6 +146,21 @@ def test_rbxm_klassische_kleidung_template():
     assert entries[0]["texture_id"] == 60321
 
 
+def test_rbxm_legacy_url_im_fallback_scan():
+    """Steht eine Template-ID nur als '.../asset/?id=NNN' in der Datei
+    (und in keinem bekannten Property), findet der Fallback-Scan sie.
+
+    Hintergrund: Das Shirt 13576957688 lieferte im echten Lauf ein
+    RBXM "ohne Mesh-/Textur-IDs"."""
+    data = make_rbxm([{
+        "class": "StringValue",
+        "props": {"Name": "Merker",
+                  "Value": "http://www.roblox.com/asset/?id=424242424"},
+        "Parent": None}])
+    entries = rbxm.extract_assets(data)
+    assert [e["mesh_id"] for e in entries] == [424242424]
+
+
 def test_rbxm_ohne_assets_ist_leere_liste():
     folder = {"class": "Ordner", "props": {"Name": "Leer"}, "Parent": None}
     assert rbxm.extract_assets(make_rbxm([folder])) == []

@@ -240,12 +240,13 @@ def place_accessory(mesh: MeshData, asset_type_id: int,
     size = mesh.size()
     max_dim = max(size) or 1.0
     if size_hint is not None and len(size_hint) == 3 and all(v > 0 for v in size_hint):
-        factors = tuple(
-            float(size_hint[i]) / size[i] if size[i] > 1e-9 else 1.0 for i in range(3)
-        )
-        placed = mesh.transform(factors)
-        scale = max(placed.size()) / max_dim
-        scale_note = f"RBXM-Groesse {size_hint[0]:.2f}x{size_hint[1]:.2f}x{size_hint[2]:.2f} Studs"
+        # Form erhalten: gleichmaessig auf die groesste RBXM-Achse
+        # skalieren. Pro-Achsen-Skalierung auf die Part-Size wuerde z. B.
+        # eine flache Krone (im RBXM oft Size 1x1x1) zur Kugel verzerren.
+        scale = max(size_hint) / max_dim
+        placed = mesh.transform(scale)
+        scale_note = ("RBXM-Groesse " + "x".join(_de(v, 2) for v in size_hint)
+                      + " Studs, form-erhaltend skaliert")
     else:
         scale = target / max_dim
         placed = mesh.transform(scale)

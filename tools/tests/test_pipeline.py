@@ -21,6 +21,7 @@ ROOT = pathlib.Path(os.path.dirname(TOOLS))
 sys.path.insert(0, TOOLS)
 
 import avatar_rig  # noqa: E402
+import build_avatar  # noqa: E402
 import roblox_api  # noqa: E402
 import roblox_mesh  # noqa: E402
 
@@ -186,9 +187,13 @@ def test_v4_mit_bones_und_skinning():
     assert len(mesh.faces) == 1
 
 
-def test_v7_wird_wie_v4_gelesen():
-    mesh = roblox_mesh.parse(build_v4(version=b"version 7.00\n"))
-    assert len(mesh.faces) == 1
+def test_v7_ohne_chunks_wird_sauber_abgelehnt():
+    # FileMesh 7.00 ist ein Chunk-Container (COREMESH v2, Draco) und
+    # NICHT v4-kompatibel - die alte Annahme verursachte im echten Lauf
+    # "Datei zu kurz fuer die angegebene Vertex-Anzahl" beim Badge.
+    # Ein v4-Koerper mit 7.00-Zeile muss sauber scheitern:
+    with pytest.raises(roblox_mesh.MeshParseError):
+        roblox_mesh.parse(build_v4(version=b"version 7.00\n"))
 
 
 def test_kaputte_datei_wirft_fehler():
@@ -313,6 +318,70 @@ def test_accessoire_unbekannter_typ_bekommt_fallback():
     placed, note = avatar_rig.place_accessory(roblox_mesh.make_box(1, 1, 1), 9999, metrics)
     assert len(placed.faces) == 12
     assert "Anker" in note
+
+
+def test_accessoire_rbxm_groesse_form_erhaltend():
+    """RBXM-Size 1x1x1 darf eine flache Krone (3x0,7x2) nicht zur Kugel
+    verzerren: gleichmaessige Skalierung auf die groesste Achse."""
+    _, metrics = avatar_rig.build_body(roblox_api.DEFAULT_BODY_COLORS,
+                                       roblox_api.DEFAULT_SCALES)
+    krone = roblox_mesh.make_box(3.0, 0.7, 2.0)
+    placed, note = avatar_rig.place_accessory(
+        krone, 8, metrics, size_hint=(1.0, 1.0, 1.0))
+    size = placed.size()
+    assert max(size) == pytest.approx(1.0)
+    assert size[0] / size[2] == pytest.approx(1.5, abs=0.02)  # Proportion!
+    assert size[1] == pytest.approx(0.7 / 3.0, abs=0.02)
+    assert "form-erhaltend" in note
+
+
+# ---------------------------------------------------------------------------
+# Headless-Erkennung (DynamicHead)
+# ---------------------------------------------------------------------------
+
+
+def test_headless_normaler_kopf_bleibt():
+    head = roblox_mesh.make_sphere(0.6, 12, 8)
+    ist, grund, info = build_avatar.head_geometry_info(
+        head, (1.2, 1.2, 1.2))
+    assert ist is False
+    assert "Faces" in info
+
+
+def test_headless_winzige_part_groesse():
+    # So versteckt das echte Asset "Headless Head" den Kopf: normales
+    # Mesh, aber Part-Groesse im RBXM ist 0,01 Studs.
+    head = roblox_mesh.make_sphere(0.6, 12, 8)
+    ist, grund, _ = build_avatar.head_geometry_info(
+        head, (0.01, 0.01, 0.01))
+    assert ist is True
+    assert "Part-Groesse" in grund
+
+
+def test_headless_winzige_geometrie_und_wenige_faces():
+    winzig = roblox_mesh.make_sphere(0.001, 8, 6)
+    ist, _, _ = build_avatar.head_geometry_info(winzig, None)
+    assert ist is True
+    box = roblox_mesh.make_box(1.2, 1.2, 1.2)  # nur 12 Faces
+    ist2, grund2, _ = build_avatar.head_geometry_info(box, (1.2, 1.2, 1.2))
+    assert ist2 is True
+    assert "Geometrie" in grund2
+
+
+def test_headless_punkt_geometrie_in_grosser_bbox():
+    positions = [(0.0, 0.0, 0.0)] * 63 + [(10.0, 0.0, 0.0)]
+    faces = [(3 * i, 3 * i + 1, 3 * i + 2) for i in range(21)]
+    speck = roblox_mesh.MeshData(positions, [], [], faces, None, "test")
+    ist, grund, _ = build_avatar.head_geometry_info(speck, (1.0, 1.0, 1.0))
+    assert ist is True
+    assert "BBox" in grund
+
+
+def test_headless_geometrie_ausserhalb_ursprung_versteckt():
+    head = roblox_mesh.make_sphere(0.6, 12, 8).transform(1.0, (100.0, 0, 0))
+    ist, grund, _ = build_avatar.head_geometry_info(head, (1.2, 1.2, 1.2))
+    assert ist is True
+    assert "Ursprung" in grund
 
 
 # ---------------------------------------------------------------------------
