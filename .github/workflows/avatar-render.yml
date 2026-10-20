@@ -30,8 +30,10 @@ concurrency:
   group: avatar-render-${{ github.ref }}
   cancel-in-progress: true
 
+# contents: write wird für den "renders"-Branch und das Release gebraucht
+# (Bugfix Handy-Download: Artifacts lassen sich in der iOS-App nicht laden).
 permissions:
-  contents: read
+  contents: write
 
 env:
   BLENDER_VERSION: "4.2.0"
@@ -86,6 +88,15 @@ jobs:
           set -euo pipefail
           python3 --version
           python3 -c "import json, urllib.request; print('Standardbibliothek OK')"
+          # Optionale Module fuer komprimierte RBXM-Chunks (Accessoires und
+          # Koerperteile kommen als RBXM-Modell, siehe tools/rbxm.py).
+          # Faellt die Installation aus, laeuft die Pipeline weiter, aber
+          # LZ4-/ZSTD-komprimierte Modelle koennen dann nicht gelesen werden.
+          python3 -m pip install --quiet zstandard lz4 \
+            || python3 -m pip install --quiet --break-system-packages zstandard lz4 \
+            || echo "::warning::zstandard/lz4 konnten nicht installiert werden"
+          python3 -c "import zstandard, lz4.block; print('RBXM-Module OK (zstandard, lz4)')" \
+            || echo "::warning::zstandard/lz4 nicht verfuegbar - RBXM via zlib-Fallback"
 
       - name: 4) Avatar laden und Rig bauen
         id: build
@@ -193,7 +204,79 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-      - name: 8) Debug-Daten hochladen (nur bei Problemen)
+      # Artifacts sind session-gebunden und lassen sich in der GitHub-iOS-App
+      # nicht herunterladen (about:blank -> App -> 404). Deshalb wird das
+      # Bild zusaetzlich an zwei oeffentlich verlinkbaren Stellen abgelegt:
+      # im Branch "renders" (Inline-Bild in der Step Summary) und als
+      # Release-Asset mit stabiler Download-URL.
+      - name: 8) Render im Branch "renders" veröffentlichen (Handy-tauglich)
+        env:
+          PUSH_TOKEN: ${{ secrets.AUTO_MERGE_TOKEN || secrets.GITHUB_TOKEN }}
+          USERNAME: ${{ steps.username.outputs.username }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Dateiname aus dem Usernamen (nur sichere Zeichen)
+          SAFE_NAME="$(printf '%s' "$USERNAME" | tr -cd 'A-Za-z0-9_-' || true)"
+          if [ -z "$SAFE_NAME" ]; then SAFE_NAME="avatar"; fi
+
+          TMP="$(mktemp -d)"
+          cp render_avatar.png "$TMP/latest.png"
+          cp render_avatar.png "$TMP/${SAFE_NAME}.png"
+          printf '%s\n' \
+            '# Avatar-Renders (automatisch erzeugt)' \
+            '' \
+            'Dieser Branch wird bei jedem Render-Lauf komplett ersetzt.' \
+            'Er existiert, damit das Bild auch auf dem Handy sichtbar ist' \
+            '(GitHub-Artifacts lassen sich in der iOS-App nicht laden).' \
+            '' \
+            '* `latest.png` – zuletzt gerenderter Avatar' \
+            '* `<username>.png` – gleiches Bild unter dem Roblox-Namen' \
+            > "$TMP/README.md"
+
+          git -C "$TMP" init -q
+          git -C "$TMP" checkout -q --orphan renders
+          git -C "$TMP" add -A
+          git -C "$TMP" -c user.name="github-actions[bot]" \
+                        -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Render: ${SAFE_NAME} (Run ${GITHUB_RUN_ID})"
+          git -C "$TMP" push --force \
+            "https://x-access-token:${PUSH_TOKEN}@github.com/${REPO}.git" HEAD:renders
+          echo "Im Branch 'renders' veroeffentlicht: latest.png + ${SAFE_NAME}.png"
+
+      - name: 9) Release "avatar-render-latest" aktualisieren
+        env:
+          GH_TOKEN: ${{ secrets.AUTO_MERGE_TOKEN || secrets.GITHUB_TOKEN }}
+          USERNAME: ${{ steps.username.outputs.username }}
+        run: |
+          set -euo pipefail
+          TAG="avatar-render-latest"
+          NOTES="Automatisch gerenderter Roblox-Avatar (**${USERNAME}**). Wird bei jedem erfolgreichen Lauf ersetzt – die Download-URL bleibt gleich und funktioniert auch auf dem Handy."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" render_avatar.png --clobber
+            gh release edit "$TAG" --title "Avatar-Render (aktuell)" --notes "$NOTES"
+          else
+            gh release create "$TAG" render_avatar.png \
+              --title "Avatar-Render (aktuell)" --notes "$NOTES"
+          fi
+
+      - name: 10) Ergebnis in die Step Summary schreiben (Inline-Bild + Links)
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          {
+            echo "### Ergebnis ansehen (funktioniert auch auf dem Handy)"
+            echo ""
+            echo "![Render](https://raw.githubusercontent.com/${REPO}/renders/latest.png?v=${GITHUB_RUN_ID})"
+            echo ""
+            echo "* Bild im Datei-Viewer: https://github.com/${REPO}/blob/renders/latest.png"
+            echo "* Direkt-Download (Release): https://github.com/${REPO}/releases/download/avatar-render-latest/render_avatar.png"
+            echo "* Release-Seite: https://github.com/${REPO}/releases/tag/avatar-render-latest"
+            echo ""
+            echo "> iPhone-Hinweis: Der Artifact-Download weiter unten braucht eine Browser-Session und schlaegt in der iOS-App fehl (about:blank/404). Bild und Release oben gehen ueberall."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 11) Debug-Daten hochladen (nur bei Problemen)
         if: failure()
         uses: actions/upload-artifact@v4
         with:

@@ -4,10 +4,18 @@ Usernamen in [`username.txt`](username.txt) eintragen, pushen, warten – und na
 wenigen Minuten liegt ein gläserner Avatar-Render als GitHub-Actions-Artifact bereit.
 
 ```
-username.txt  ──►  UserId  ──►  Avatar-Definition  ──►  Meshes/Texturen
+username.txt  ──►  UserId  ──►  Avatar-Definition  ──►  Assets
+                                                           │
+                                        RBXM-Modelle parsen (Mesh-/Textur-IDs)
                                                            │
                              render_avatar.png  ◄──  Blender Cycles (CPU)
+                                Artifact + Branch "renders" + Release
 ```
+
+Accessoires und getragene Körperteile liefert Roblox als RBXM-**Modelle**
+aus; die FileMesh-ID steckt erst darin. Ein eigener Parser
+(`tools/rbxm.py`) extrahiert Mesh-/Textur-IDs, Größe und Position – erst
+danach werden die echten Meshes geladen.
 
 ![Beispiel-Render](docs/demo_render.png)
 
@@ -21,7 +29,13 @@ Roblox-Meshes und Texturen mit.*
    `ROBLOX_OPEN_CLOUD_API_KEY` (Details und nötige Berechtigungen: **[ANLEITUNG.md](ANLEITUNG.md)**).
 2. `username.txt` öffnen, Roblox-Usernamen eintragen, committen, pushen.
 3. Tab **Actions** → Lauf *Avatar-Render (Glas)* abwarten, bis der Punkt grün ist.
-4. Unter **Artifacts** → `avatar-render` herunterladen. Darin: `render_avatar.png`.
+4. Ergebnis ansehen: Inline-Bild in der **Step Summary** des Laufs (geht auch
+   auf dem Handy), im Branch [`renders`](../../blob/renders/latest.png)
+   (`latest.png`) oder als Release
+   [`avatar-render-latest`](../../releases/tag/avatar-render-latest).
+   Alternativ unter **Artifacts** → `avatar-render` herunterladen
+   (ZIP mit `render_avatar.png`; funktioniert nur im Browser, nicht in der
+   iOS-App – Artifacts sind session-gebunden).
 
 Ohne Secret läuft die Pipeline weiter, aber die Mesh-/Textur-Downloads schlagen
 vermutlich fehl (401) – es wird dann ein Platzhalter-Körper gerendert.
@@ -33,9 +47,11 @@ vermutlich fehl (401) – es wird dann ein Platzhalter-Körper gerendert.
 | 1 | `.github/workflows/avatar-render.yml` | Trigger, Secret, Blender-Installation, Artifact |
 | 2 | `tools/build_avatar.py` | Orchestrierung: Username → UserId → Avatar → Rig |
 | 3 | `tools/roblox_api.py` | Web-APIs + Asset Delivery (Open Cloud & Fallbacks) |
-| 4 | `tools/roblox_mesh.py` | Roblox-`.mesh`-Parser (v1.00–v7.00) → OBJ |
-| 5 | `tools/avatar_rig.py` | Stand-Pose-Rig, Accessoire-Platzierung |
-| 6 | `blender/render_glass.py` | Cycles-Glasmaterial, Kamera, Licht, Render |
+| 4 | `tools/rbxm.py` | RBXM-/RBXMX-Parser: Mesh-/Textur-IDs aus Modellen |
+| 5 | `tools/roblox_mesh.py` | Roblox-`.mesh`-Parser (v1.00–v7.00) → OBJ |
+| 6 | `tools/avatar_rig.py` | Stand-Pose-Rig, Accessoire-Platzierung |
+| 7 | `blender/render_glass.py` | Cycles-Glasmaterial, Kamera, Licht, Render |
+| 8 | `.github/workflows/avatar-render.yml` | Veröffentlichen: Artifact + Branch `renders` + Release |
 | – | `tools/diagnose.py` | prüft Endpunkte/Key-Rechte (Workflow *Roblox-Diagnose*) |
 
 Ergebnis im Build-Ordner: `manifest.json`, `parts/*.obj`, `textures/*`,

@@ -36,7 +36,16 @@ ACCESSORY_LAYOUT: Dict[int, Dict[str, Any]] = {
     19: {"label": "Gear", "target": 1.3, "anchor": "right_hand"},
     76: {"label": "Augenbrauen", "target": 1.2, "anchor": "face_front"},
     77: {"label": "Wimpern", "target": 1.2, "anchor": "face_front"},
+    # DynamicHead gehoert an den Kopf, nicht an die Brust (Fallback-Anker).
+    # Die eigentliche Behandlung (Kopf-Ersatz bzw. Headless) macht
+    # build_avatar.py; das Layout greift nur fuer Zusatzteile.
+    79: {"label": "Dynamic Head", "target": 1.45, "anchor": "head_center"},
 }
+
+
+def _de(value: float, nd: int = 2) -> str:
+    """Zahl mit Komma statt Punkt (deutsche Schreibweise fuer Notizen)."""
+    return f"{value:.{nd}f}".replace(".", ",")
 
 
 def _clamp(value: Any, low: float, high: float, default: float = 1.0) -> float:
@@ -178,10 +187,47 @@ def build_body(body_colors: Dict[str, Any], scales: Dict[str, Any]) -> Tuple[Lis
     return parts, metrics
 
 
+def accessory_target_size(asset_type_id: int, metrics: BodyMetrics) -> float:
+    """Heuristische Zielgroesse (max. Achse in Studs) fuer ein Accessoire.
+
+    Accessoire-Groessen sind in Studs angegeben und skalieren mit dem Kopf
+    (grosse Koepfe tragen groessere Huete). Wird auch vom Sanity-Check in
+    build_avatar.py als Rueckfallgroesse benutzt.
+    """
+    layout = ACCESSORY_LAYOUT.get(asset_type_id)
+    base = float(layout["target"]) if layout else 1.8
+    head_scale = metrics.head_radius / 0.68
+    return base * max(0.55, min(1.6, head_scale))
+
+
+def fit_mesh_to_part(mesh: MeshData, target_lo, target_hi) -> MeshData:
+    """Skaliert ein Mesh achsweise in eine Ziel-Box und zentriert es darin.
+
+    Funktioniert wie das MeshPart-Verhalten in Roblox selbst: Die
+    Bounding-Box des FileMesh wird auf die Part-Groesse gestreckt. Damit
+    ersetzen echte Koerperteil-Meshes (aus RBXM) die Rig-Quader lueckenlos.
+    """
+    size = mesh.size()
+    target = tuple(float(target_hi[i]) - float(target_lo[i]) for i in range(3))
+    factors = []
+    for i in range(3):
+        factors.append(target[i] / size[i] if size[i] > 1e-9 else 1.0)
+    scaled = mesh.transform(tuple(factors))
+    center = scaled.center()
+    target_center = tuple((float(target_lo[i]) + float(target_hi[i])) / 2.0 for i in range(3))
+    return scaled.transform(1.0, tuple(target_center[i] - center[i] for i in range(3)))
+
+
 def place_accessory(mesh: MeshData, asset_type_id: int,
-                    metrics: BodyMetrics) -> Tuple[MeshData, str]:
+                    metrics: BodyMetrics,
+                    size_hint=None) -> Tuple[MeshData, str]:
     """Zentriert, skaliert (relativ zur Kopf-/Koerpergroesse) und platziert
     ein Accessoire-Mesh.
+
+    Mit `size_hint` (Groesse aus dem RBXM-Modell, in Studs) wird das Mesh
+    auf diese echte Groesse skaliert statt auf die heuristische
+    Zielgroesse - der Sanity-Check in build_avatar.py faengt danach
+    unplausible Werte ab (Mesh-Einheiten sind nicht immer Studs).
 
     Rueckgabe: (transformiertes Mesh, Hinweistext)
     """
@@ -189,15 +235,21 @@ def place_accessory(mesh: MeshData, asset_type_id: int,
     if layout is None:
         layout = {"label": "Accessoire", "target": 1.8, "anchor": "chest_front"}
 
-    # Accessoire-Groessen sind in Studs angegeben und skalieren mit dem Kopf
-    # (grosse Koepfe tragen groessere Huete).
-    head_scale = metrics.head_radius / 0.68
-    target = float(layout["target"]) * max(0.55, min(1.6, head_scale))
+    target = accessory_target_size(asset_type_id, metrics)
 
     size = mesh.size()
     max_dim = max(size) or 1.0
-    scale = target / max_dim
-    placed = mesh.transform(scale)
+    if size_hint is not None and len(size_hint) == 3 and all(v > 0 for v in size_hint):
+        factors = tuple(
+            float(size_hint[i]) / size[i] if size[i] > 1e-9 else 1.0 for i in range(3)
+        )
+        placed = mesh.transform(factors)
+        scale = max(placed.size()) / max_dim
+        scale_note = f"RBXM-Groesse {size_hint[0]:.2f}x{size_hint[1]:.2f}x{size_hint[2]:.2f} Studs"
+    else:
+        scale = target / max_dim
+        placed = mesh.transform(scale)
+        scale_note = f"skaliert x{scale:.2f}"
     c = placed.center()
     placed = placed.transform(1.0, (-c[0], -c[1], -c[2]))  # um Ursprung zentrieren
 
@@ -233,8 +285,8 @@ def place_accessory(mesh: MeshData, asset_type_id: int,
 
     placed = placed.transform(1.0, (ao[0] + offset[0], ao[1] + offset[1], ao[2] + offset[2]))
 
-    note = (f"{layout['label']}: skaliert x{scale:.2f} (Originalgroesse "
-            f"{size[0]:.1f}x{size[1]:.1f}x{size[2]:.1f} Studs), Anker '{anchor}'")
+    note = (f"{layout['label']}: {scale_note} (Originalgroesse "
+            + "x".join(_de(v, 1) for v in size) + f" Studs), Anker '{anchor}'")
     return placed, note
 
 

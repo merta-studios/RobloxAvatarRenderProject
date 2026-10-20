@@ -80,10 +80,24 @@ einen Usernamen, die Auflösung (z. B. `960x540`) und die Sample-Zahl
 
 **Wo finde ich was?**
 
-* **Step Summary** der Lauf-Seite: Username, UserId, Anzahl Teile/Accessoires,
-  übersprungene Assets, Renderdauer.
+* **Step Summary** der Lauf-Seite: das fertige Bild als **Inline-Vorschau**,
+  Username, UserId, Anzahl Teile/Accessoires, fehlgeschlagene Assets,
+  ignorierte Animationen, Renderdauer.
+* **Branch `renders`** im Repository: `latest.png` (bzw. `<username>.png`) –
+  wird bei jedem Lauf ersetzt und ist ohne Login-Download direkt anschaubar.
+* **Release `avatar-render-latest`**: `render_avatar.png` unter einer
+  stabilen Download-URL
+  (`/releases/download/avatar-render-latest/render_avatar.png`).
+* **Artifact `avatar-render`** (ZIP mit `render_avatar.png`, 7 Tage gültig).
 * **Artifact `render-debug`** (nur bei Fehlern): `manifest.json`,
   `summary.md`, Blender-Log.
+
+> **iPhone-Hinweis (about:blank → App → 404):** GitHub-Artifacts sind an
+> die Browser-Session gebunden. Die GitHub-App für iOS kann sie deshalb
+> nicht herunterladen – das ist kein Fehler der Pipeline. Auf dem Handy
+> einfach das Inline-Bild in der Step Summary, den Branch `renders`
+> (`latest.png`) oder das Release `avatar-render-latest` benutzen. Das
+> Artifact selbst funktioniert in einem Desktop-Browser (eingeloggt).
 
 ---
 
@@ -118,6 +132,52 @@ einen Usernamen, die Auflösung (z. B. `960x540`) und die Sample-Zahl
   behandelt. Beides kann farblich vom Original abweichen.
 * **RoProxy o. Ä. wird nicht verwendet.** Alle Anfragen gehen direkt an
   Roblox-Domains.
+
+---
+
+## Wie Accessoires und Körperteile geladen werden (RBXM)
+
+Roblox liefert Accessoires (Hüte, Haare, Badges …) **und** die getragenen
+Körperteile (Torso, Arme, Beine aus Bundles wie „Roblox 2.0“ oder
+„Korblox Deathspeaker“) über die Asset Delivery **nicht** als
+`.mesh`-Datei aus, sondern als RBXM-Modell (binär) bzw. RBXMX (XML).
+Die eigentliche FileMesh-ID steckt erst im Modell (`MeshPart.MeshId`,
+`SpecialMesh.MeshId`), dazu Texturen (`TextureID`, `SurfaceAppearance`),
+die Part-Größe (`size`) und die Position.
+
+Deshalb läuft der Download zweistufig:
+
+1. RBXM herunterladen, mit dem eigenen Parser
+   ([`tools/rbxm.py`](tools/rbxm.py)) Mesh-/Textur-IDs, Größe und Position
+   extrahieren (Chunks sind oft LZ4-/ZSTD-komprimiert – der Workflow
+   installiert dafür `zstandard` und `lz4` per pip).
+2. Die so gefundenen Meshes/Texturen wie bisher laden und platzieren:
+   Körperteil-Meshes (AssetTypen 27–31) **ersetzen** die Rig-Quader in
+   der jeweiligen BodyColor, Accessoires kommen an ihre Anker
+   (Kopf, Gesicht, Brust, Rücken …).
+
+Besonderheiten:
+
+* **Animationen** (AssetTypen 24, 48–56, 61, 78) werden gar nicht erst
+  heruntergeladen, nur gezählt (im Manifest unter
+  `stats.ignored_animations`) – sie tauchen **nicht** als „übersprungen“ auf.
+* **Headless:** Ein `DynamicHead`-Asset ohne sichtbare Geometrie
+  (< 20 Faces, z. B. „Headless Head“) bedeutet: Der Avatar trägt keinen
+  Kopf. Die Pipeline lässt den Rig-Kopf dann weg und vermerkt das als
+  „Headless/DynamicHead erkannt“ in Manifest und Step Summary.
+* **Sanity-Check:** Mesh-Einheiten aus RBXM-Dateien sind nicht immer
+  Studs. Platzierte Teile größer als 12 Studs oder kleiner als
+  0,05 Studs werden deshalb auf die Zielgröße ihres Ankers skaliert
+  (Warnung im Manifest unter `warnings`).
+
+## Zahlenformat: Studs mit Komma
+
+Größen werden in der Roblox-Einheit **Studs** ausgegeben – in Log,
+`summary.md` und Manifest (`metrics.height_de`) in deutscher
+Schreibweise mit Komma, z. B. `Höhe: 5,40 Studs (typisch 5–6)`.
+Früher stand dort der Rohwert mit Punkt (`5.398`), was man leicht als
+„5 398 Studs“ (fünftausend…) liest. Ein normaler Avatar ist etwa
+5–6 Studs hoch.
 
 ---
 
@@ -202,6 +262,10 @@ sofort, ob der Key fehlt (401) oder der Scope nicht reicht (403).
 | `username.txt ist leer` | Datei enthält nur Leerzeichen/Newline |
 | `Username wurde nicht gefunden` | Tippfehler oder Account gelöscht; exakten Namen prüfen |
 | Render grün, aber Avatar „nackt“ | Downloads fehlgeschlagen → Lauf-Log und `skipped` im Manifest prüfen |
+| `0 Accessoires`, viele Assets „übersprungen“ | Accessoires/Körperteile kommen als RBXM-Modell → Abschnitt „RBXM“. Steht im Manifest „RBXM nicht lesbar“, fehlen vermutlich die Module `lz4`/`zstandard` (Workflow-Schritt 3 prüft das) |
+| Animationen werden „übersprungen“ gezählt | Alte Version – Animationen (Typen 24, 48–56, 61, 78) werden nicht heruntergeladen und stehen nur unter `ignored_animations` |
+| „Avatar 5000 Studs hoch“ | Lesefehler: Höhen werden mit Komma ausgegeben (z. B. `5,40 Studs`); ein normaler Avatar ist 5–6 Studs hoch → Abschnitt „Zahlenformat“ |
+| Artifact-Download auf dem iPhone endet auf about:blank/404 | Bekanntes Verhalten der iOS-App (Artifacts sind session-gebunden). Inline-Bild in der Step Summary, Branch `renders` (`latest.png`) oder Release `avatar-render-latest` nutzen – oder Artifact im Desktop-Browser laden |
 | Lauf bricht nach 45 min ab | Auflösung/Samples reduzieren (Run workflow) |
 
 Fragen oder Wünsche? Einfach ein Issue im Repository aufmachen.

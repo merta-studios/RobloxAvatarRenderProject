@@ -1,0 +1,36 @@
+{
+  "scales": {"height": 1.0, "width": 1.0, "head": 1.0, "depth": 1.0, "proportion": 0.0, "bodyType": 0.0},
+  "playerAvatarType": "R15",
+  "bodyColors": {
+    "headColorId": 352, "torsoColorId": 352, "rightArmColorId": 352,
+    "leftArmColorId": 352, "rightLegColorId": 352, "leftLegColorId": 352
+  },
+  "assets": [
+    {"id": 27112025, "name": "Roblox 2.0 Torso", "assetType": {"id": 27, "name": "Torso"}},
+    {"id": 27112052, "name": "Roblox 2.0 Left Arm", "assetType": {"id": 29, "name": "LeftArm"}},
+    {"id": 134082507, "name": "Headless Horseman Left Leg", "assetType": {"id": 30, "name": "LeftLeg"}},
+    {"id": 139607625, "name": "Korblox Deathspeaker Right Arm", "assetType": {"id": 28, "name": "RightArm"}},
+    {"id": 139607718, "name": "Korblox Deathspeaker Right Leg", "assetType": {"id": 31, "name": "RightLeg"}},
+    {"id": 13576957688, "name": "green bacon shirt", "assetType": {"id": 11, "name": "Shirt"}},
+    {"id": 15093053680, "name": "Headless Head", "assetType": {"id": 79, "name": "DynamicHead"}},
+    {"id": 72574684946317, "name": "Bricksmith Badge", "assetType": {"id": 45, "name": "FrontAccessory"}},
+    {"id": 73553031478451, "name": "Green", "assetType": {"id": 8, "name": "Hat"}},
+    {"id": 88812736819289, "name": "R6 - Climb Animation", "assetType": {"id": 48, "name": "ClimbAnimation"}},
+    {"id": 92684641308924, "name": "R6 - Jump Animation", "assetType": {"id": 52, "name": "JumpAnimation"}},
+    {"id": 92979925036969, "name": "R6 - Idle Animation", "assetType": {"id": 51, "name": "IdleAnimation"}},
+    {"id": 95949707663366, "name": "R6 - Swim Animation", "assetType": {"id": 54, "name": "SwimAnimation"}},
+    {"id": 99060033706897, "name": "Formal", "assetType": {"id": 12, "name": "Pants"}},
+    {"id": 116737021859282, "name": "R6 - Fall Animation", "assetType": {"id": 50, "name": "FallAnimation"}},
+    {"id": 121991851630650, "name": "R6 - Walk Animation", "assetType": {"id": 55, "name": "WalkAnimation"}},
+    {"id": 126241427519956, "name": "White Void Crown", "assetType": {"id": 8, "name": "Hat"}},
+    {"id": 131180413715531, "name": "R6 - Run Animation", "assetType": {"id": 53, "name": "RunAnimation"}}
+  ],
+  "defaultShirtApplied": false,
+  "defaultPantsApplied": false,
+  "emotes": [
+    {"assetId": 3576686446, "assetName": "Hello", "position": 1},
+    {"assetId": 3360686498, "assetName": "Stadium", "position": 2},
+    {"assetId": 3576823880, "assetName": "Point2", "position": 3},
+    {"assetId": 3576968026, "assetName": "Shrug", "position": 4}
+  ]
+}

@@ -53,7 +53,10 @@ ASSET_TYPE_NAMES = {
     32: "Package", 34: "GamePass", 38: "Plugin", 40: "MeshPart",
     41: "HairAccessory", 42: "FaceAccessory", 43: "NeckAccessory",
     44: "ShoulderAccessory", 45: "FrontAccessory", 46: "BackAccessory",
-    47: "WaistAccessory", 48: "ClimbAnimation", 61: "EmoteAnimation",
+    47: "WaistAccessory", 48: "ClimbAnimation",
+    50: "FallAnimation", 51: "IdleAnimation", 52: "JumpAnimation",
+    53: "RunAnimation", 54: "SwimAnimation", 55: "WalkAnimation",
+    61: "EmoteAnimation",
     64: "TShirtAccessory", 65: "ShirtAccessory", 66: "PantsAccessory",
     67: "JacketAccessory", 68: "SweaterAccessory", 69: "ShortsAccessory",
     70: "LeftShoeAccessory", 71: "RightShoeAccessory", 72: "DressSkirtAccessory",
@@ -65,7 +68,9 @@ TEXTURE_ASSET_TYPES = {1, 2, 11, 12, 13, 18, 64, 65, 66, 67, 68, 69, 70, 71, 72}
 # Alles, was als Mesh am Koerper landet
 MESH_ASSET_TYPES = {4, 8, 19, 41, 42, 43, 44, 45, 46, 47, 17, 27, 28, 29, 30, 31,
                     76, 77, 79, 40}
-IGNORED_ASSET_TYPES = {3, 24, 48, 61, 78}  # Audio/Animationen
+# Audio (3) und alle Animations-/Emote-Typen: werden nie heruntergeladen,
+# nur gezaehlt (siehe stats["ignored_animations"] in build_avatar.py).
+IGNORED_ASSET_TYPES = {3, 24, 48, 49, 50, 51, 52, 53, 54, 55, 56, 61, 78}
 
 
 class RobloxError(RuntimeError):

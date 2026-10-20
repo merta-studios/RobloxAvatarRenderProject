@@ -430,6 +430,26 @@ def test_render_workflow_hat_artifact_und_secret():
     assert "blender/render_glass.py" in text
 
 
+def test_render_workflow_veroeffentlicht_renders_branch_und_release():
+    # Bugfix Handy: Artifacts sind session-gebunden (iOS-App -> 404), darum
+    # zusaetzlich renders-Branch + Release mit stabiler URL.
+    yaml = pytest.importorskip("yaml")
+    text = (ROOT / ".github/workflows/avatar-render.yml").read_text()
+    data = yaml.safe_load(text)
+    assert data["permissions"]["contents"] == "write"
+    assert "HEAD:renders" in text
+    assert "latest.png" in text
+    assert "avatar-render-latest" in text
+    assert "gh release" in text and "--clobber" in text
+    assert "raw.githubusercontent.com" in text
+    assert "pip install --quiet zstandard lz4" in text
+    # Pfad-Filter bleibt eng, damit der renders-Push keine Schleife ausloest
+    triggers = data.get("on", data.get(True))
+    paths = triggers["push"]["paths"]
+    assert "username.txt" in paths
+    assert not any("png" in p for p in paths)
+
+
 def test_anleitung_ist_deutsch_und_vollstaendig():
     text = (ROOT / "ANLEITUNG.md").read_text(encoding="utf-8")
     for needle in ("ROBLOX_OPEN_CLOUD_API_KEY", "legacy-asset:manage", "username.txt",

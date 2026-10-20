@@ -121,7 +121,12 @@ def test_voller_lauf_mit_attrappen(fake_api, tmp_path):
     # Fehlgeschlagener Download landet unter "skipped", ohne Abbruch
     skipped_ids = {item["asset_id"] for item in manifest["skipped"]}
     assert 1005 in skipped_ids
-    assert any(item["asset_id"] == 1004 for item in manifest["skipped"])
+    # Animationen (hier: Emote 1004) zaehlen NICHT mehr als "uebersprungen",
+    # sondern werden getrennt als ignored_animations gezaehlt
+    assert 1004 not in skipped_ids
+    assert manifest["stats"]["ignored_animations"] == 1
+    assert manifest["stats"]["failed"] == 1
+    assert [item["asset_id"] for item in manifest["ignored"]] == [1004]
 
     # Dateien sind da und nicht leer
     for part in manifest["parts"]:
