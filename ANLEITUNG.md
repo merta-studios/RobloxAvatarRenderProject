@@ -168,6 +168,17 @@ tools/
   tests/test_pipeline.py         Tests ohne Netzwerk/Blender
 ```
 
+## Erster Testlauf (Referenz)
+
+Der Workflow wurde direkt nach dem Einrichten einmal auf GitHub Actions
+ausgeführt: Der komplette Job **„Avatar rendern“** war nach **1 min 47 s**
+grün (Checkout, Username lesen, Avatar laden, Blender 4.2 installieren,
+Cycles-Render, Artifact-Upload). Alle Schritte erfolgreich.
+
+Zum Vergleich: Nur der Render-Schritt (1280×720, 64 Samples, Test-Rig) dauert
+auf einem CPU-Runner ca. 30–60 s; der Rest ist Download/Installation von
+Blender und das Laden der Assets.
+
 ## Fehlersuche
 
 | Symptom | Ursache / Lösung |
