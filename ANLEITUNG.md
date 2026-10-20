@@ -127,9 +127,13 @@ einen Usernamen, die Auflösung (z. B. `960x540`) und die Sample-Zahl
 * **Moderation/Archivierung:** Einzelne Assets können gesperrt oder archiviert
   sein. Dann fehlt das Teil im Render – im Manifest steht der Grund unter
   `skipped`, der Rest wird trotzdem gerendert.
-* **2D-Kleidung** (T-Shirts, Hosen) wird als Textur auf die Körperteile gelegt,
-  sofern sie herunterladbar ist; 3D-Kleidungs-Bundles werden wie Accessoires
-  behandelt. Beides kann farblich vom Original abweichen.
+* **2D-Kleidung** (Shirts, Hosen) wird über die *echte* Roblox-UV-Karte
+  aufgetragen: Jede Fläche eines Körperteils bekommt genau ihr Rechteck aus
+  dem 585×559-Template (siehe „Kleidung richtig auftragen“ unten), R15-Nähte
+  (Ober-/Unterarm, Hand, Ober-/Unterschenkel, Fuß) sitzen auf ihrem festen
+  Anteil. T-Shirt (Brust-Logo) und Face (Gesicht) sind Einzelbilder und
+  werden als flache Decals vor den Körper gelegt. Farben können trotzdem
+  leicht vom Original abweichen (Glas-Look).
 * **RoProxy o. Ä. wird nicht verwendet.** Alle Anfragen gehen direkt an
   Roblox-Domains.
 
@@ -164,8 +168,17 @@ Besonderheiten:
 * **R15-Segmente:** Körperteil-Bundles (z. B. Korblox) liefern pro Asset
   mehrere Segmente (`RightUpperArm`, `RightLowerLeg`, `RightFoot` …).
   Die Pipeline wählt die R15-Segmente per Name aus und führt sie über
-  ihre RBXM-Positionen zu einem zusammenhängenden Körperteil zusammen.
-  Drehungen der Segmente werden ignoriert (aufrechte Standardpose).
+  ihre RBXM-Positionen **und -Drehungen** zu einem zusammenhängenden
+  Körperteil zusammen. (Ohne die CFrame-Drehung standen Füße/Hände schief –
+  das waren die „verrutschten“ Teile im Render.)
+* **Kleidung richtig auftragen** (`tools/clothing_uv.py`): Das Shirt-/Pants-
+  Template ist eine UV-Karte, kein Bild. Früher lag das komplette Template
+  auf jeder Fläche – dadurch trugen Arme das Brustmotiv, Hosen landeten auf
+  den Füßen und transparente Template-Bereiche wurden schwarz
+  („dunkelgrau“). Jetzt wird pro Fläche (vorn/hinten/links/rechts/oben/unten)
+  das passende Feld benutzt, R15-Segmente bekommen ihren Pixel-Anteil
+  (Oberarm 64 px, Unterarm 48 px, Hand 16 px; Oberkörper 96 px,
+  Unterkörper 32 px).
 * **Moderne Meshes (FileMesh 6.00/7.00):** Neuere Assets nutzen ein
   Chunk-Format; Version 7.00 ist zusätzlich **Draco-komprimiert**.
   Der Parser liest beides; für 7.00 installiert der Workflow das Paket
@@ -235,6 +248,7 @@ tools/
   build_avatar.py                Orchestrierung, schreibt manifest.json + OBJs
   roblox_api.py                  Web-APIs, Asset Delivery, BrickColor-Tabelle
   roblox_mesh.py                 FileMesh-Parser (v1–v7) → OBJ
+  clothing_uv.py                 Shirt-/Pants-Template korrekt auf UVs legen
   avatar_rig.py                  Stand-Pose-Rig + Accessoire-Platzierung
   brick_colors.json              208 Roblox-BrickColors (ID → RGB)
   tests/test_pipeline.py         Tests ohne Netzwerk/Blender

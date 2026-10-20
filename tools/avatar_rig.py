@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from roblox_mesh import MeshData, make_box, make_sphere
+from roblox_mesh import MeshData, make_box, make_cylinder, make_quad, make_sphere
 from roblox_api import brick_color_hex, hex_to_rgb
 
 # AssetTypeId -> Layout fuer Accessoires
@@ -160,16 +160,21 @@ def build_body(body_colors: Dict[str, Any], scales: Dict[str, Any]) -> Tuple[Lis
     parts.append(Part("links_arm", make_box(arm_w, arm_h, arm_d, (-arm_x, arm_y, 0.0)),
                       colors["left_arm"], "body"))
 
-    # Hals (klein, versinkt im Torso/Kopf)
+    # Hals: schlanker Zylinder zwischen Torso und Kopf. Ein Quader wirkte im
+    # Glas-Render wie ein losgeloester Kasten (und blieb bei "Headless"-
+    # Avataren als Klotz uebrig).
     shoulder_y = leg_h + gap * 2 + torso_h
-    neck_h = 0.40 * h
-    neck_y = shoulder_y + neck_h / 2 - 0.04
-    parts.append(Part("hals", make_box(0.7 * w, neck_h, 0.7 * d, (0.0, neck_y, 0.0)),
+    neck_h = 0.16 * h
+    neck_r = 0.30 * min(w, d) + 0.02
+    neck_y = shoulder_y + neck_h / 2 - 0.02
+    parts.append(Part("hals", make_cylinder(neck_r, neck_h, 20, (0.0, neck_y, 0.0)),
                       colors["head"], "body"))
 
-    # Kopf (Kugel, leicht nach vorne gesetzt wie bei Roblox)
+    # Kopf (Kugel, leicht nach vorne gesetzt wie bei Roblox). Die Kugel
+    # sitzt mit ihrer Unterkante knapp auf dem Torso, der Hals
+    # verschwindet darin - kein sichtbarer Spalt, kein schwebender Kopf.
     head_r = 0.68 * hs * h
-    head_center_y = shoulder_y + head_r * 1.02   # Kopf sitzt auf dem Hals, nicht im Torso
+    head_center_y = shoulder_y + head_r * 1.02
     parts.append(Part("kopf", make_sphere(head_r, 32, 22, (0.0, head_center_y, -0.02 * d)),
                       colors["head"], "body"))
 
@@ -218,16 +223,41 @@ def fit_mesh_to_part(mesh: MeshData, target_lo, target_hi) -> MeshData:
     return scaled.transform(1.0, tuple(target_center[i] - center[i] for i in range(3)))
 
 
+def _size_hint_is_placeholder(size_hint, geom_size) -> bool:
+    """Ist die RBXM-Groesse nur ein Platzhalter (statt echter Studs)?
+
+    In echten Bundle-Modellen steht bei vielen Accessoires ``Size = 1,1,1``
+    (SpecialMesh ohne Scale). Skaliert man das Mesh darauf, wird z. B. eine
+    Krone auf einen Wuerfel von 1 Stud zusammen (im Render: winzige,
+    schwebende Huete). Ein Platzhalter liegt vor, wenn
+
+    * alle drei Achsen gleich sind UND
+    * die Geometrie selbst deutlich unsymmetrisch ist (also nicht einfach
+      ein Wuerfel, bei dem 1x1x1 die Wahrheit sein kann).
+    """
+    if size_hint is None or len(size_hint) != 3 or not all(v > 0 for v in size_hint):
+        return True
+    hint = [float(v) for v in size_hint]
+    if max(hint) - min(hint) > 0.01 * max(hint):
+        return False
+    geom = [float(v) for v in (geom_size or ())]
+    if len(geom) < 3 or min(geom) <= 1e-9:
+        return False
+    return max(geom) / min(geom) > 1.25
+
+
 def place_accessory(mesh: MeshData, asset_type_id: int,
                     metrics: BodyMetrics,
-                    size_hint=None) -> Tuple[MeshData, str]:
+                    size_hint=None,
+                    rotation=None) -> Tuple[MeshData, str]:
     """Zentriert, skaliert (relativ zur Kopf-/Koerpergroesse) und platziert
     ein Accessoire-Mesh.
 
     Mit `size_hint` (Groesse aus dem RBXM-Modell, in Studs) wird das Mesh
     auf diese echte Groesse skaliert statt auf die heuristische
-    Zielgroesse - der Sanity-Check in build_avatar.py faengt danach
-    unplausible Werte ab (Mesh-Einheiten sind nicht immer Studs).
+    Zielgroesse. Platzhalter-Groessen (siehe `_size_hint_is_placeholder`)
+    und absurde Werte werden auf die heuristische Zielgroesse begrenzt,
+    damit Huete nicht winzig ueber dem Kopf schweben.
 
     Rueckgabe: (transformiertes Mesh, Hinweistext)
     """
@@ -237,20 +267,35 @@ def place_accessory(mesh: MeshData, asset_type_id: int,
 
     target = accessory_target_size(asset_type_id, metrics)
 
+    if rotation is not None:
+        # Huete/Haare sind im RBXM oft gedreht (CFrame-Rotation). Ohne
+        # diese Drehung stehen sie schief auf dem Kopf ("verrutscht").
+        mesh = mesh.rotate(rotation)
     size = mesh.size()
     max_dim = max(size) or 1.0
-    if size_hint is not None and len(size_hint) == 3 and all(v > 0 for v in size_hint):
+    if not _size_hint_is_placeholder(size_hint, size):
         # Form erhalten: gleichmaessig auf die groesste RBXM-Achse
         # skalieren. Pro-Achsen-Skalierung auf die Part-Size wuerde z. B.
-        # eine flache Krone (im RBXM oft Size 1x1x1) zur Kugel verzerren.
-        scale = max(size_hint) / max_dim
+        # eine flache Krone zur Kugel verzerren.
+        wanted = max(float(v) for v in size_hint)
+        # ... aber in einem plausiblen Fenster relativ zur Zielgroesse,
+        # sonst schweben z. B. winzige oder riesige Huete neben dem Kopf.
+        clamped = max(target * 0.45, min(target * 1.8, wanted))
+        scale = clamped / max_dim
         placed = mesh.transform(scale)
         scale_note = ("RBXM-Groesse " + "x".join(_de(v, 2) for v in size_hint)
                       + " Studs, form-erhaltend skaliert")
+        if abs(clamped - wanted) > 0.01:
+            scale_note += (f" (auf {_de(clamped)} Studs begrenzt - "
+                           "RBXM-Angabe unplausibel)")
     else:
         scale = target / max_dim
         placed = mesh.transform(scale)
-        scale_note = f"skaliert x{scale:.2f}"
+        scale_note = f"auf Zielgroesse {_de(target)} Studs skaliert"
+        if size_hint is not None and len(size_hint) == 3 and all(v > 0 for v in size_hint):
+            scale_note += (" (RBXM-Groesse "
+                           + "x".join(_de(v, 2) for v in size_hint)
+                           + " ist ein Platzhalter)")
     c = placed.center()
     placed = placed.transform(1.0, (-c[0], -c[1], -c[2]))  # um Ursprung zentrieren
 
@@ -289,6 +334,33 @@ def place_accessory(mesh: MeshData, asset_type_id: int,
     note = (f"{layout['label']}: {scale_note} (Originalgroesse "
             + "x".join(_de(v, 1) for v in size) + f" Studs), Anker '{anchor}'")
     return placed, note
+
+
+def decal_quad(part_name: str, metrics: BodyMetrics) -> Optional[MeshData]:
+    """Flaeche fuer Gesichts-/T-Shirt-Decals.
+
+    Diese Texturen sind keine UV-Karten, sondern einzelne Bilder (Gesicht,
+    Brust-Logo). Sie werden als eigene, leicht vor dem Koerper liegende
+    Flaeche gerendert - vorher wurden sie ueber den ganzen Koerper
+    "verschmiert" (Gesicht auf Hinterkopf, Shirt auf Beinen).
+    """
+    depth = metrics.torso_depth
+    if part_name in ("kopf", "kopf_mesh"):
+        radius = metrics.head_radius
+        size = radius * 1.38
+        # knapp vor der Kopfflaeche: echte Kopf-Meshes werden auf
+        # 2,15 x Radius skaliert, ihre Vorderseite liegt also bei rund
+        # 1,08 x Radius - 1,14 laesst das Gesicht sicher davor liegen.
+        return make_quad(size, size,
+                         (0.0, metrics.head_center_y + radius * 0.02,
+                          -(radius * 1.14)), normal=(0.0, 0.0, -1.0))
+    if part_name == "torso":
+        width = metrics.torso_width * 0.94
+        height = min(metrics.torso_width, 1.9) * 0.92
+        y = metrics.shoulder_y - height / 2.0 - 0.06
+        return make_quad(width, height, (0.0, y, -(depth / 2.0 + 0.02)),
+                         normal=(0.0, 0.0, -1.0))
+    return None
 
 
 def body_part_colors(body_colors: Dict[str, Any]) -> Dict[str, str]:

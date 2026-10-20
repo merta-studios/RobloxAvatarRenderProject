@@ -321,18 +321,58 @@ def test_accessoire_unbekannter_typ_bekommt_fallback():
 
 
 def test_accessoire_rbxm_groesse_form_erhaltend():
-    """RBXM-Size 1x1x1 darf eine flache Krone (3x0,7x2) nicht zur Kugel
-    verzerren: gleichmaessige Skalierung auf die groesste Achse."""
+    """Eine flache Krone (3x0,7x2) darf nicht zur Kugel verzerrt werden.
+
+    RBXM-Size 1x1x1 ist bei Bundles ein Platzhalter (SpecialMesh ohne
+    Scale): sie wird ignoriert, das Accessoire bekommt die heuristische
+    Zielgroesse - aber gleichmaessig skaliert, damit die Proportionen
+    (3:0,7:2) erhalten bleiben.
+    """
     _, metrics = avatar_rig.build_body(roblox_api.DEFAULT_BODY_COLORS,
                                        roblox_api.DEFAULT_SCALES)
     krone = roblox_mesh.make_box(3.0, 0.7, 2.0)
     placed, note = avatar_rig.place_accessory(
         krone, 8, metrics, size_hint=(1.0, 1.0, 1.0))
     size = placed.size()
-    assert max(size) == pytest.approx(1.0)
+    assert max(size) == pytest.approx(
+        avatar_rig.accessory_target_size(8, metrics))
     assert size[0] / size[2] == pytest.approx(1.5, abs=0.02)  # Proportion!
-    assert size[1] == pytest.approx(0.7 / 3.0, abs=0.02)
+    assert size[1] / size[0] == pytest.approx(0.7 / 3.0, abs=0.02)
+    assert "Platzhalter" in note
+
+
+def test_accessoire_nicht_uniforme_rbxm_groesse_wird_uebernommen():
+    """Echte Groessen (z. B. 3x2x0,7 Studs) bleiben erhalten."""
+    _, metrics = avatar_rig.build_body(roblox_api.DEFAULT_BODY_COLORS,
+                                       roblox_api.DEFAULT_SCALES)
+    hut = roblox_mesh.make_box(3.0, 2.0, 0.7)
+    placed, note = avatar_rig.place_accessory(
+        hut, 8, metrics, size_hint=(3.0, 2.0, 0.7))
+    assert max(placed.size()) == pytest.approx(3.0, abs=0.01)
     assert "form-erhaltend" in note
+
+
+def test_mesh_rotation_dreht_geometrie():
+    box = roblox_mesh.make_box(2.0, 1.0, 2.0)
+    # 90 Grad um die X-Achse: Y und Z tauschen
+    um_x = ((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0))
+    gedreht = box.rotate(um_x)
+    assert gedreht.size() == pytest.approx((2.0, 2.0, 1.0), abs=1e-6)
+    # Identitaet aendert nichts
+    assert box.rotate(((1, 0, 0), (0, 1, 0), (0, 0, 1))).size() == pytest.approx(
+        box.size())
+
+
+def test_accessoire_mit_rotation_wird_gedreht():
+    _, metrics = avatar_rig.build_body(roblox_api.DEFAULT_BODY_COLORS,
+                                       roblox_api.DEFAULT_SCALES)
+    hut = roblox_mesh.make_box(2.0, 1.0, 1.0)
+    verdreht = ((0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0))  # 90 Grad um Z
+    gerade, _ = avatar_rig.place_accessory(hut, 8, metrics)
+    schief, _ = avatar_rig.place_accessory(hut, 8, metrics, rotation=verdreht)
+    # Beide gleich gross, aber um 90 Grad gedreht (Breite/Hoehe tauschen)
+    assert schief.size() == pytest.approx(
+        (gerade.size()[1], gerade.size()[0], gerade.size()[2]), abs=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +523,7 @@ def test_wichtige_dateien_existieren():
                 ".github/workflows/auto-merge.yml", "blender/render_glass.py",
                 "tools/build_avatar.py", "tools/roblox_api.py",
                 "tools/roblox_mesh.py", "tools/avatar_rig.py", "tools/diagnose.py",
+                "tools/clothing_uv.py", "tools/tests/test_clothing_uv.py",
                 ".github/workflows/diagnose.yml", "ANLEITUNG.md"):
         assert (ROOT / rel).exists(), rel
 

@@ -114,6 +114,29 @@ def test_rbxm_specialmesh_erbt_part_groesse():
     assert entry["name"] == "Torso"  # Name des Parts statt "Mesh"
 
 
+def test_rbxm_cframe_rotation_wird_gelesen():
+    """CFrame-Rotation (hier: 90 Grad um Y) muss im Eintrag landen.
+
+    Ohne Drehung setzt die Pipeline gedrehte Segmente (Fuesse, Haende,
+    schiefe Huete) falsch zusammen - sichtbar als "verrutschte" Teile.
+    """
+    inst = _meshpart("Gedreht", 111, None, (1.0, 1.0, 1.0))
+    inst["props"]["CFrame"] = ("M", (1.0, 2.0, 3.0))
+    entries = rbxm.extract_assets(make_rbxm([inst]))
+    assert entries[0]["position"] == pytest.approx((1.0, 2.0, 3.0))
+    rotation = entries[0]["rotation"]
+    assert rotation is not None
+    assert len(rotation) == 3 and all(len(row) == 3 for row in rotation)
+    # Die Test-Matrix ist die Identitaet -> Geometrie bleibt unveraendert
+    flach = [wert for row in rotation for wert in row]
+    assert flach == pytest.approx([1, 0, 0, 0, 1, 0, 0, 0, 1])
+
+
+def test_rbxm_ohne_rotation_liefert_none():
+    data = make_rbxm([_meshpart("Normal", 111, None, (1.0, 1.0, 1.0))])
+    assert rbxm.extract_assets(data)[0]["rotation"] is None
+
+
 def test_rbxm_surfaceappearance_liefert_textur_zum_meshpart():
     part = _meshpart(texture_id=None)
     appearance = {"class": "SurfaceAppearance",

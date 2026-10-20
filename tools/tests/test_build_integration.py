@@ -145,6 +145,65 @@ def test_voller_lauf_mit_attrappen(fake_api, tmp_path):
     assert top > 4.0
 
 
+def test_hemd_und_hose_landen_auf_den_richtigen_teilen(fake_api, monkeypatch, tmp_path):
+    """Shirt = Torso + Arme, Pants = Beine; Gesicht wird ein Decal.
+
+    Vorher lag das Shirt-Template ausschliesslich auf dem Torso (Aermel
+    blieben nackt) und das Gesicht wurde ueber den ganzen Kopf gemappt.
+    """
+    avatar = dict(AVATAR)
+    avatar["assets"] = list(AVATAR["assets"]) + [
+        {"id": 1006, "name": "Jeans", "assetType": {"id": 12, "name": "Pants"}},
+        {"id": 1007, "name": "Gesicht", "assetType": {"id": 18, "name": "Face"}},
+        {"id": 1008, "name": "TShirt", "assetType": {"id": 2, "name": "TShirt"}},
+    ]
+    downloads = {
+        1001: encode_v2(roblox_mesh.make_box(1.2, 1.2, 1.2)),   # Kopf
+        1002: encode_v2(roblox_mesh.make_sphere(2.0, 12, 8)),   # Hut
+        1003: PNG_BYTES,                                         # Shirt
+        1005: None,
+        1006: PNG_BYTES,                                         # Hose
+        1007: PNG_BYTES,                                         # Gesicht
+        1008: PNG_BYTES,                                         # T-Shirt
+    }
+    types = {**TYPE_BY_ID, 1006: 12, 1007: 18, 1008: 2}
+
+    monkeypatch.setattr(roblox_api, "fetch_avatar", lambda client, uid: avatar)
+    monkeypatch.setattr(
+        roblox_api, "fetch_asset_details",
+        lambda client, aid: {"assetTypeId": types.get(aid, 0), "name": ""})
+
+    def download(client, asset_id):
+        payload = downloads.get(asset_id)
+        if payload is None:
+            return roblox_api.DownloadedAsset(asset_id, None, "", "", "fake: 403")
+        return roblox_api.DownloadedAsset(asset_id, payload, "", "fake", "")
+
+    monkeypatch.setattr(roblox_api, "download_asset", download)
+
+    manifest = build_avatar.build("builderman", str(tmp_path), verbose=False)
+    by_name = {p["name"]: p for p in manifest["parts"]}
+
+    # Shirt traegt Torso *und* beide Arme (UV-Karte)
+    for name in ("torso", "rechts_arm", "links_arm"):
+        assert by_name[name]["texture"] == by_name["torso"]["texture"]
+        assert by_name[name]["uv_style"] == "shirt"
+    # Hose traegt die Beine (UV-Karte)
+    for name in ("links_bein", "rechts_bein"):
+        assert by_name[name]["uv_style"] == "pants"
+    # Nicht-Kleidungs-Teile bleiben ohne Template
+    assert by_name["hals"].get("uv_style", "") == ""
+
+    # Gesicht und T-Shirt sind Decals (eigene Flaeche, nicht UV-Karte)
+    decals = [p for p in manifest["parts"] if p["kind"] == "decal"]
+    assert len(decals) == 2
+    assert any("Gesicht" in p["name"] for p in decals)
+    assert any("T-Shirt" in p["name"] for p in decals)
+    for decal in decals:
+        assert (tmp_path / decal["obj"]).stat().st_size > 20
+        assert decal["texture"]
+
+
 def test_build_scheitert_nicht_ohne_assets(fake_api, monkeypatch, tmp_path):
     leer = dict(AVATAR)
     leer["assets"] = []

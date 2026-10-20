@@ -291,10 +291,12 @@ def test_riesiges_mesh_wird_neu_skaliert(monkeypatch, tmp_path):
     manifest = build_avatar.build("MertaStudios", str(tmp_path), verbose=False)
 
     hut = next(p for p in manifest["parts"] if p["kind"] == "accessory")
+    # 200 Studs aus dem RBXM sind keine echten Studs: der Hut wird auf eine
+    # plausible Kopfgroesse begrenzt (statt die Szene zu sprengen).
     assert _obj_max_axis(tmp_path / hut["obj"]) <= 12.0
-    assert any("Sanity-Check" in w for w in manifest["warnings"])
+    assert "begrenzt" in (hut.get("note") or "")
     summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
-    assert "Sanity-Check" in summary
+    assert "begrenzt" in summary
 
 
 def test_rbxm_textur_wird_ans_teil_gehaengt(monkeypatch, tmp_path):

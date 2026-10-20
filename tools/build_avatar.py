@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import avatar_rig  # noqa: E402
+import clothing_uv  # noqa: E402
 import rbxm  # noqa: E402
 import roblox_api as api  # noqa: E402
 import roblox_mesh  # noqa: E402
@@ -39,20 +40,26 @@ import roblox_mesh  # noqa: E402
 # (glatte Normalen auf Quadern wirken sonst wie "Plattenpanzer").
 SMOOTH_BODY_PARTS = {"kopf", "kopf_mesh"}
 
+# Kleidungs-Assets, die als *flaechiges Decal* auf den Koerper gelegt werden
+# statt als UV-Karte (T-Shirt = nur Brust vorne, Face = nur Gesicht).
+DECAL_TARGETS = {
+    2: "torso",     # TShirt: quadratisches Bild auf der Brust
+    18: "kopf",     # Face: Gesichts-Textur
+}
+
+# Kleidungs-Assets, die als UV-Karte (Shirt-/Pants-Template) auf den Koerper
+# gelegt werden. Welche Rig-Teile sie abdecken, steht in CLOTHING_TARGETS.
+# Nur klassische Kleidung (Shirt/Pants) benutzt das 585x559-Template.
+# Layered Clothing (Typ 64-72) sind eigene Meshes mit gebackenen UVs und
+# werden hier bewusst NICHT umgemappt.
+TEMPLATE_STYLES = {
+    11: clothing_uv.STYLE_SHIRT,   # Shirt: Torso + Aermel
+    12: clothing_uv.STYLE_PANTS,   # Pants: Beine
+}
+
 CLOTHING_TARGETS = {
-    2: ["torso"],                                  # TShirt
-    11: ["torso"],                                 # Shirt
+    11: ["torso", "links_arm", "rechts_arm"],      # Shirt: Torso + Aermel
     12: ["links_bein", "rechts_bein"],             # Pants
-    18: ["kopf", "kopf_mesh"],                     # Face
-    64: ["torso"],                                 # TShirtAccessory
-    65: ["torso"],                                 # ShirtAccessory
-    66: ["links_bein", "rechts_bein"],             # PantsAccessory
-    67: ["torso"],                                 # JacketAccessory
-    68: ["torso"],                                 # SweaterAccessory
-    69: ["links_bein", "rechts_bein"],             # ShortsAccessory
-    70: ["links_bein"],                            # LeftShoeAccessory
-    71: ["rechts_bein"],                           # RightShoeAccessory
-    72: ["torso"],                                 # DressSkirtAccessory
 }
 
 # AssetTypeId der getragenen Koerperteile -> Rig-Teilname. Diese Assets
@@ -377,7 +384,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         def add_mesh(raw: bytes, parent_asset_id: int, mesh_asset_id: int,
                      type_id: int, type_name: str, label: str,
                      rbxm_size: Optional[Any], texture_file: Optional[str],
-                     rbxm_position: Optional[Any] = None) -> None:
+                     rbxm_position: Optional[Any] = None,
+                     rbxm_rotation: Optional[Any] = None) -> None:
             """Parst ein FileMesh und reiht es in mesh_parts ein."""
             try:
                 mesh = roblox_mesh.parse(raw)
@@ -408,6 +416,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 "mesh": mesh,
                 "rbxm_size": rbxm_size,
                 "rbxm_position": rbxm_position,
+                "rbxm_rotation": rbxm_rotation,
                 "texture_file": texture_file,
                 "head_info": head_info,
             })
@@ -470,7 +479,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                     f"{', mit Textur' if texture_file else ''})")
                 add_mesh(raw, parent_asset_id, mesh_id, type_id, type_name,
                          entry_label, entry.get("size"), texture_file,
-                         entry.get("position"))
+                         entry.get("position"), entry.get("rotation"))
 
             if (len(mesh_parts) == parts_before and len(skipped) == skips_before
                     and len(textures) == textures_before
@@ -550,11 +559,39 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     body_colors = effective_body_colors(avatar_raw.get("bodyColors"))
     body_parts, metrics = avatar_rig.build_body(body_colors, scales)
 
-    # Texturen den Kleidungs-Parts zuordnen
+    # Texturen den Kleidungs-Parts zuordnen. Die Zuordnung folgt der echten
+    # Roblox-UV-Karte: ein Shirt bedeckt Torso + Arme, eine Hose die Beine
+    # (und die Huefte). Welcher Bildbereich auf welche Flaeche kommt,
+    # entscheidet clothing_uv.py.
     texture_for_part: Dict[str, str] = {}
+    style_for_texture: Dict[str, str] = {}
     for tex in textures:
-        for target in CLOTHING_TARGETS.get(int(tex["type_id"]), []):
+        type_id = int(tex["type_id"])
+        style = TEMPLATE_STYLES.get(type_id)
+        if style:
+            style_for_texture[tex["file"]] = style
+        for target in CLOTHING_TARGETS.get(type_id, []):
             texture_for_part.setdefault(target, tex["file"])
+
+    def template_limb(rig_name: str) -> str:
+        """Welcher Gliedmassen-Block des Templates (bzw. Torso-Block)."""
+        if rig_name.endswith("bein") or rig_name.endswith("arm"):
+            return "right" if rig_name.startswith("rechts") else "left"
+        return "torso"
+
+    def clothing_style_for(rig_name: str, own_texture: Optional[str]):
+        """(Textur, Template-Stil) fuer ein Rig-Teil.
+
+        Klassische Kleidung (Shirt/Hose) liegt in Roblox *ueber* der
+        Koerper-Textur des Bundles - sie gewinnt hier deshalb. Ohne
+        Kleidung bleibt die im RBXM mitgelieferte Teil-Textur samt ihren
+        eigenen UVs erhalten (die darf nicht umgemappt werden).
+        """
+        tex = texture_for_part.get(rig_name)
+        style = style_for_texture.get(tex) if tex else None
+        if style:
+            return tex, style
+        return own_texture, None
 
     # Echte Koerperteil-Meshes (Typ 27-31) den Rig-Teilen zuordnen.
     # R15-Bundles liefern pro Asset mehrere Segmente (z. B. LeftArm =
@@ -578,12 +615,27 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         if len(mergeable) <= 6 and all(
                 mp.get("rbxm_size") and mp.get("rbxm_position")
                 for mp in mergeable):
-            merged = roblox_mesh.merge_meshes(
-                [(mp["mesh"], mp["rbxm_size"], mp["rbxm_position"])
-                 for mp in mergeable],
-                source_version="merged-rbxm")
+            # Kleidungs-UVs VOR dem Zusammenfuehren setzen: jedes
+            # R15-Segment bekommt seinen eigenen Anteil am Template-Feld
+            # (Oberarm 64 px, Unterarm 48 px, Hand 16 px; Oberkoerper
+            # 96 px, Unterkoerper 32 px). Nur so sitzen die Naehte dort,
+            # wo Roblox sie auch hat.
+            own_texture = next((mp["texture_file"] for mp in mergeable
+                                if mp.get("texture_file")), None)
+            _, style = clothing_style_for(rig_name, own_texture)
+            items = []
+            for mp in mergeable:
+                mesh = mp["mesh"]
+                if style:
+                    mesh = clothing_uv.assign_template_uvs(
+                        mesh, style, limb=template_limb(rig_name),
+                        slice_name=mp.get("label"))
+                items.append((mesh, mp["rbxm_size"], mp["rbxm_position"],
+                              mp.get("rbxm_rotation")))
+            merged = roblox_mesh.merge_meshes(items, source_version="merged-rbxm")
             pseudo = dict(mergeable[0])
             pseudo["mesh"] = merged
+            pseudo["uv_done"] = bool(style)
             pseudo["texture_file"] = next(
                 (mp["texture_file"] for mp in mergeable
                  if mp.get("texture_file")), None)
@@ -635,6 +687,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                     "smooth": True,
                     "texture": head_mesh.get("texture_file")
                                or texture_for_part.get("kopf_mesh"),
+                    "uv_style": "",
                     "asset_id": head_mesh["asset_id"],
                     "note": ("Echtes Kopf-Mesh des Avatars"
                              + (f" ({head_mesh['head_info']})"
@@ -645,8 +698,18 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
 
         replacement = body_replacements.get(part.name)
         if replacement is not None:
+            own_texture = replacement.get("texture_file")
+            texture, style = clothing_style_for(part.name, own_texture)
+            mesh = replacement["mesh"]
+            if replacement.get("rbxm_rotation"):
+                # Einzelnes Segment: CFrame-Drehung uebernehmen, sonst steht
+                # es (z. B. als Fuss) schief im Rig.
+                mesh = mesh.rotate(replacement["rbxm_rotation"])
+            if style and not replacement.get("uv_done"):
+                mesh = clothing_uv.assign_template_uvs(
+                    mesh, style, limb=template_limb(part.name))
             lo, hi = part.mesh.bbox()
-            placed = avatar_rig.fit_mesh_to_part(replacement["mesh"], lo, hi)
+            placed = avatar_rig.fit_mesh_to_part(mesh, lo, hi)
             placed = sanity_check(placed, max(hi[i] - lo[i] for i in range(3)),
                                   part.name, warnings)
             fname = f"{part.name}.obj"
@@ -657,8 +720,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 "color": part.color,
                 "kind": "body",
                 "smooth": True,
-                "texture": replacement.get("texture_file")
-                           or texture_for_part.get(part.name),
+                "texture": texture,
+                "uv_style": style or "",
                 "asset_id": replacement["asset_id"],
                 "note": (f"Echtes Mesh aus RBXM (Mesh-Asset "
                          f"{replacement['mesh_asset_id']})"
@@ -667,15 +730,21 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             body_parts_from_mesh += 1
             continue
 
+        texture, style = clothing_style_for(part.name, None)
+        mesh = part.mesh
+        if style:
+            mesh = clothing_uv.assign_template_uvs(
+                mesh, style, limb=template_limb(part.name))
         fname = f"{part.name}.obj"
-        part.mesh.write_obj(os.path.join(parts_dir, fname))
+        mesh.write_obj(os.path.join(parts_dir, fname))
         parts.append({
             "name": part.name,
             "obj": f"parts/{fname}",
             "color": part.color,
             "kind": "body",
             "smooth": part.name in SMOOTH_BODY_PARTS,
-            "texture": texture_for_part.get(part.name),
+            "texture": texture,
+            "uv_style": style or "",
         })
 
     if headless["active"]:
@@ -689,6 +758,37 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             f"'{headless['label']}' enthaelt keine sichtbare Geometrie - "
             f"der Rig-Kopf wird nicht gerendert.{detail}"
         )
+
+    # ---- Decals (Gesicht, T-Shirt) ---------------------------------------
+    # Diese Assets sind einzelne Bilder, keine UV-Karten. Sie kommen als
+    # eigene Flaeche vor den Koerper, damit sie nicht ueber den ganzen
+    # Koerper verschmiert werden und im Glas-Render sichtbar bleiben.
+    decal_count = 0
+    for tex in textures:
+        target = DECAL_TARGETS.get(int(tex["type_id"]))
+        if not target:
+            continue
+        if target.startswith("kopf") and headless["active"]:
+            continue
+        quad = avatar_rig.decal_quad(target, metrics)
+        if quad is None:
+            continue
+        fname = f"decal_{target}_{tex['asset_id']}.obj"
+        quad.write_obj(os.path.join(parts_dir, fname))
+        parts.append({
+            "name": f"{'Gesicht' if target.startswith('kopf') else 'T-Shirt'} "
+                    f"({tex['asset_id']})",
+            "obj": f"parts/{fname}",
+            "color": "#ffffff",
+            "kind": "decal",
+            "smooth": False,
+            "texture": tex["file"],
+            "asset_id": tex["asset_id"],
+            "asset_type": tex.get("asset_type", ""),
+            "note": ("Als Decal vor den Koerper gelegt "
+                     "(kein UV-Template, sondern ein Einzelbild)"),
+        })
+        decal_count += 1
 
     # Accessoires platzieren
     consumed = {id(mp) for mp in body_replacements.values()}
@@ -705,7 +805,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             continue  # nur ein Kopf wird verwendet
         placed, note = avatar_rig.place_accessory(
             mesh_part["mesh"], int(mesh_part["type_id"]), metrics,
-            size_hint=mesh_part.get("rbxm_size"))
+            size_hint=mesh_part.get("rbxm_size"),
+            rotation=mesh_part.get("rbxm_rotation"))
         placed = sanity_check(
             placed, avatar_rig.accessory_target_size(int(mesh_part["type_id"]), metrics),
             mesh_part["label"] or mesh_part["type_name"], warnings)
@@ -821,12 +922,19 @@ def write_summary(path: str, manifest: Dict[str, Any]) -> None:
         "",
         "## Teile",
         "",
-        "| Teil | Typ | Farbe | Notiz |",
-        "| --- | --- | --- | --- |",
+        "| Teil | Typ | Farbe | Textur | Notiz |",
+        "| --- | --- | --- | --- | --- |",
     ]
     for part in manifest["parts"]:
         note = (part.get("note") or "").replace("|", "/")
-        lines.append(f"| {part['name']} | {part['kind']} | `{part['color']}` | {note} |")
+        texture = part.get("texture") or "–"
+        style = part.get("uv_style") or ""
+        if style:
+            texture = f"`{texture}` ({style}-UV)"
+        elif part.get("texture"):
+            texture = f"`{texture}`"
+        lines.append(f"| {part['name']} | {part['kind']} | `{part['color']}` | "
+                     f"{texture} | {note} |")
     if manifest["skipped"]:
         lines += ["", "## Fehlgeschlagen / übersprungen", "",
                   "| Asset | Typ | Grund |", "| --- | --- | --- |"]

@@ -63,6 +63,7 @@ _T_SHARED_STRING = 0x1C
 _T_CONTENT = 0x22
 
 Vec3 = Tuple[float, float, float]
+Matrix3 = Tuple[Vec3, Vec3, Vec3]
 
 
 class RbxmError(Exception):
@@ -192,16 +193,27 @@ def _read_vector3_array(reader: _Reader, count: int) -> List[Vec3]:
     return list(zip(xs, ys, zs))
 
 
-def _read_cframe_positions(reader: _Reader, count: int) -> List[Vec3]:
-    """Nur die Positionen der CFrames lesen (Rotationen ueberspringen).
+def _read_cframe_array(reader: _Reader, count: int) -> List[Tuple[Vec3, Optional[Matrix3]]]:
+    """CFrames lesen: (Position, Rotationsmatrix | None).
 
     Pro Wert: 1 Byte Rotations-ID; nur bei ID 0x00 folgen 9 Float32
-    (Rotationsmatrix). Danach kommt ein Vector3-Array mit den Positionen.
+    (Rotationsmatrix, zeilenweise R00..R22). Danach kommt ein Vector3-Array
+    mit den Positionen.
+
+    Die Rotation wird gebraucht, damit Arme/Beine/Huete aus Bundle-Modellen
+    nicht "verrutschen": Roblox speichert jedes Segment mit seiner eigenen
+    Drehung (z. B. Fuss 90 Grad nach vorne), wer sie ignoriert, setzt die
+    Teile schief bzw. an der falschen Stelle zusammen.
     """
+    rotations: List[Optional[Matrix3]] = []
     for _ in range(count):
         if reader.u8() == 0x00:
-            reader.skip(9 * 4)
-    return _read_vector3_array(reader, count)
+            values = struct.unpack("<9f", reader.read(36))
+            rotations.append(tuple(tuple(values[r * 3:r * 3 + 3]) for r in range(3)))  # type: ignore[arg-type]
+        else:
+            rotations.append(None)
+    positions = _read_vector3_array(reader, count)
+    return list(zip(positions, rotations))
 
 
 def _read_content_array(reader: _Reader, count: int) -> List[str]:
@@ -306,7 +318,7 @@ _TEXTURE_OVERLAY_PROPS = {"overlaytextureid"}
 def _new_record(cls: str) -> Dict[str, Any]:
     return {
         "class": cls, "name": "", "mesh_url": "", "texture_url": "",
-        "overlay_url": "", "size": None, "position": None,
+        "overlay_url": "", "size": None, "position": None, "rotation": None,
         "scale": None, "offset": None, "Parent": None,
     }
 
@@ -326,7 +338,14 @@ def _apply_property(record: Dict[str, Any], prop_name: str, value: Any) -> None:
     elif key == "size":
         record["size"] = value
     elif key == "cframe":
-        record["position"] = value
+        # Neuer Parser liefert (Position, Rotation); die XML-Variante und
+        # aeltere Aufrufer gaben nur die Position.
+        if (isinstance(value, tuple) and len(value) == 2
+                and isinstance(value[0], tuple) and len(value[0]) == 3
+                and (value[1] is None or isinstance(value[1], tuple))):
+            record["position"], record["rotation"] = value
+        else:
+            record["position"] = value
     elif key == "scale":
         record["scale"] = value
     elif key == "offset":
@@ -353,6 +372,14 @@ def _assemble(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     return tuple(b * s for b, s in zip(base, rec["scale"]))  # type: ignore[return-value]
                 return base
         return rec.get("scale")
+
+    def effective_rotation(rec: Dict[str, Any]) -> Optional[Matrix3]:
+        if rec.get("rotation") is not None:
+            return rec["rotation"]
+        Parent = rec.get("Parent")
+        if Parent is not None:
+            return Parent.get("rotation")
+        return None
 
     def effective_position(rec: Dict[str, Any]) -> Optional[Vec3]:
         Parent = rec.get("Parent")
@@ -384,6 +411,7 @@ def _assemble(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "texture_id": texture_id,
             "size": effective_size(rec),
             "position": effective_position(rec),
+            "rotation": effective_rotation(rec),
         }
         by_record[id(rec)] = entry
 
@@ -482,7 +510,7 @@ def _parse_binary(data: bytes) -> List[Dict[str, Any]]:
             elif key in _VECTOR3_PROPS and type_id == _T_VECTOR3:
                 values = _read_vector3_array(reader, len(recs))  # type: ignore[assignment]
             elif key == "cframe" and type_id == _T_CFRAME:
-                values = _read_cframe_positions(reader, len(recs))  # type: ignore[assignment]
+                values = _read_cframe_array(reader, len(recs))  # type: ignore[assignment]
             if values is not None:
                 for rec, value in zip(recs, values):
                     _apply_property(rec, prop_name, value)
@@ -594,7 +622,21 @@ def _parse_xml(data: bytes) -> List[Dict[str, Any]]:
                 elif prop.tag == "Vector3":
                     value = tuple(_xml_float(prop.findtext(axis)) for axis in ("X", "Y", "Z"))
                 elif prop.tag == "CoordinateFrame":
-                    value = tuple(_xml_float(prop.findtext(axis)) for axis in ("X", "Y", "Z"))
+                    position = tuple(_xml_float(prop.findtext(axis))
+                                     for axis in ("X", "Y", "Z"))
+                    rows = []
+                    for row in range(3):
+                        cells = tuple(_xml_float(prop.findtext(f"R{row}{col}"))
+                                      for col in range(3))
+                        rows.append(cells)
+                    rotation = None
+                    if any(cell for line in rows for cell in line):
+                        # Nur echte Drehungen uebernehmen (Identity weglassen)
+                        identity = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+                        if any(abs(rows[r][c] - identity[r][c]) > 1e-6
+                               for r in range(3) for c in range(3)):
+                            rotation = tuple(rows)  # type: ignore[assignment]
+                    value = (position, rotation)
                 else:
                     continue
                 _apply_property(rec, name, value)
@@ -620,7 +662,8 @@ def extract_assets(data: bytes) -> List[Dict[str, Any]]:
 
     Liefert eine Liste von Dicts mit den Schluesseln ``class``, ``name``,
     ``mesh_id`` (int | None), ``texture_id`` (int | None), ``size``
-    (x, y, z in Studs | None) und ``position`` (x, y, z | None).
+    (x, y, z in Studs | None), ``position`` (x, y, z | None) und
+    ``rotation`` (3x3-Matrix | None).
     Unleserliche Daten werfen einen :class:`RbxmError`.
     """
     if not data:

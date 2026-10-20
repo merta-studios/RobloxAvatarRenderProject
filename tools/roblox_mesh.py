@@ -98,6 +98,32 @@ class MeshData:
             source_version=self.source_version,
         )
 
+    def rotate(self, matrix) -> "MeshData":
+        """Dreht Positionen und Normalen um den Ursprung.
+
+        ``matrix``: 3x3-Matrix als Tupel von drei Zeilen (wie in
+        Roblox-CFrames gespeichert).
+        """
+        if matrix is None:
+            return self.transform(1.0)
+        m = [[float(value) for value in row] for row in matrix]
+        if len(m) != 3 or any(len(row) != 3 for row in m):
+            return self.transform(1.0)
+
+        def apply(v):
+            return (m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+                    m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+                    m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2])
+
+        return MeshData(
+            positions=[apply(p) for p in self.positions],
+            normals=[apply(n) for n in self.normals],
+            uvs=list(self.uvs),
+            faces=list(self.faces),
+            colors=list(self.colors) if self.colors else None,
+            source_version=self.source_version,
+        )
+
     def flip_v(self) -> "MeshData":
         """Spiegelt die UV-V-Achse (Roblox oben-links -> Blender unten-links)."""
         return MeshData(
@@ -204,6 +230,82 @@ def make_sphere(radius: float = 0.5, segments: int = 24, rings: int = 16,
             faces.append((a + 1, b + 1, b))
     return MeshData(positions=positions, normals=normals, uvs=uvs, faces=faces,
                     source_version="generated-sphere")
+
+
+def make_cylinder(radius: float = 0.4, height: float = 0.5, segments: int = 24,
+                  center: Vec3 = (0, 0, 0)) -> MeshData:
+    """Zylinder (Y-Achse) - fuer den Hals (statt eines sichtbaren Quaders)."""
+    cx, cy, cz = center
+    positions: List[Vec3] = []
+    normals: List[Vec3] = []
+    uvs: List[Tuple[float, float]] = []
+    faces: List[Tuple[int, int, int]] = []
+    half = height / 2.0
+
+    # Mantel
+    for j in range(segments + 1):
+        theta = 2 * math.pi * j / segments
+        nx, nz = math.cos(theta), math.sin(theta)
+        for y, v in ((cy - half, 0.0), (cy + half, 1.0)):
+            positions.append((cx + nx * radius, y, cz + nz * radius))
+            normals.append((nx, 0.0, nz))
+            uvs.append((j / segments, v))
+    for j in range(segments):
+        base = j * 2
+        faces.append((base, base + 1, base + 2))
+        faces.append((base + 1, base + 3, base + 2))
+
+    # Deckel oben und unten (eigene Normalen)
+    for y, ny in ((cy + half, 1.0), (cy - half, -1.0)):
+        start = len(positions)
+        positions.append((cx, y, cz))
+        normals.append((0.0, ny, 0.0))
+        uvs.append((0.5, 0.5))
+        for j in range(segments):
+            theta = 2 * math.pi * j / segments
+            positions.append((cx + math.cos(theta) * radius, y,
+                              cz + math.sin(theta) * radius))
+            normals.append((0.0, ny, 0.0))
+            uvs.append((0.5 + 0.5 * math.cos(theta), 0.5 + 0.5 * math.sin(theta)))
+        for j in range(segments):
+            a = start + 1 + j
+            b = start + 1 + (j + 1) % segments
+            if ny > 0:
+                faces.append((start, a, b))
+            else:
+                faces.append((start, b, a))
+    return MeshData(positions=positions, normals=normals, uvs=uvs, faces=faces,
+                    source_version="generated-cylinder")
+
+
+def make_quad(width: float = 1.0, height: float = 1.0, center: Vec3 = (0, 0, 0),
+              normal: Vec3 = (0, 0, -1)) -> MeshData:
+    """Einfache Flaeche (fuer Gesichts-/T-Shirt-Decals) mit UV 0..1.
+
+    `normal` gibt die Blickrichtung an, aus der die Flaeche sichtbar ist
+    (Roblox: "vorne" ist -Z). Die UVs laufen wie im Bild: u nach rechts
+    (vom Betrachter aus), v nach oben.
+    """
+    cx, cy, cz = center
+    nx, ny, nz = normal
+    hw, hh = width / 2.0, height / 2.0
+    if abs(nz) >= max(abs(nx), abs(ny)):
+        corners = [(cx - hw, cy - hh, cz), (cx + hw, cy - hh, cz),
+                   (cx + hw, cy + hh, cz), (cx - hw, cy + hh, cz)]
+        out_normal = (0.0, 0.0, 1.0 if nz > 0 else -1.0)
+        if nz < 0:  # Blick von vorne (-Z): u laeuft nach -X
+            corners = [(cx + hw, cy - hh, cz), (cx - hw, cy - hh, cz),
+                       (cx - hw, cy + hh, cz), (cx + hw, cy + hh, cz)]
+    else:
+        corners = [(cx - hw, cy, cz - hh), (cx + hw, cy, cz - hh),
+                   (cx + hw, cy, cz + hh), (cx - hw, cy, cz + hh)]
+        out_normal = (0.0, 1.0 if ny > 0 else -1.0, 0.0)
+    quad_uv = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    return MeshData(positions=list(corners),
+                    normals=[out_normal] * 4,
+                    uvs=quad_uv,
+                    faces=[(0, 1, 2), (0, 2, 3)],
+                    source_version="generated-quad")
 
 
 def _face_normal(a: Vec3, b: Vec3, c: Vec3, d: Vec3 | None = None) -> Vec3:
@@ -570,11 +672,10 @@ def _smooth_normals(positions, faces):
 def merge_meshes(items, source_version: str = "merged") -> MeshData:
     """Mehrere Meshes (z. B. R15-Segmente eines RBXM) zu einem verbinden.
 
-    ``items``: Liste aus ``(MeshData, size|None, position|None)``. Jedes
-    Mesh wird pro Achse auf ``size`` gebracht (falls gegeben) und so
-    verschoben, dass sein Box-Zentrum auf ``position`` liegt (RBXM:
-    CFrame-Position; Drehungen werden ignoriert - Naeherung fuer die
-    aufrechte Standardpose).
+    ``items``: Liste aus ``(MeshData, size|None, position|None[, rotation])``.
+    Jedes Mesh wird zuerst gedreht (CFrame-Rotation), dann pro Achse auf
+    ``size`` gebracht (falls gegeben) und so verschoben, dass sein
+    Box-Zentrum auf ``position`` liegt (RBXM: CFrame-Position).
     """
     positions: List[Vec3] = []
     normals: List[Vec3] = []
@@ -582,8 +683,14 @@ def merge_meshes(items, source_version: str = "merged") -> MeshData:
     faces: List[Tuple[int, int, int]] = []
     colors: List[Tuple[int, int, int, int]] = []
     all_colors = True
-    for mesh, size, position in items:
+    for item in items:
+        mesh, size, position = item[0], item[1], item[2]
+        rotation = item[3] if len(item) > 3 else None
         part = mesh
+        if rotation is not None:
+            # Drehung des Segments (CFrame) - sonst stehen Fuesse/Haende
+            # schief und die Segmente passen nicht zusammen.
+            part = part.rotate(rotation)
         if size:
             current = mesh.size()
             factors = tuple(

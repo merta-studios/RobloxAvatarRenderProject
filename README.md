@@ -20,8 +20,8 @@ danach werden die echten Meshes geladen.
 ![Beispiel-Render](docs/demo_render.png)
 
 *Beispielausgabe (960×540, 64 Samples, Cycles CPU). Gerendert mit dem Test-Rig
-und synthetischen Accessoire-Meshes – echte Avatare bringen ihre eigenen
-Roblox-Meshes und Texturen mit.*
+(ohne Avatar-Assets) – echte Avatare bringen ihre eigenen Roblox-Meshes und
+Texturen mit; Shirt/Hose werden über die echte 585×559-UV-Karte aufgetragen.*
 
 ## Schnellstart
 
@@ -49,9 +49,10 @@ vermutlich fehl (401) – es wird dann ein Platzhalter-Körper gerendert.
 | 3 | `tools/roblox_api.py` | Web-APIs + Asset Delivery (Open Cloud & Fallbacks) |
 | 4 | `tools/rbxm.py` | RBXM-/RBXMX-Parser: Mesh-/Textur-IDs aus Modellen |
 | 5 | `tools/roblox_mesh.py` | Roblox-`.mesh`-Parser (v1.00–v7.00) → OBJ |
-| 6 | `tools/avatar_rig.py` | Stand-Pose-Rig, Accessoire-Platzierung |
-| 7 | `blender/render_glass.py` | Cycles-Glasmaterial, Kamera, Licht, Render |
-| 8 | `.github/workflows/avatar-render.yml` | Veröffentlichen: Artifact + Branch `renders` + Release |
+| 6 | `tools/clothing_uv.py` | Shirt-/Pants-Template als UV-Karte (585×559) |
+| 7 | `tools/avatar_rig.py` | Stand-Pose-Rig, Accessoire-Platzierung |
+| 8 | `blender/render_glass.py` | Cycles-Glasmaterial, Kamera, Licht, Render |
+| 9 | `.github/workflows/avatar-render.yml` | Veröffentlichen: Artifact + Branch `renders` + Release |
 | – | `tools/diagnose.py` | prüft Endpunkte/Key-Rechte (Workflow *Roblox-Diagnose*) |
 
 Ergebnis im Build-Ordner: `manifest.json`, `parts/*.obj`, `textures/*`,
