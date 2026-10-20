@@ -1,6 +1,289 @@
 {
   "username": "SunsetSiya",
   "user_id": 9767435332,
+  "avatar_raw": {
+    "scales": {
+      "height": 0.9,
+      "width": 0.7,
+      "head": 0.95,
+      "depth": 0.85,
+      "proportion": 0.5,
+      "bodyType": 0.0
+    },
+    "playerAvatarType": "R15",
+    "bodyColors": {
+      "headColorId": 352,
+      "torsoColorId": 352,
+      "rightArmColorId": 352,
+      "leftArmColorId": 352,
+      "rightLegColorId": 352,
+      "leftLegColorId": 352
+    },
+    "assets": [
+      {
+        "id": 86499666,
+        "name": "Woman Torso",
+        "assetType": {
+          "id": 27,
+          "name": "Torso"
+        },
+        "currentVersionId": 11411585575
+      },
+      {
+        "id": 86499698,
+        "name": "Woman Right Arm",
+        "assetType": {
+          "id": 28,
+          "name": "RightArm"
+        },
+        "currentVersionId": 11411587080
+      },
+      {
+        "id": 86499716,
+        "name": "Woman Left Arm",
+        "assetType": {
+          "id": 29,
+          "name": "LeftArm"
+        },
+        "currentVersionId": 14131544401
+      },
+      {
+        "id": 754635032,
+        "name": "Mage Run",
+        "assetType": {
+          "id": 53,
+          "name": "RunAnimation"
+        },
+        "currentVersionId": 13806699806
+      },
+      {
+        "id": 754636298,
+        "name": "Mage Walk",
+        "assetType": {
+          "id": 55,
+          "name": "WalkAnimation"
+        },
+        "currentVersionId": 13806699828
+      },
+      {
+        "id": 754637456,
+        "name": "Mage Idle",
+        "assetType": {
+          "id": 51,
+          "name": "IdleAnimation"
+        },
+        "currentVersionId": 13943508738
+      },
+      {
+        "id": 5319914476,
+        "name": "Oldschool Fall",
+        "assetType": {
+          "id": 50,
+          "name": "FallAnimation"
+        },
+        "currentVersionId": 13806699873
+      },
+      {
+        "id": 5319917561,
+        "name": "Oldschool Jump",
+        "assetType": {
+          "id": 52,
+          "name": "JumpAnimation"
+        },
+        "currentVersionId": 13806699876
+      },
+      {
+        "id": 5319931619,
+        "name": "Oldschool Climb",
+        "assetType": {
+          "id": 48,
+          "name": "ClimbAnimation"
+        },
+        "currentVersionId": 13806699859
+      },
+      {
+        "id": 9580459045,
+        "name": "Emo",
+        "assetType": {
+          "id": 11,
+          "name": "Shirt"
+        },
+        "currentVersionId": 11887755327
+      },
+      {
+        "id": 10623549053,
+        "name": "jeans",
+        "assetType": {
+          "id": 12,
+          "name": "Pants"
+        },
+        "currentVersionId": 13305831345
+      },
+      {
+        "id": 14618207727,
+        "name": "Default Mood",
+        "assetType": {
+          "id": 78,
+          "name": "MoodAnimation"
+        },
+        "currentVersionId": 19059427142
+      },
+      {
+        "id": 77320963564953,
+        "name": "Black Fingerless Gloves 3.0",
+        "assetType": {
+          "id": 67,
+          "name": "JacketAccessory"
+        },
+        "currentVersionId": 25462109271,
+        "meta": {
+          "order": 12,
+          "puffiness": 1.0,
+          "version": 1
+        }
+      },
+      {
+        "id": 78239169807435,
+        "name": "Classic Stare - Dynamic Head",
+        "assetType": {
+          "id": 79,
+          "name": "DynamicHead"
+        },
+        "currentVersionId": 33798029943
+      },
+      {
+        "id": 81104804294334,
+        "name": "Spider Goth Necklace BlackRed",
+        "assetType": {
+          "id": 43,
+          "name": "NeckAccessory"
+        },
+        "currentVersionId": 14112893204424
+      },
+      {
+        "id": 92049900772784,
+        "name": "Black Long Glitter Princess Gown Skirt",
+        "assetType": {
+          "id": 47,
+          "name": "WaistAccessory"
+        },
+        "currentVersionId": 36840593427
+      },
+      {
+        "id": 103667915827560,
+        "name": "belly",
+        "assetType": {
+          "id": 2,
+          "name": "TShirt"
+        },
+        "currentVersionId": 27198674744
+      },
+      {
+        "id": 106537993816942,
+        "name": "adidas Community Animation Pack",
+        "assetType": {
+          "id": 54,
+          "name": "SwimAnimation"
+        },
+        "currentVersionId": 31800711165
+      },
+      {
+        "id": 128875987262000,
+        "name": "face scars",
+        "assetType": {
+          "id": 8,
+          "name": "Hat"
+        },
+        "currentVersionId": 12890147488127
+      },
+      {
+        "id": 130937495030414,
+        "name": "Beloved Cupid's Rose Tiara - red/black",
+        "assetType": {
+          "id": 8,
+          "name": "Hat"
+        },
+        "currentVersionId": 12392409719747
+      },
+      {
+        "id": 134546685450169,
+        "name": "Messy Rockstar Wolfcut (Black)",
+        "assetType": {
+          "id": 41,
+          "name": "HairAccessory"
+        },
+        "currentVersionId": 29880045600,
+        "meta": {
+          "order": 13,
+          "puffiness": 1.0,
+          "version": 1
+        }
+      },
+      {
+        "id": 135192057418760,
+        "name": "Dead Fantasy Front Thorn Vines With Red Roses 3.0",
+        "assetType": {
+          "id": 45,
+          "name": "FrontAccessory"
+        },
+        "currentVersionId": 69940384336412
+      },
+      {
+        "id": 135595423258275,
+        "name": "[GLITCH] Midnight Black Animated 8Bit Crown",
+        "assetType": {
+          "id": 8,
+          "name": "Hat"
+        },
+        "currentVersionId": 29521901321612
+      }
+    ],
+    "defaultShirtApplied": false,
+    "defaultPantsApplied": false,
+    "emotes": [
+      {
+        "assetId": 75017857395637,
+        "assetName": "TV Time Dance",
+        "position": 1
+      },
+      {
+        "assetId": 14353423348,
+        "assetName": "Baby Queen - Bouncy Twirl",
+        "position": 2
+      },
+      {
+        "assetId": 120512834137418,
+        "assetName": "sit",
+        "position": 3
+      },
+      {
+        "assetId": 105016815489641,
+        "assetName": "Cat Nap",
+        "position": 4
+      },
+      {
+        "assetId": 132380943956928,
+        "assetName": "Rose Gift🌹",
+        "position": 5
+      },
+      {
+        "assetId": 4272351660,
+        "assetName": "Fast Hands",
+        "position": 6
+      },
+      {
+        "assetId": 89198573930777,
+        "assetName": "Honor Knight Kneel Dark Souls",
+        "position": 7
+      },
+      {
+        "assetId": 79216795769647,
+        "assetName": "Tall Scary Creature",
+        "position": 8
+      }
+    ],
+    "_source": "https://avatar.roblox.com/v1/users/9767435332/avatar"
+  },
   "scales": {
     "height": 0.9,
     "width": 0.7,
