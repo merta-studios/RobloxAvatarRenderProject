@@ -521,3 +521,52 @@ def test_sphere_winding_zeigt_nach_aussen():
     for face in sphere.faces:
         assert sum(_geometric_normal(sphere, face)[i]
                    * sphere.normals[face[0]][i] for i in range(3)) > 0.0
+
+
+def test_proportionen_werden_harmonisiert():
+    """Beine/Arme aus RBXM duerfen den Torso nicht ueberragen."""
+    sizes = {"torso": (1.0, 2.0, 0.9),
+             "links_bein": (0.9, 2.0, 0.9), "rechts_bein": (0.9, 2.0, 0.9),
+             "links_arm": (0.9, 3.4, 1.2), "rechts_arm": (0.9, 3.4, 1.2)}
+    notes = avatar_rig.harmonize_part_sizes(sizes)
+    assert sizes["links_bein"][0] == pytest.approx(0.5, abs=0.02)
+    assert sizes["rechts_bein"][0] == pytest.approx(0.5, abs=0.02)
+    assert sizes["links_arm"][0] == pytest.approx(0.55, abs=0.02)
+    assert sizes["links_arm"][1] == pytest.approx(2.24, abs=0.02)
+    assert sizes["links_arm"][2] == pytest.approx(0.99, abs=0.02)
+    assert len(notes) >= 3           # jede Korrektur wird begruendet
+
+
+def test_harmonisierung_laesst_plausible_masse_in_ruhe():
+    sizes = {"torso": (2.0, 2.0, 1.0),
+             "links_bein": (1.0, 2.0, 1.0), "rechts_bein": (1.0, 2.0, 1.0),
+             "links_arm": (1.0, 2.0, 1.0), "rechts_arm": (1.0, 2.0, 1.0)}
+    notes = avatar_rig.harmonize_part_sizes(sizes)
+    assert notes == []
+    assert sizes["links_bein"] == (1.0, 2.0, 1.0)
+
+
+def test_beine_sind_nicht_breiter_als_der_torso(monkeypatch, tmp_path):
+    """Regression: im echten Render waren die Beine breiter als der Torso."""
+    avatar = _base_avatar([{"id": 27, "name": "Torso", "assetType": {"id": 27}},
+                           {"id": 30, "name": "LeftLeg", "assetType": {"id": 30}}])
+    torso = make_rbxm([_meshpart("UpperTorso", 2701, (1.0, 2.0, 0.9),
+                                 (0.0, 3.0, 0.0))])
+    leg = make_rbxm([_meshpart("LeftUpperLeg", 3001, (1.0, 2.0, 1.0),
+                               (0.5, 1.0, 0.0))])
+    _install(monkeypatch, avatar, {
+        27: torso, 2701: encode_v2(roblox_mesh.make_box(1.0, 2.0, 0.9)),
+        30: leg, 3001: encode_v2(roblox_mesh.make_box(1.0, 2.0, 1.0)),
+    })
+    manifest = build_avatar.build("Test", str(tmp_path), verbose=False)
+    by_name = {p["name"]: p for p in manifest["parts"]}
+
+    def width(name):
+        xs = [float(line.split()[1]) for line in
+              (tmp_path / by_name[name]["obj"]).read_text().splitlines()
+              if line.startswith("v ")]
+        return max(xs) - min(xs)
+
+    # beide Beine zusammen bleiben innerhalb der Torso-Breite
+    assert width("links_bein") + width("rechts_bein") <= width("torso") * 1.05
+    assert any("Proportionen" in w for w in manifest["warnings"])

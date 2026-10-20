@@ -109,7 +109,9 @@ python3 -m pytest tools/tests -q
   damit bekleidete Teile im Glas in ihrer echten Farbe leuchten; unbekleidete
   Teile bleiben klares Glas. Damit Texturen überhaupt sichtbar sind, mischt
   das Material einen deckenden Textur-Shader mit Glas (`--texture-strength`,
-  Standard 0,7 – reines Glas zeigt von einer Textur fast nichts).
+  Standard 0,85 – reines Glas zeigt von einer Textur fast nichts); dunkle
+  Kleidung wird per Gamma aufgehellt und bleibt matt, damit das Muster
+  lesbar ist.
 * **Körperteile:** R15-Bundles liefern echte Maße – der Rig stapelt Beine,
   Torso, Hals und Kopf lückenlos und richtet in T-Pose gelieferte Arme auf.
 

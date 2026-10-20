@@ -178,7 +178,9 @@ durch und zeigt von einer Textur fast nichts – genau deshalb wirkte der
 Avatar grau/blau. Deshalb wird das Material aus zwei Shadern gemischt:
 einem Glas-Shader (Transmission, Coat, IOR) für den Glaseindruck und einem
 deckenden Shader mit der Textur. `--texture-strength` steuert den Anteil
-(Standard `0.7` = 70 % Textur, `0` = reines Glas, `1` = Textur pur).
+(Standard `0.85` = 85 % Textur, `0` = reines Glas, `1` = Textur pur).
+Dunkle Kleidung wird über einen Gamma-Knoten aufgehellt und die Textilien
+sind matt (kein Lack), damit Muster und Farben klar lesbar bleiben.
 Transparente Bereiche des Kleidungs-Atlasses werden mit der Körperfarbe
 gemischt, sonst rendert Blender sie schwarz. `--mono-glass` ignoriert
 Texturen ganz.
@@ -188,7 +190,11 @@ werden deren RBXM-Maße für Torso, Arme, Beine und Kopf verwendet und die
 Teile lückenlos gestapelt (Beine → Torso → Hals → Kopf, Arme an den
 Schultern). Liegen Arme in T-Pose vor, werden sie automatisch um 90° nach
 unten gedreht. Unplausible Größen (Mesh-Einheiten sind nicht immer Studs)
-werden begrenzt; das steht als Hinweis im Manifest.
+werden begrenzt; das steht als Hinweis im Manifest. Anschließend werden die
+Proportionen harmonisiert: beide Beine zusammen füllen höchstens die
+Torso-Breite, Arme bleiben schmaler als der halbe Torso und enden etwa auf
+Hüfthöhe. Alle Korrekturen erscheinen als `Proportionen: …` unter
+*Hinweise* im Manifest/Summary.
 
 ---
 

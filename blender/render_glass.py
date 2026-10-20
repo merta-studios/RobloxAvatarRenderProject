@@ -60,7 +60,7 @@ def parse_args() -> argparse.Namespace:
                         help="Farbe fuer metallisch glaenzende Accessoires")
     parser.add_argument("--mono-glass", action="store_true",
                         help="alle Teile in derselben hellblauen Glasfarbe")
-    parser.add_argument("--texture-strength", type=float, default=0.7,
+    parser.add_argument("--texture-strength", type=float, default=0.85,
                         help="Anteil der deckenden Textur am Glas "
                              "(0 = reines Glas, 1 = Textur pur)")
     parser.add_argument("--camera-azimuth", type=float, default=24.0,
@@ -204,7 +204,7 @@ def _surface_socket(out_node):
 
 def make_material(name: str, body_rgb, tint_rgb, texture_path: str = "",
                   mono: bool = False, kind: str = "body",
-                  texture_strength: float = 0.7):
+                  texture_strength: float = 0.85):
     """Material fuer ein Teil: Glas mit sichtbarer Textur.
 
     ``texture_strength`` ist der Anteil des **deckenden** Textur-Shaders.
@@ -269,6 +269,19 @@ def make_material(name: str, body_rgb, tint_rgb, texture_path: str = "",
     base_out, tex_node = make_textured_base(
         nodes, links, image, body_linear, tint_linear, 0.0,
         os.path.basename(texture_path))
+    # Dunkle Kleidung (schwarzes Shirt, dunkle Hose) versinkt im Glas sonst
+    # komplett. Ein Gamma-Knoten hebt die Mitteltöne an, ohne die Farben
+    # zu verschieben - die Textur wird dadurch klar erkennbar.
+    try:
+        gamma_node = nodes.new("ShaderNodeGamma")
+        gamma_node.location = (-560, 380)
+        gamma_socket = gamma_node.inputs.get("Gamma")
+        if gamma_socket is not None:
+            gamma_socket.default_value = 0.72
+        links.new(base_out, gamma_node.inputs["Color"])
+        base_out = gamma_node.outputs["Color"]
+    except (RuntimeError, KeyError):  # pragma: no cover - exotische Versionen
+        pass
     try:
         tex_node.image.colorspace_settings.name = "sRGB"
     except (AttributeError, TypeError):  # pragma: no cover
@@ -310,10 +323,12 @@ def make_material(name: str, body_rgb, tint_rgb, texture_path: str = "",
         set_input(opaque, "Metallic", 0.35)      # seidiger Glanz
         set_input(opaque, ("Coat Weight", "Clearcoat"), 0.5)
     else:
-        set_input(opaque, "Roughness", 0.38)
+        # Textil: matt und ohne Lackschicht, damit Muster und Farben
+        # lesbar bleiben (Glasglanz kommt vom gemischten Glas-Shader).
+        set_input(opaque, "Roughness", 0.62)
         set_input(opaque, "Metallic", 0.0)
-        set_input(opaque, ("Coat Weight", "Clearcoat"), 0.8)
-        set_input(opaque, ("Coat Roughness", "Clearcoat Roughness"), 0.05)
+        set_input(opaque, ("Specular IOR Level", "Specular"), 0.25)
+        set_input(opaque, ("Coat Weight", "Clearcoat"), 0.0)
     set_input(opaque, ("Specular IOR Level", "Specular"), 0.5)
     set_input(opaque, ("Transmission Weight", "Transmission"), 0.0)
 

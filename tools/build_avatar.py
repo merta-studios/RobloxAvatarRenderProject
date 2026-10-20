@@ -900,6 +900,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             part_sizes["kopf"] = (max(head_size),) * 3
 
     body_parts, metrics = avatar_rig.build_body(body_colors, scales, part_sizes or None)
+    warnings.extend(metrics.notes)
 
     body_parts_from_mesh = 0
     for part in body_parts:

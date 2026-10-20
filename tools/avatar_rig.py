@@ -136,6 +136,7 @@ class BodyMetrics:
     leg_height: float = 2.0
     leg_width: float = 1.0
     parts: Dict[str, Tuple[float, float, float]] = field(default_factory=dict)
+    notes: List[str] = field(default_factory=list)
 
     def anchor(self, name: str) -> Tuple[float, float, float]:
         if name == "head_top":
@@ -193,6 +194,51 @@ def head_diameter(scales: Dict[str, Any],
     return diameter * hs
 
 
+def harmonize_part_sizes(sizes: Dict[str, Sequence[float]]) -> List[str]:
+    """Bringt die Teilgroessen in ein plausibles Verhaeltnis zueinander.
+
+    Bundle-RBXMs liefern die Groessen der einzelnen Segmente nicht immer
+    konsistent (ein Torso kann z. B. kleiner skaliert sein als die Beine).
+    Ohne Abgleich wird der Koerper unförmig: Beine breiter als der Torso,
+    Arme laenger als die Beine usw. Die Grenzen sind bewusst weich - nur
+    offensichtliche Ausreisser werden gezogen.
+
+    Rueckgabe: Hinweise (deutsch) fuer das Manifest.
+    """
+    notes: List[str] = []
+    torso_w, torso_h, torso_d = sizes.get("torso", DEFAULT_PART_SIZES["torso"])
+
+    def adjust(name: str, limits: Tuple[float, float, float], what: str) -> None:
+        size = sizes.get(name)
+        if not size:
+            return
+        changed = False
+        new = list(float(v) for v in size)
+        for i in range(3):
+            limit = limits[i]
+            if limit > 0 and new[i] > limit * 1.02:
+                new[i] = limit
+                changed = True
+        if changed:
+            sizes[name] = tuple(new)
+            notes.append(
+                f"Proportionen: '{name}' auf "
+                + "x".join(_de(v, 2) for v in new)
+                + f" Studs begrenzt ({what})."
+            )
+
+    # Beide Beine zusammen fuellen hoechstens den Torso.
+    for leg in ("links_bein", "rechts_bein"):
+        adjust(leg, (torso_w / 2.0, 0.0, torso_d * 1.15),
+               "Beine nicht breiter als der Torso")
+    # Arme bleiben schmaler als der halbe Torso und enden etwa auf Huefthoehe.
+    arm_max_h = max(torso_h, 2.0) * 1.12
+    for arm in ("links_arm", "rechts_arm"):
+        adjust(arm, (torso_w * 0.55, arm_max_h, torso_d * 1.10),
+               "Armbreite/-laenge relativ zum Torso")
+    return notes
+
+
 def build_body(body_colors: Dict[str, Any], scales: Dict[str, Any],
                part_sizes: Optional[Dict[str, Sequence[float]]] = None
                ) -> Tuple[List[Part], BodyMetrics]:
@@ -220,6 +266,7 @@ def build_body(body_colors: Dict[str, Any], scales: Dict[str, Any],
     sizes = {name: part_box_size(name, part_sizes, scales)
              for name in ("torso", "rechts_arm", "links_arm",
                           "rechts_bein", "links_bein")}
+    proportion_notes = harmonize_part_sizes(sizes)
 
     torso_w, torso_h, torso_d = sizes["torso"]
     leg_w, leg_h, leg_d = sizes["rechts_bein"]
@@ -294,6 +341,7 @@ def build_body(body_colors: Dict[str, Any], scales: Dict[str, Any],
         leg_height=leg_h,
         leg_width=leg_w,
         parts=dict(sizes),
+        notes=proportion_notes,
     )
     return parts, metrics
 

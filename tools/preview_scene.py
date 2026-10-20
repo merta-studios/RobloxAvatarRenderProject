@@ -245,7 +245,9 @@ def render(manifest_path: str, out_path: str, resolution=DEFAULT_RESOLUTION,
                 tx = np.clip((tuv[:, 0] % 1.0) * (tw - 1), 0, tw - 1).astype(int)
                 ty = np.clip((1.0 - (tuv[:, 1] % 1.0)) * (th - 1), 0, th - 1).astype(int)
                 sample = tex[ty, tx]
-                tex_rgb = srgb_to_linear(sample[:, :3])
+                # Gamma-Aufhellung wie im Blender-Material (dunkle
+                # Kleidung bleibt lesbar)
+                tex_rgb = srgb_to_linear(sample[:, :3]) ** 0.72
                 # Textur fest mit der Teilfarbe mischen (wie im Blender-Material)
                 lit = tex_rgb * strength + color * (1.0 - strength)
                 rgb = lit * sample[:, 3:4] + color * (1.0 - sample[:, 3:4])

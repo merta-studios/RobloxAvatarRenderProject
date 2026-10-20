@@ -87,6 +87,10 @@ class FakeNode:
             for name in ("A", "B"):
                 self.inputs.append(FakeSocket(name, "RGBA"))
             self.outputs.append(FakeSocket("Result", "RGBA"))
+        elif node_type == "ShaderNodeGamma":
+            self.inputs.append(FakeSocket("Color", "RGBA"))
+            self.inputs.append(FakeSocket("Gamma", "VALUE"))
+            self.outputs.append(FakeSocket("Color", "RGBA"))
         elif node_type == "ShaderNodeMixShader":
             self.inputs.append(FakeSocket("Fac", "VALUE"))
             self.inputs.append(FakeSocket("Shader", "SHADER"))
@@ -358,6 +362,21 @@ def test_kleidung_mischt_textur_und_glas(render_module, tmp_path):
     # Ergebnis geht auf den Material-Output (Surface)
     out_node = nodes.get("Material Output")
     assert any(target is out_node.inputs["Surface"] for _, target in links)
+
+
+def test_dunkle_textur_wird_aufgehellt(render_module, tmp_path):
+    """Dunkle Kleidung muss im Glas lesbar bleiben (Gamma-Knoten)."""
+    mat = render_module.make_material("Shirt", (0.1, 0.1, 0.1),
+                                      (0.56, 0.83, 1.0), _texture(tmp_path),
+                                      kind="body")
+    gamma = _node(mat, "ShaderNodeGamma")
+    assert gamma is not None
+    assert gamma.inputs["Gamma"].default_value < 1.0
+    # Der aufgehellte Ausgang geht in den deckenden Shader
+    opaque = [n for n in mat.node_tree.nodes
+              if n.type == "ShaderNodeBsdfPrincipled"][-1]
+    sources = _linked_sources(mat.node_tree.links, opaque.inputs["Base Color"])
+    assert sources and sources[0] is gamma.outputs["Color"]
 
 
 def test_unbekleidetes_teil_ist_glas_ohne_textur(render_module):
