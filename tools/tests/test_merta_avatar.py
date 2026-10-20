@@ -238,16 +238,19 @@ def test_hoehe_deutsche_schreibweise(merta_avatar, monkeypatch, tmp_path):
     manifest = build_avatar.build("MertaStudios", str(tmp_path), verbose=False)
 
     summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
-    # Scales alle 1.0 -> Rig-Hoehe 5,3976 Studs -> deutsch "5,40 Studs".
     # Entscheidend ist die Schreibweise: Komma statt Punkt (sonst liest
     # man "5.398" als fuenftausend...). fmt_de(5.496) == "5,50" prueft
     # test_fmt_de zusaetzlich direkt am Beispielwert aus dem Bug-Report.
-    assert "5,40 Studs" in summary
+    hoehe = manifest["metrics"]["height"]
+    erwartet = f"{hoehe:.2f}".replace(".", ",")
+    assert f"{erwartet} Studs" in summary
     assert "(typisch 5–6)" in summary
+    assert manifest["metrics"]["height_de"] == erwartet
+    # R15-Koerper (Scales 1.0) ist rund 5,5 Studs hoch - nicht 50 und
+    # nicht 0,5 (das war der urspruengliche Formatierungs-Bug).
+    assert 5.0 < hoehe < 6.0
     assert "5.398" not in summary
     assert "5.496" not in summary
-    assert manifest["metrics"]["height_de"] == "5,40"
-    assert manifest["metrics"]["height"] == pytest.approx(5.398)
 
 
 @pytest.mark.parametrize("wert,nd,erwartet", [

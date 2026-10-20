@@ -9,10 +9,16 @@ Alles nach dem ersten `--` geht an dieses Script. Ohne Blender-Argumente
 werden sinnvolle Defaults benutzt, damit man das Script auch aus der
 Blender-GUI (Texteditor -> Run Script) starten kann.
 
-Material: Principled BSDF mit Transmission 1.0, Roughness 0.05, IOR 1.45.
-Die Base Color ist ein helles Blau, das mit der jeweiligen Avatar-Farbe
-(vbzw. Textur) leicht eingefaerbt wird - so bleibt der Avatar erkennbar,
-wirkt aber wie Glas. Mit --mono-glass wird alles einfarbig hellblau.
+Material: Principled BSDF mit Transmission. Koerperteile ohne Textur sind
+klares Glas (Transmission 1.0), bekleidete Teile bleiben glaesern, zeigen
+ihre Textur aber deutlich (Transmission ~0.6). Die Grundfarbe kommt aus
+dem Manifest (Durchschnittsfarbe der jeweiligen Textur), damit ein
+schwarzes Shirt nicht in Hautfarbe erstrahlt.
+
+Wichtig fuer die Blickrichtung: der OBJ-Import (forward=-Z, up=Y) dreht
+Roblox-Koordinaten (x, y, z) nach Blender (x, -z, y). Die Roblox-Front
+(-Z) landet damit bei **+Y** - die Kamera steht deshalb auf der
++Y-Seite. (Vorher stand sie bei -Y und zeigte den Ruecken.)
 """
 
 from __future__ import annotations
@@ -26,6 +32,12 @@ import time
 
 import bpy
 from mathutils import Vector
+
+# Kamera-Mathematik liegt in tools/scene_camera.py - so ist die
+# "vorne ist +Y"-Konvention ohne Blender testbar.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                os.pardir, "tools"))
+from scene_camera import frame_distance  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Argumente
@@ -48,6 +60,12 @@ def parse_args() -> argparse.Namespace:
                         help="Farbe fuer metallisch glaenzende Accessoires")
     parser.add_argument("--mono-glass", action="store_true",
                         help="alle Teile in derselben hellblauen Glasfarbe")
+    parser.add_argument("--texture-strength", type=float, default=0.78,
+                        help="0 = Texturen kaum sichtbar, 1 = Textur pur")
+    parser.add_argument("--camera-azimuth", type=float, default=24.0,
+                        help="Drehung um den Avatar in Grad (0 = frontal)")
+    parser.add_argument("--camera-elevation", type=float, default=9.0,
+                        help="Kamerahoehe in Grad (0 = auf Augenhoehe)")
     parser.add_argument("--no-floor", action="store_true")
     parser.add_argument("--background", default="#dfe8f2")
     parser.add_argument("--denoise/--no-denoise", default=True, dest="denoise")
@@ -85,6 +103,10 @@ def srgb_to_linear(c):
     return tuple((v / 12.92) if v <= 0.04045 else (((v + 0.055) / 1.055) ** 2.4) for v in c)
 
 
+def tup(v):
+    return (v[0], v[1], v[2])
+
+
 # ---------------------------------------------------------------------------
 # Szene
 # ---------------------------------------------------------------------------
@@ -111,12 +133,79 @@ def set_input(node, names, value) -> bool:
     return False
 
 
-def make_glass_material(name: str, base_rgb, tint_rgb, texture_path: str = "",
-                        mono: bool = False):
-    """Glasiges Principled-BSDF-Material."""
+def new_mix_rgb(nodes, blend_type: str = "MIX", fac: float = 1.0,
+                name: str = "Mix"):
+    """MixRGB-Knoten (Blender 3.x/4.x/5.x-kompatibel) anlegen.
+
+    Bevorzugt den klassischen ``ShaderNodeMixRGB``; gibt es den in einer
+    kuenftigen Version nicht mehr, wird ``ShaderNodeMix`` (RGBA) benutzt.
+    Rueckgabe: (node, inputs, outputs) mit inputs["fac"/"a"/"b"].
+    """
+    try:
+        node = nodes.new("ShaderNodeMixRGB")
+        node.blend_type = blend_type
+        node.inputs["Fac"].default_value = fac
+        return node, {"fac": node.inputs["Fac"], "a": node.inputs["Color1"],
+                      "b": node.inputs["Color2"]}, node.outputs["Color"]
+    except RuntimeError:  # pragma: no cover - sehr neue Blender-Version
+        node = nodes.new("ShaderNodeMix")
+        node.data_type = "RGBA"
+        node.blend_type = blend_type
+        sockets = [s for s in node.inputs if s.type == "RGBA"]
+        fac_socket = next((s for s in node.inputs if s.type == "VALUE"), None)
+        if fac_socket is not None:
+            fac_socket.default_value = fac
+        return node, {"fac": fac_socket,
+                      "a": sockets[0] if sockets else node.inputs[0],
+                      "b": sockets[1] if len(sockets) > 1 else node.inputs[1]}, \
+            next(s for s in node.outputs if s.type == "RGBA")
+
+
+def make_textured_base(nodes, links, image, body_rgb_linear, tint_linear,
+                       texture_strength: float, name: str):
+    """Textur -> Grundfarbe: transparente Pixel werden Koerperfarbe.
+
+    Klassische Kleidung (585x559) ist aussenrum transparent. Ohne die
+    Alpha-Mischung rendert Blender diese Bereiche schwarz - genau die
+    dunklen Balken aus dem alten Render. Zum Schluss wird leicht mit der
+    Glasfarbe getoent, damit der Glaseindruck bleibt.
+    """
+    tex = nodes.new("ShaderNodeTexImage")
+    tex.image = image
+    tex.projection = "FLAT"
+    tex.extension = "EXTEND"
+    tex.location = (-900, 260)
+    tex.label = name
+
+    alpha_mix, sockets, alpha_out = new_mix_rgb(nodes, "MIX", 1.0, "Alpha")
+    alpha_mix.location = (-650, 240)
+    sockets["a"].default_value = (body_rgb_linear[0], body_rgb_linear[1],
+                                  body_rgb_linear[2], 1.0)
+    links.new(tex.outputs["Color"], sockets["b"])
+    links.new(tex.outputs["Alpha"], sockets["fac"])
+
+    tint_mix, tint_sockets, tint_out = new_mix_rgb(nodes, "MIX",
+                                                   1.0 - texture_strength,
+                                                   "Tint")
+    tint_mix.location = (-420, 220)
+    links.new(alpha_out, tint_sockets["a"])
+    tint_sockets["b"].default_value = (tint_linear[0], tint_linear[1],
+                                       tint_linear[2], 1.0)
+    return tint_out, tex
+
+
+def make_material(name: str, body_rgb, tint_rgb, texture_path: str = "",
+                  mono: bool = False, kind: str = "body",
+                  texture_strength: float = 0.78):
+    """Material fuer ein Teil: Glas (Koerper) oder Satin/Metall (Accessoire).
+
+    * ``kind="decal"``: flache Textur (T-Shirt-Grafik, Gesicht), deckend.
+    * ``kind="accessory"``: mit Textur seidig-metallisch, sonst Metall.
+    * sonst: Glas; mit Textur etwas weniger Transmission, damit die
+      Kleidung klar erkennbar bleibt.
+    """
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
-    mat.blend_method = "BLEND" if hasattr(mat, "blend_method") else mat.blend_method
     tree = mat.node_tree
     nodes, links = tree.nodes, tree.links
 
@@ -126,45 +215,79 @@ def make_glass_material(name: str, base_rgb, tint_rgb, texture_path: str = "",
         out = nodes.get("Material Output") or nodes.new("ShaderNodeOutputMaterial")
         links.new(bsdf.outputs[0], out.inputs[0])
 
-    color = srgb_to_linear(tuple(tint_rgb) if mono else mix(tup(tint_rgb), tup(base_rgb), 0.45))
-    set_input(bsdf, "Base Color", (color[0], color[1], color[2], 1.0))
-    set_input(bsdf, "Roughness", 0.05)
+    has_texture = bool(texture_path) and os.path.exists(texture_path)
+    image = None
+    if has_texture:
+        try:
+            image = bpy.data.images.load(texture_path, check_existing=True)
+        except Exception as exc:  # pragma: no cover
+            log(f"  ! Textur {texture_path} konnte nicht geladen werden: {exc}")
+            has_texture = False
+
+    tint_linear = srgb_to_linear(tup(tint_rgb))
+    body_linear = srgb_to_linear(tup(body_rgb))
+    if mono:
+        body_linear = tint_linear
+
+    if has_texture:
+        base_out, tex_node = make_textured_base(
+            nodes, links, image, body_linear, tint_linear,
+            0.0 if mono else texture_strength, os.path.basename(texture_path))
+        base_socket = bsdf.inputs.get("Base Color")
+        if base_socket is not None:
+            links.new(base_out, base_socket)
+        try:
+            tex_node.image.colorspace_settings.name = "sRGB"
+        except (AttributeError, TypeError):  # pragma: no cover
+            pass
+        if kind == "decal":
+            # Dekals sollen deckend sein und ihre Alpha-Kanaele behalten.
+            alpha_in = bsdf.inputs.get("Alpha")
+            if alpha_in is not None:
+                links.new(tex_node.outputs["Alpha"], alpha_in)
+            set_input(bsdf, "Roughness", 0.45)
+            set_input(bsdf, "Metallic", 0.0)
+            set_input(bsdf, ("Specular IOR Level", "Specular"), 0.35)
+            set_input(bsdf, ("Transmission Weight", "Transmission"), 0.0)
+            for attr, value in (("blend_method", "BLEND"),
+                                ("surface_render_method", "BLENDED")):
+                if hasattr(mat, attr):
+                    try:
+                        setattr(mat, attr, value)
+                    except (TypeError, ValueError):
+                        pass
+            if hasattr(mat, "use_backface_culling"):
+                mat.use_backface_culling = True
+            return mat
+    else:
+        color = mix(tint_linear, body_linear, 0.45)
+        set_input(bsdf, "Base Color", (color[0], color[1], color[2], 1.0))
+
+    if kind == "accessory":
+        # Accessoires mit Textur: seidig, Textur bleibt sichtbar.
+        transmission = 0.25 if has_texture else 0.0
+        set_input(bsdf, ("Transmission Weight", "Transmission"), transmission)
+        set_input(bsdf, "Metallic", 0.2 if has_texture else 0.95)
+        set_input(bsdf, "Roughness", 0.22 if has_texture else 0.12)
+        set_input(bsdf, ("Specular IOR Level", "Specular"), 0.5)
+        return mat
+
+    # Koerper: Glas. Bekleidete Teile etwas weniger Transmission, damit
+    # die Textur nicht von der Umgebung ueberstrahlt wird.
+    transmission = 0.6 if has_texture else 1.0
+    set_input(bsdf, ("Transmission Weight", "Transmission"), transmission)
+    set_input(bsdf, "Roughness", 0.08 if has_texture else 0.05)
     set_input(bsdf, "IOR", 1.45)
-    set_input(bsdf, ("Transmission Weight", "Transmission"), 1.0)
     set_input(bsdf, ("Specular IOR Level", "Specular"), 0.5)
     set_input(bsdf, "Metallic", 0.0)
     set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.15)
     set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.02)
-    # Etwas Eigenfarbe, damit das Glas nicht wie Luft wirkt
     set_input(bsdf, ("Subsurface Weight", "Subsurface"), 0.0)
-
-    if texture_path and os.path.exists(texture_path):
-        try:
-            img = bpy.data.images.load(texture_path, check_existing=True)
-            tex = nodes.new("ShaderNodeTexImage")
-            tex.image = img
-            tex.projection = "FLAT"
-            tex.extension = "EXTEND"
-            tex.location = (-700, 200)
-            blender_tint = nodes.new("ShaderNodeMixRGB")
-            blender_tint.blend_type = "MULTIPLY"
-            blender_tint.inputs["Fac"].default_value = 0.85
-            blender_tint.inputs["Color1"].default_value = (color[0], color[1], color[2], 1.0)
-            blender_tint.location = (-380, 200)
-            links.new(tex.outputs["Color"], blender_tint.inputs["Color2"])
-            links.new(blender_tint.outputs["Color"], bsdf.inputs["Base Color"])
-        except Exception as exc:  # pragma: no cover
-            log(f"  ! Textur {texture_path} konnte nicht geladen werden: {exc}")
-
     return mat
 
 
-def tup(v):
-    return (v[0], v[1], v[2])
-
-
 def make_metal_material(name: str, color_rgb):
-    """Metallischer Akzent fuer Accessoires (bricht das viele Glas auf)."""
+    """Metallischer Akzent fuer Accessoires ohne Textur."""
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
     bsdf = mat.node_tree.nodes.get("Principled BSDF")
@@ -176,7 +299,13 @@ def make_metal_material(name: str, color_rgb):
 
 
 def import_obj(path: str):
-    """Importiert eine OBJ-Datei und gibt die neuen Objekte zurueck."""
+    """Importiert eine OBJ-Datei und gibt die neuen Objekte zurueck.
+
+    Achsen bleiben bei Blenders OBJ-Default (forward=-Z, up=Y): Roblox
+    ist ebenfalls Y-up mit -Z als Blickrichtung. Die Drehung nach
+    Blender-Z-up macht der Importer, dabei wird aus der Roblox-Front
+    (-Z) die Blender-Richtung +Y (siehe Modul-Docstring).
+    """
     before = set(bpy.data.objects)
     if hasattr(bpy.ops.wm, "obj_import"):
         bpy.ops.wm.obj_import(filepath=path, forward_axis="NEGATIVE_Z", up_axis="Y")
@@ -282,10 +411,18 @@ def scene_bounds(objects):
     return lo, hi
 
 
-def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int):
-    center = (lo + hi) / 2.0
-    size = hi - lo
-    radius = max(0.5, (size.length) / 2.0)
+def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
+                 azimuth: float = 24.0, elevation: float = 9.0,
+                 margin: float = 1.12):
+    """Kamera frontal-schraeg von vorne, Bildausschnitt aus der Bounding-Box.
+
+    Die eigentliche Mathematik steckt in ``tools/scene_camera.py``
+    (dort auch die Begruendung, warum die Kamera auf +Y steht).
+    """
+    center_t, location_t, distance = frame_distance(
+        (lo.x, lo.y, lo.z), (hi.x, hi.y, hi.z), azimuth, elevation,
+        res_x=res_x, res_y=res_y, margin=margin)
+    center = Vector(center_t)
 
     cam_data = bpy.data.cameras.new("Kamera")
     cam_data.lens = 55.0
@@ -293,22 +430,9 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int):
     cam = bpy.data.objects.new("Kamera", cam_data)
     bpy.context.scene.collection.objects.link(cam)
     bpy.context.scene.camera = cam
-
-    # Klassische 3/4-Ansicht, leicht von oben
-    direction = Vector((0.62, -1.0, 0.28)).normalized()
-
-    # Abstand so waehlen, dass das Modell das Bild gut fuellt
-    h_fov = cam_data.angle
-    v_fov = 2 * math.atan(math.tan(h_fov / 2) * (res_y / res_x))
-    half_h = size.z / 2.0
-    # projizierte Breite in Blickrichtung (X und Y tragen beide bei)
-    half_w = 0.5 * (size.x * 0.85 + size.y * 0.55)
-    dist_v = half_h / math.tan(v_fov / 2.0)
-    dist_h = half_w / math.tan(h_fov / 2.0)
-    distance = max(dist_v, dist_h, radius) * 1.12
-    cam.location = center + direction * distance
+    cam.location = Vector(location_t)
     cam.rotation_euler = (center - cam.location).to_track_quat("-Z", "Y").to_euler()
-    return cam, center, radius
+    return cam, center, max(distance, 1.0)
 
 
 def setup_render(scene, res_x: int, res_y: int, samples: int, max_bounces: int,
@@ -378,7 +502,7 @@ def main() -> int:
     setup_world(args.background)
     setup_render(scene, res_x, res_y, args.samples, args.max_bounces, args.denoise)
 
-    glass_tint = srgb_to_linear(hex_to_rgb(args.glass_tint))
+    glass_tint = hex_to_rgb(args.glass_tint)
     metal_tint = hex_to_rgb(args.metal_tint)
 
     log(f"Manifest: {args.manifest} ({len(manifest.get('parts', []))} Teile), "
@@ -386,6 +510,7 @@ def main() -> int:
 
     imported = []
     material_cache = {}
+    texture_cache = {}
     # grobe Modellgroesse fuer proportionsabhaengige Effekte
     height_hint = float(manifest.get("metrics", {}).get("height") or 5.5)
     for part in manifest.get("parts", []):
@@ -407,37 +532,39 @@ def main() -> int:
             continue
         obj.name = part.get("name", "teil")
 
+        kind = part.get("kind") or "body"
         color = hex_to_rgb(part.get("color") or "#dfefff")
         texture = ""
         if part.get("texture"):
             candidate = os.path.join(base_dir, part["texture"])
             texture = candidate if os.path.exists(candidate) else ""
 
-        if part.get("kind") == "accessory" and not args.mono_glass:
-            key = ("metal", part.get("name"))
-            mat = material_cache.get(key)
-            if mat is None:
+        key = ("mat", kind, tuple(round(c, 3) for c in color), texture,
+               args.mono_glass)
+        mat = material_cache.get(key)
+        if mat is None:
+            if kind == "accessory" and not texture and not args.mono_glass:
                 mat = make_metal_material(f"Metall {part.get('name')}", metal_tint)
-                material_cache[key] = mat
-        else:
-            key = ("glass", tuple(round(c, 3) for c in color), texture, args.mono_glass)
-            mat = material_cache.get(key)
-            if mat is None:
-                mat = make_glass_material(f"Glas {part.get('name')}", color, glass_tint,
-                                          texture, args.mono_glass)
-                material_cache[key] = mat
+            else:
+                mat = make_material(
+                    f"{kind.capitalize()} {part.get('name')}", color, glass_tint,
+                    texture, args.mono_glass, kind=kind,
+                    texture_strength=max(0.0, min(1.0, args.texture_strength)))
+            material_cache[key] = mat
 
+        if texture:
+            texture_cache.setdefault(texture, True)
         obj.data.materials.clear()
         obj.data.materials.append(mat)
-        if part.get("kind") != "accessory":
+        if kind == "body":
             recalc_normals(obj)
         if part.get("smooth"):
             shade_smooth(obj)
         else:
             for poly in obj.data.polygons:
                 poly.use_smooth = False
-        bevel_width = 0.0 if part.get("kind") == "accessory" else 0.045 * (height_hint / 5.5)
-        add_bevel(obj, width=bevel_width, segments=2)
+        if kind == "body":
+            add_bevel(obj, width=0.045 * (height_hint / 5.5), segments=2)
         imported.append(obj)
 
     if not imported:
@@ -446,23 +573,31 @@ def main() -> int:
 
     lo, hi = scene_bounds(imported)
     height = max(hi.z - lo.z, 0.5)
-    cam, center, radius = setup_camera(lo, hi, res_x, res_y)
+    cam, center, distance = setup_camera(lo, hi, res_x, res_y,
+                                         args.camera_azimuth, args.camera_elevation)
 
-    # Lichter relativ zur Modellgroesse
+    # Lichter relativ zur Modellgroesse. Key/Fill kommen von vorne (+Y),
+    # damit die Texturen auf Brust und Gesicht lesbar sind; der Rim von
+    # hinten setzt die Silhouette.
     s = height / 5.5
-    key = add_area_light("Key", (center.x + 5.5 * s, center.y - 6.5 * s, center.z + 7.0 * s),
+    key = add_area_light("Key", (center.x + 5.5 * s, center.y + 6.5 * s,
+                                 center.z + 7.0 * s),
                          energy=900 * s * s, size=5.0 * s, color=(1.0, 0.97, 0.94))
-    fill = add_area_light("Fill", (center.x - 6.5 * s, center.y - 4.0 * s, center.z + 2.5 * s),
+    fill = add_area_light("Fill", (center.x - 6.5 * s, center.y + 4.0 * s,
+                                   center.z + 2.5 * s),
                           energy=320 * s * s, size=6.0 * s, color=(0.85, 0.92, 1.0))
-    rim = add_area_light("Rim", (center.x - 2.0 * s, center.y + 7.5 * s, center.z + 6.0 * s),
+    rim = add_area_light("Rim", (center.x - 2.0 * s, center.y - 7.5 * s,
+                                 center.z + 6.0 * s),
                          energy=700 * s * s, size=4.0 * s, color=(0.92, 0.96, 1.0))
 
     if not args.no_floor:
-        add_floor(radius, z=lo.z)
+        add_floor(distance * 0.5, z=lo.z)
 
     scene.render.filepath = os.path.abspath(args.out)
     os.makedirs(os.path.dirname(scene.render.filepath) or ".", exist_ok=True)
 
+    log(f"Kamera frontal-schraeg (Azimut {args.camera_azimuth:.0f} Grad, "
+        f"Hoehe {args.camera_elevation:.0f} Grad), {len(texture_cache)} Texturen")
     log(f"Rendern nach {scene.render.filepath} ...")
     t0 = time.time()
     bpy.ops.render.render(write_still=True)

@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import avatar_rig  # noqa: E402
+import avatar_uv  # noqa: E402
 import rbxm  # noqa: E402
 import roblox_api as api  # noqa: E402
 import roblox_mesh  # noqa: E402
@@ -39,21 +40,22 @@ import roblox_mesh  # noqa: E402
 # (glatte Normalen auf Quadern wirken sonst wie "Plattenpanzer").
 SMOOTH_BODY_PARTS = {"kopf", "kopf_mesh"}
 
-CLOTHING_TARGETS = {
-    2: ["torso"],                                  # TShirt
-    11: ["torso"],                                 # Shirt
-    12: ["links_bein", "rechts_bein"],             # Pants
-    18: ["kopf", "kopf_mesh"],                     # Face
-    64: ["torso"],                                 # TShirtAccessory
-    65: ["torso"],                                 # ShirtAccessory
-    66: ["links_bein", "rechts_bein"],             # PantsAccessory
-    67: ["torso"],                                 # JacketAccessory
-    68: ["torso"],                                 # SweaterAccessory
-    69: ["links_bein", "rechts_bein"],             # ShortsAccessory
-    70: ["links_bein"],                            # LeftShoeAccessory
-    71: ["rechts_bein"],                           # RightShoeAccessory
-    72: ["torso"],                                 # DressSkirtAccessory
+# Welche Textur auf welchem Koerperteil landet. Klassische Kleidung
+# (Shirt 11 / Hose 12) liegt im 585x559-Atlas an derselben Stelle wie die
+# Layered-Varianten (65/66), ist aber die "Basis" - deshalb zuerst.
+# T-Shirt (2) ist ein Dekal (eigene Flaeche vor der Brust) und darf nicht
+# als Koerper-Textur dienen; Gesicht (18) liegt auf dem Kopf-Mesh.
+TEXTURE_PRIORITY = {
+    "torso": [11, 65, 67, 68, 64, 12, 66, 69, 72],
+    # Ein klassisches Shirt deckt auch die Aermel ab (die Arm-Panels
+    # liegen im selben Atlas).
+    "links_arm": [11, 65, 67, 68],
+    "rechts_arm": [11, 65, 67, 68],
+    "links_bein": [12, 66, 69, 70],
+    "rechts_bein": [12, 66, 69, 71],
+    "kopf_mesh": [18],
 }
+
 
 # AssetTypeId der getragenen Koerperteile -> Rig-Teilname. Diese Assets
 # kommen als RBXM und ersetzen das jeweilige Rig-Teil durch das echte Mesh.
@@ -261,6 +263,259 @@ def sanity_check(mesh: roblox_mesh.MeshData, target_max: float, label: str,
         "(Mesh-Einheiten sind nicht immer Studs)."
     )
     return rescaled
+
+
+def _replacement_size(mesh_part: Dict[str, Any], warnings: List[str],
+                      label: str, prefer_geometry: bool = False):
+    """Plausible Teilgroesse (Studs) fuer den Rig-Aufbau bestimmen.
+
+    * zusammengefuehrte R15-Glieder: Bounding-Box des zusammengesetzten
+      Meshes (die RBXM-Positionen sind bereits in Studs),
+    * einzelne Meshes: die Part-Groesse aus dem RBXM (so rendert Roblox
+      das Mesh ebenfalls - gestreckt auf die Part-Groesse),
+    * sonst die Mesh-Bounding-Box.
+
+    Unplausible Werte (Mesh-Einheiten sind nicht immer Studs) werden
+    verworfen, dann greifen die Standardmasse des Rigs.
+    """
+    size = None
+    if mesh_part.get("merged"):
+        size = mesh_part["mesh"].size()
+    elif prefer_geometry:
+        # Koepfe erscheinen in Roblox groesser als ihre Part-Groesse -
+        # die Geometrie beschreibt den sichtbaren Kopf besser.
+        size = mesh_part["mesh"].size()
+    else:
+        hint = mesh_part.get("rbxm_size")
+        if hint and len(hint) == 3 and all(float(v) > 0 for v in hint):
+            size = tuple(float(v) for v in hint)
+        else:
+            size = mesh_part["mesh"].size()
+    if not size or not all(v > 0 for v in size):
+        return None
+    if not (SANITY_MIN_AXIS <= max(size) <= SANITY_MAX_AXIS):
+        warnings.append(
+            f"Koerperteil '{label}': Groesse {fmt_de(max(size))} Studs ist "
+            "unplausibel - es gelten die Standardmasse des Rigs."
+        )
+        return None
+    # Einzelne Teile duerfen den Koerper nicht sprengen (Roblox-Koerper
+    # sind ~5-6 Studs hoch). 0,35x bis 2,5x der Standardgroesse reicht.
+    base = avatar_rig.DEFAULT_PART_SIZES.get(label)
+    if base:
+        clamped = tuple(
+            max(base[i] * 0.35, min(base[i] * 2.5, float(size[i])))
+            for i in range(3))
+        if any(abs(clamped[i] - float(size[i])) > 0.01 for i in range(3)):
+            warnings.append(
+                f"Koerperteil '{label}': Groesse auf "
+                + "x".join(fmt_de(v) for v in clamped)
+                + " Studs begrenzt (Roblox-Koerper sind rund 5-6 Studs hoch)."
+            )
+        size = clamped
+    return tuple(float(v) for v in size)
+
+
+# ---------------------------------------------------------------------------
+# Mini-PNG-Decoder (nur Standardbibliothek) fuer die Farb-Bestimmung
+# ---------------------------------------------------------------------------
+
+
+def png_pixels(data: bytes):
+    """Dekodiert ein PNG (8 Bit, nicht interlaced) zu (Breite, Hoehe, RGBA).
+
+    Wird nur benutzt, um die Durchschnittsfarbe einer Kleidungs-Textur zu
+    bestimmen (damit das Glas nicht in Hautfarbe erstrahlt, obwohl der
+    Avatar ein schwarzes Shirt traegt). Rueckgabe ist ``None``, wenn das
+    Bild nicht dekodierbar ist - der Aufrufer faellt dann auf die
+    Koerperfarbe zurueck.
+    """
+    import struct as _struct
+    import zlib as _zlib
+
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    pos = 8
+    width = height = bit_depth = color_type = interlace = 0
+    palette = b""
+    idat = bytearray()
+    while pos + 8 <= len(data):
+        length, ctype = _struct.unpack_from(">I4s", data, pos)
+        pos += 8
+        chunk = data[pos:pos + length]
+        pos += length + 4  # Laenge + CRC
+        if ctype == b"IHDR":
+            (width, height, bit_depth, color_type,
+             _comp, _filt, interlace) = _struct.unpack(">IIBBBBB", chunk[:13])
+        elif ctype == b"PLTE":
+            palette = chunk
+        elif ctype == b"IDAT":
+            idat += chunk
+        elif ctype == b"IEND":
+            break
+    if bit_depth != 8 or interlace != 0 or width <= 0 or height <= 0:
+        return None
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(color_type)
+    if channels is None:
+        return None
+    try:
+        raw = _zlib.decompress(bytes(idat))
+    except _zlib.error:
+        return None
+    stride = width * channels
+    if len(raw) < (stride + 1) * height:
+        return None
+
+    out = bytearray(width * height * 4)
+    prev = bytearray(stride)
+    offset = 0
+    for y in range(height):
+        filter_type = raw[offset]
+        offset += 1
+        line = bytearray(raw[offset:offset + stride])
+        offset += stride
+        if filter_type == 1:      # Sub
+            for i in range(channels, stride):
+                line[i] = (line[i] + line[i - channels]) & 0xFF
+        elif filter_type == 2:    # Up
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 0xFF
+        elif filter_type == 3:    # Average
+            for i in range(stride):
+                left = line[i - channels] if i >= channels else 0
+                line[i] = (line[i] + ((left + prev[i]) >> 1)) & 0xFF
+        elif filter_type == 4:    # Paeth
+            for i in range(stride):
+                a = line[i - channels] if i >= channels else 0
+                b = prev[i]
+                c = prev[i - channels] if i >= channels else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                pred = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[i] = (line[i] + pred) & 0xFF
+        prev = line
+
+        for x in range(width):
+            src = x * channels
+            dst = (y * width + x) * 4
+            if color_type == 6:
+                out[dst:dst + 4] = line[src:src + 4]
+            elif color_type == 2:
+                out[dst:dst + 3] = line[src:src + 3]
+                out[dst + 3] = 255
+            elif color_type == 0:
+                out[dst] = out[dst + 1] = out[dst + 2] = line[src]
+                out[dst + 3] = 255
+            elif color_type == 4:
+                out[dst] = out[dst + 1] = out[dst + 2] = line[src]
+                out[dst + 3] = line[src + 1]
+            elif color_type == 3:
+                index = line[src] * 3
+                if index + 2 < len(palette):
+                    out[dst:dst + 3] = palette[index:index + 3]
+                out[dst + 3] = 255
+    return width, height, bytes(out)
+
+
+def texture_average_color(path: str, fallback: str,
+                          alpha_min: int = 32) -> str:
+    """Durchschnittsfarbe der sichtbaren Pixel einer Textur (Hex).
+
+    Transparente Bereiche des Kleidungs-Atlasses werden ignoriert -
+    sonst waere jede Hose "schwarz", weil das Template aussenrum
+    transparent ist.
+    """
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return fallback
+    decoded = png_pixels(data)
+    if not decoded:
+        return fallback
+    width, height, rgba = decoded
+    total_r = total_g = total_b = 0
+    count = 0
+    step = max(1, (width * height) // 4096)  # grosse Texturen ausduennen
+    for index in range(0, width * height, step):
+        r, g, b, a = rgba[index * 4:index * 4 + 4]
+        if a >= alpha_min:
+            total_r += r
+            total_g += g
+            total_b += b
+            count += 1
+    if not count:
+        return fallback
+    return "#%02x%02x%02x" % (total_r // count, total_g // count, total_b // count)
+
+
+def _texture_color_hint(texture: Optional[str], body_color: str,
+                        out_dir: str) -> str:
+    """Farbe fuer ein Teil: Durchschnitt der Textur, sonst Koerperfarbe."""
+    if not texture:
+        return body_color
+    return texture_average_color(os.path.join(out_dir, texture), body_color)
+
+
+def _add_decals(parts_dir: str, textures: List[Dict[str, Any]],
+                metrics, body_parts: List[Any], has_head_mesh: bool,
+                headless: bool) -> List[Dict[str, Any]]:
+    """T-Shirt-Grafik (Brust) und Gesichts-Textur als duenne Dekal-Flaechen.
+
+    Beide Assets sind keine 585x559-Atlanten, sondern kleine Bilder fuer
+    genau eine Flaeche. Ohne diesen Schritt landet gar keine Textur auf
+    dem Avatar ("alles grau") - oder ein wildes Raster.
+    """
+    from roblox_mesh import make_plane, make_sphere_patch
+
+    decals: List[Dict[str, Any]] = []
+    torso = next((p for p in body_parts if p.name == "torso"), None)
+    if torso is not None:
+        tshirt = next((tex for tex in textures if int(tex["type_id"]) == 2), None)
+        if tshirt is not None:
+            lo, hi = torso.mesh.bbox()
+            width, depth = hi[0] - lo[0], hi[2] - lo[2]
+            height = hi[1] - lo[1]
+            offset = max(0.012, depth * 0.03)
+            plane = make_plane(width * 0.995, height * 0.995,
+                               (0.0, (lo[1] + hi[1]) / 2.0,
+                                lo[2] - offset),
+                               facing="-Z")
+            fname = "decal_tshirt.obj"
+            plane.write_obj(os.path.join(parts_dir, fname))
+            decals.append({
+                "name": "tshirt_decal",
+                "obj": f"parts/{fname}",
+                "color": "#ffffff",
+                "kind": "decal",
+                "smooth": True,
+                "texture": tshirt["file"],
+                "asset_id": tshirt["asset_id"],
+                "note": "T-Shirt-Grafik als Dekal auf der Brust (UV 0..1)",
+            })
+
+    if headless or has_head_mesh:
+        return decals
+    face = next((tex for tex in textures if int(tex["type_id"]) == 18), None)
+    if face is None:
+        return decals
+    radius = metrics.head_radius
+    patch = make_sphere_patch(radius * 1.004,
+                              (0.0, metrics.head_center_y, -0.02),
+                              spread_u=0.78, spread_v=0.66)
+    fname = "decal_face.obj"
+    patch.write_obj(os.path.join(parts_dir, fname))
+    decals.append({
+        "name": "face_decal",
+        "obj": f"parts/{fname}",
+        "color": "#ffffff",
+        "kind": "decal",
+        "smooth": True,
+        "texture": face["file"],
+        "asset_id": face["asset_id"],
+        "note": "Gesichts-Textur als gewoelbtes Dekal auf dem Kopf",
+    })
+    return decals
 
 
 # ---------------------------------------------------------------------------
@@ -548,13 +803,17 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     log("[4/4] Rig bauen und OBJ-Dateien schreiben ...")
     scales = effective_scales(avatar_raw.get("scales"))
     body_colors = effective_body_colors(avatar_raw.get("bodyColors"))
-    body_parts, metrics = avatar_rig.build_body(body_colors, scales)
 
-    # Texturen den Kleidungs-Parts zuordnen
+    # Kleidungs-Texturen den Koerperteilen zuordnen (mit Prioritaet:
+    # klassisches Shirt vor Layered-Varianten, Hose nur auf die Beine).
     texture_for_part: Dict[str, str] = {}
-    for tex in textures:
-        for target in CLOTHING_TARGETS.get(int(tex["type_id"]), []):
-            texture_for_part.setdefault(target, tex["file"])
+    for target, order in TEXTURE_PRIORITY.items():
+        for wanted_type in order:
+            match = next((tex for tex in textures
+                          if int(tex["type_id"]) == wanted_type), None)
+            if match is not None:
+                texture_for_part[target] = match["file"]
+                break
 
     # Echte Koerperteil-Meshes (Typ 27-31) den Rig-Teilen zuordnen.
     # R15-Bundles liefern pro Asset mehrere Segmente (z. B. LeftArm =
@@ -571,7 +830,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     body_replacements: Dict[str, Dict[str, Any]] = {}
     for rig_name, group in body_groups.items():
         if len(group) == 1:
-            body_replacements[rig_name] = group[0]
+            body_replacements[rig_name] = dict(group[0])
             continue
         segments = _pick_r15_segments(group, R15_SEGMENT_NAMES.get(rig_name, []))
         mergeable = segments if len(segments) >= 2 else group
@@ -584,6 +843,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 source_version="merged-rbxm")
             pseudo = dict(mergeable[0])
             pseudo["mesh"] = merged
+            pseudo["merged"] = True
             pseudo["texture_file"] = next(
                 (mp["texture_file"] for mp in mergeable
                  if mp.get("texture_file")), None)
@@ -593,12 +853,32 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             body_replacements[rig_name] = pseudo
         else:
             largest = max(group, key=lambda mp: max(mp["mesh"].size()))
-            body_replacements[rig_name] = largest
+            body_replacements[rig_name] = dict(largest)
             warnings.append(
                 f"Koerperteil '{rig_name}': {len(group)} Meshes gefunden, "
                 f"aber nicht zusammenfuehrbar (fehlende RBXM-Positionen) - "
                 f"nur das groesste Segment verwendet "
                 f"(Asset {largest['asset_id']}).")
+
+    # Gliedmassen aus T-Pose aufrichten (R15-Bundles liefern Arme oft
+    # waagerecht) und die echten Teilmaße fuer den Rig bestimmen. Ohne
+    # diesen Schritt werden Arme/Beine in feste R6-Quader gepresst - genau
+    # daher kamen die "verschobenen" bzw. verrenkten Koerperteile.
+    part_sizes: Dict[str, Any] = {}
+    for rig_name, replacement in body_replacements.items():
+        rotated = False
+        if rig_name.endswith("arm") or rig_name.endswith("bein"):
+            straightened, note = avatar_rig.upright_limb(replacement["mesh"], rig_name)
+            if note:
+                replacement["mesh"] = straightened
+                replacement["upright_note"] = note
+                rotated = True
+        size = _replacement_size(replacement, warnings, rig_name)
+        if size is not None:
+            if rotated and not replacement.get("merged"):
+                # Auch die Part-Groesse aus dem RBXM lag in T-Pose.
+                size = (size[1], size[0], size[2])
+            part_sizes[rig_name] = size
 
     # Kopf: echtes Head-/DynamicHead-Mesh suchen (DynamicHead hat Vorrang).
     # Degenerierte DynamicHead-Meshes (< HEADLESS_MAX_FACES) sind bereits
@@ -612,6 +892,15 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         if head_mesh is not None:
             break
 
+    if head_mesh is not None and not headless["active"]:
+        head_size = _replacement_size(head_mesh, warnings, "kopf",
+                                      prefer_geometry=True)
+        if head_size is not None:
+            # Der Kopf ist rund: die groesste Achse bestimmt den Durchmesser.
+            part_sizes["kopf"] = (max(head_size),) * 3
+
+    body_parts, metrics = avatar_rig.build_body(body_colors, scales, part_sizes or None)
+
     body_parts_from_mesh = 0
     for part in body_parts:
         if part.name == "kopf":
@@ -620,21 +909,25 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             if head_mesh is not None:
                 size = head_mesh["mesh"].size()
                 max_dim = max(size) or 1.0
-                target = metrics.head_radius * 2.15
+                # Auf den Kopf-Durchmesser des Rigs skalieren (der kommt
+                # aus dem echten Mesh, siehe part_sizes oben).
+                target = metrics.head_radius * 2.0
                 placed = head_mesh["mesh"].transform(target / max_dim)
                 c = placed.center()
                 placed = placed.transform(1.0, (-c[0], metrics.head_center_y - c[1], -c[2]))
                 placed = sanity_check(placed, target, "Kopf", warnings)
                 fname = "kopf_mesh.obj"
                 placed.write_obj(os.path.join(parts_dir, fname))
+                farbe = _texture_color_hint(head_mesh.get("texture_file"),
+                                            part.color, out_dir)
                 parts.append({
                     "name": "kopf_mesh",
                     "obj": f"parts/{fname}",
-                    "color": part.color,
+                    "color": farbe,
                     "kind": "body",
                     "smooth": True,
-                    "texture": head_mesh.get("texture_file")
-                               or texture_for_part.get("kopf_mesh"),
+                    "texture": (head_mesh.get("texture_file")
+                                or texture_for_part.get("kopf_mesh")),
                     "asset_id": head_mesh["asset_id"],
                     "note": ("Echtes Kopf-Mesh des Avatars"
                              + (f" ({head_mesh['head_info']})"
@@ -649,34 +942,59 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             placed = avatar_rig.fit_mesh_to_part(replacement["mesh"], lo, hi)
             placed = sanity_check(placed, max(hi[i] - lo[i] for i in range(3)),
                                   part.name, warnings)
+            own_texture = replacement.get("texture_file")
+            cloth_texture = texture_for_part.get(part.name)
+            texture = own_texture or cloth_texture
+            # Echte Meshes bringen eigene UVs mit - fuer den klassischen
+            # Kleidungsatlas werden sie neu projiziert (sonst erscheint
+            # der ganze Atlas gestaucht als Raster auf dem Koerper).
+            # Eine mesh-eigene Textur passt dagegen zu den Mesh-UVs und
+            # bleibt unangetastet.
+            atlas_uv = (bool(cloth_texture) and not own_texture
+                        and avatar_uv.has_clothing_layout(part.name))
+            if atlas_uv:
+                placed = avatar_uv.project_atlas_uvs(placed, part.name)
             fname = f"{part.name}.obj"
             placed.write_obj(os.path.join(parts_dir, fname))
             parts.append({
                 "name": part.name,
                 "obj": f"parts/{fname}",
-                "color": part.color,
+                "color": _texture_color_hint(texture, part.color, out_dir),
                 "kind": "body",
                 "smooth": True,
-                "texture": replacement.get("texture_file")
-                           or texture_for_part.get(part.name),
+                "texture": texture,
                 "asset_id": replacement["asset_id"],
+                "uv": "classic-atlas" if atlas_uv else "mesh",
                 "note": (f"Echtes Mesh aus RBXM (Mesh-Asset "
                          f"{replacement['mesh_asset_id']})"
-                         + replacement.get("note_suffix", "")),
+                         + replacement.get("note_suffix", "")
+                         + (f"; {replacement['upright_note']}"
+                            if replacement.get("upright_note") else "")),
             })
             body_parts_from_mesh += 1
             continue
 
         fname = f"{part.name}.obj"
         part.mesh.write_obj(os.path.join(parts_dir, fname))
+        texture = texture_for_part.get(part.name)
         parts.append({
             "name": part.name,
             "obj": f"parts/{fname}",
-            "color": part.color,
+            "color": _texture_color_hint(texture, part.color, out_dir),
             "kind": "body",
             "smooth": part.name in SMOOTH_BODY_PARTS,
-            "texture": texture_for_part.get(part.name),
+            "texture": texture,
+            "uv": ("classic-atlas" if texture and
+                   avatar_uv.has_clothing_layout(part.name) else "box"),
         })
+
+    # ---- Dekals: T-Shirt-Grafik und Gesicht ------------------------------
+    # T-Shirt (2) und Face (18) sind kleine Bilder fuer eine einzelne
+    # Flaeche, kein 585x559-Atlas. Sie liegen als duenne Flaeche vor der
+    # Brust bzw. gewoelbt vor dem Gesicht.
+    decals = _add_decals(parts_dir, textures, metrics, body_parts,
+                         head_mesh is not None, headless["active"])
+    parts.extend(decals)
 
     if headless["active"]:
         detail = ""

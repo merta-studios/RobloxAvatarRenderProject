@@ -109,6 +109,30 @@ class MeshData:
             source_version=self.source_version,
         )
 
+    def rotate_z(self, degrees: float) -> "MeshData":
+        """Dreht das Mesh um die Z-Achse (Roblox: vorne = -Z, oben = +Y).
+
+        Praktisch fuer Gliedmassen aus R15-Bundles: die sind teils in
+        T-Pose modelliert (Arm zeigt nach +X/-X) und muessen fuer die
+        Standpose senkrecht haengen. Die Drehung in der X/Y-Ebene laesst
+        die Blickrichtung (-Z) unveraendert.
+        """
+        angle = math.radians(degrees)
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+
+        def rotate_point(p):
+            x, y, z = p
+            return (x * cos_a - y * sin_a, x * sin_a + y * cos_a, z)
+
+        return MeshData(
+            positions=[rotate_point(p) for p in self.positions],
+            normals=[rotate_point(n) for n in self.normals],
+            uvs=list(self.uvs),
+            faces=list(self.faces),
+            colors=list(self.colors) if self.colors else None,
+            source_version=self.source_version,
+        )
+
     def write_obj(self, path) -> None:
         """Schreibt das Mesh als OBJ (v/vt/vn + f)."""
         has_uv = len(self.uvs) == len(self.positions)
@@ -204,6 +228,73 @@ def make_sphere(radius: float = 0.5, segments: int = 24, rings: int = 16,
             faces.append((a + 1, b + 1, b))
     return MeshData(positions=positions, normals=normals, uvs=uvs, faces=faces,
                     source_version="generated-sphere")
+
+
+def make_plane(width: float, height: float, center: Vec3 = (0, 0, 0),
+               facing: str = "-Z") -> MeshData:
+    """Flaches Rechteck (zwei Dreiecke) mit UV 0..1 - fuer Dekals.
+
+    ``facing`` gibt an, wohin die sichtbare Seite zeigt (Roblox: -Z ist
+    vorne). Das Rechteck liegt in der Ebene senkrecht zu dieser Richtung.
+    """
+    hw, hh = width / 2.0, height / 2.0
+    cx, cy, cz = center
+    if facing in ("-Z", "+Z"):
+        sign = -1.0 if facing == "-Z" else 1.0
+        corners = [(-hw, -hh, 0.0), (hw, -hh, 0.0), (hw, hh, 0.0), (-hw, hh, 0.0)]
+        normal = (0.0, 0.0, sign)
+    elif facing in ("-X", "+X"):
+        sign = -1.0 if facing == "-X" else 1.0
+        corners = [(0.0, -hh, hw * sign), (0.0, -hh, -hw * sign),
+                   (0.0, hh, -hw * sign), (0.0, hh, hw * sign)]
+        normal = (sign, 0.0, 0.0)
+    else:  # "+Y" / "-Y": liegende Flaeche
+        sign = 1.0 if facing == "+Y" else -1.0
+        corners = [(-hw, 0.0, hh * sign), (hw, 0.0, hh * sign),
+                   (hw, 0.0, -hh * sign), (-hw, 0.0, -hh * sign)]
+        normal = (0.0, sign, 0.0)
+    positions = [(cx + x, cy + y, cz + z) for (x, y, z) in corners]
+    uvs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    return MeshData(positions=positions, normals=[normal] * 4, uvs=uvs,
+                    faces=[(0, 1, 2), (0, 2, 3)],
+                    source_version="generated-plane")
+
+
+def make_sphere_patch(radius: float, center: Vec3 = (0, 0, 0),
+                      spread_u: float = 1.15, spread_v: float = 1.05,
+                      segments: int = 8, rings: int = 8) -> MeshData:
+    """Gewoelbtes Patch auf der Vorderseite einer Kugel (fuer Gesichts-Dekals).
+
+    Die UVs laufen 0..1 ueber das Patch, die Normale zeigt radial nach
+    aussen. ``spread_u``/``spread_v`` sind die halben Winkel in Radiant.
+    """
+    cx, cy, cz = center
+    positions: List[Vec3] = []
+    normals: List[Vec3] = []
+    uvs: List[Tuple[float, float]] = []
+    faces: List[Tuple[int, int, int]] = []
+    for i in range(rings + 1):
+        tv = i / rings                      # 0 = unten, 1 = oben
+        elevation = (tv - 0.5) * 2.0 * spread_v
+        for j in range(segments + 1):
+            tu = j / segments               # 0 = links im Bild
+            azimuth = (0.5 - tu) * 2.0 * spread_u   # +X links vom Betrachter
+            cos_e = math.cos(elevation)
+            nx = math.sin(azimuth) * cos_e
+            ny = math.sin(elevation)
+            nz = -math.cos(azimuth) * cos_e         # Vorderseite = -Z
+            positions.append((cx + nx * radius, cy + ny * radius,
+                              cz + nz * radius))
+            normals.append((nx, ny, nz))
+            uvs.append((tu, tv))
+    for i in range(rings):
+        for j in range(segments):
+            a = i * (segments + 1) + j
+            b = a + segments + 1
+            faces.append((a, b, a + 1))
+            faces.append((a + 1, b, b + 1))
+    return MeshData(positions=positions, normals=normals, uvs=uvs, faces=faces,
+                    source_version="generated-sphere-patch")
 
 
 def _face_normal(a: Vec3, b: Vec3, c: Vec3, d: Vec3 | None = None) -> Vec3:

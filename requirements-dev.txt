@@ -12,3 +12,6 @@ numpy>=1.26
 
 # Optional, nur fuer lokale Render-Tests ohne installiertes Blender:
 # bpy==4.2.0
+
+# Optional, nur fuer die Software-Vorschau (tools/preview_scene.py)
+Pillow>=10.0
