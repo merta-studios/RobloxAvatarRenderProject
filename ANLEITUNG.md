@@ -179,6 +179,20 @@ Zum Vergleich: Nur der Render-Schritt (1280×720, 64 Samples, Test-Rig) dauert
 auf einem CPU-Runner ca. 30–60 s; der Rest ist Download/Installation von
 Blender und das Laden der Assets.
 
+## Key/Endpunkte prüfen (Diagnose)
+
+Actions → Workflow **Roblox-Diagnose** → **Run workflow**. Er testet in wenigen
+Sekunden:
+
+* `users.roblox.com` – Username → UserId
+* `avatar.roblox.com` – Avatar-Definition (Anzahl Assets)
+* `economy.roblox.com` – Asset-Details
+* `apis.roblox.com/asset-delivery-api/...` – Download **mit** deinem Key
+* `assetdelivery.roblox.com/v2/...` – Download ohne Key (Fallback)
+
+Ergebnis: Tabelle in der Step-Summary plus Hinweise/Annotations. So siehst du
+sofort, ob der Key fehlt (401) oder der Scope nicht reicht (403).
+
 ## Fehlersuche
 
 | Symptom | Ursache / Lösung |
