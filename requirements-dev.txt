@@ -5,8 +5,10 @@ pytest>=8.0
 PyYAML>=6.0
 lz4>=4.3
 zstandard>=0.22
-# Fuer FileMesh 7.00 (Draco-komprimierte Meshes moderner UGC-Items)
+# Fuer FileMesh 7.00 (Draco-komprimierte Meshes moderner UGC-Items).
+# numpy muss mitinstalliert werden (DracoPy deklariert es nicht).
 DracoPy>=0.1
+numpy>=1.26
 
 # Optional, nur fuer lokale Render-Tests ohne installiertes Blender:
 # bpy==4.2.0
