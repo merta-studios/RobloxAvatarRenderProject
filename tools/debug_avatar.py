@@ -23,10 +23,12 @@ import roblox_mesh  # noqa: E402
 def main() -> int:
     username = sys.argv[1] if len(sys.argv) > 1 else "MertaStudios"
     out = sys.argv[2] if len(sys.argv) > 2 else "debugdump/avatar_debug.json"
+    raw_dir = sys.argv[3] if len(sys.argv) > 3 else ""
     client = api.HttpClient(verbose=True)
     user_id, username = api.resolve_user_id(client, username)
     avatar = api.fetch_avatar(client, user_id)
     result = {"username": username, "user_id": user_id,
+              "avatar_raw": avatar,
               "scales": avatar.get("scales"),
               "body_colors": avatar.get("bodyColors"),
               "assets": []}
@@ -37,7 +39,14 @@ def main() -> int:
             res = api.download_asset(client, aid)
             data = api.maybe_decompress(res.data) if res.data else None
             cache[aid] = data
+            if raw_dir and data is not None:
+                os.makedirs(raw_dir, exist_ok=True)
+                with open(os.path.join(raw_dir, f"{aid}.bin"), "wb") as fh:
+                    fh.write(data)
         return cache[aid]
+
+    for asset in avatar.get("assets") or []:
+        download(int(asset.get("id") or 0))
 
     for asset in avatar.get("assets") or []:
         aid = int(asset.get("id") or 0)
