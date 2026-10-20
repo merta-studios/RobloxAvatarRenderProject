@@ -6,6 +6,9 @@ name: Avatar-Dump (Debug)
 # Umgebung nicht herunterladbar).
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "debugdump/request.txt"
 
 permissions:
   contents: write
