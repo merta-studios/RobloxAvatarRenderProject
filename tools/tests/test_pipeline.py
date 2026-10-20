@@ -329,6 +329,38 @@ def test_klassifizierung():
     assert roblox_api.classify_asset(b"\x00\x01\x02", declared_type_id=4) == "mesh"
 
 
+def test_maybe_decompress_gzip_und_zlib():
+    import gzip as gz
+    import zlib
+
+    payload = b"<roblox!\x89\xff\r\n\x1a\n" + b"\x00" * 64
+    assert roblox_api.maybe_decompress(payload) == payload
+    assert roblox_api.maybe_decompress(gz.compress(payload)) == payload
+    assert roblox_api.maybe_decompress(zlib.compress(payload)) == payload
+    # Kaputtes gzip bleibt unveraendert (kein Absturz)
+    kaputt = b"\x1f\x8b" + b"\xff" * 16
+    assert roblox_api.maybe_decompress(kaputt) == kaputt
+
+
+def test_download_asset_entpackt_gzip():
+    # Die Asset Delivery liefert RBXM-Modelle oft gzip-gepackt aus -
+    # download_asset muss sie transparent entpacken (echter Lauf:
+    # sonst "Mesh nicht lesbar" fuer alle RBXM-Assets).
+    import gzip as gz
+
+    payload = b"<roblox!\x89\xff\r\n\x1a\n" + b"\x00" * 64
+
+    class FakeClient:
+        api_key = ""
+
+        def get(self, url, headers=None, allow_status=()):
+            return roblox_api.Response(200, gz.compress(payload), {}, url)
+
+    result = roblox_api.download_asset(FakeClient(), 27112025)
+    assert result.data == payload
+    assert roblox_api.classify_asset(result.data, 27) == "rbxm"
+
+
 # ---------------------------------------------------------------------------
 # Kompletter Pipeline-Lauf ohne Netzwerk
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ degenerierter Geometrie.
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import sys
@@ -67,6 +68,14 @@ def _rbxm_torso_specialmesh(mesh_id):
     return make_rbxm([part, mesh])
 
 
+def _pants_rbxm(template_id):
+    """Klassische Hose als RBXM-Modell (Bild-ID in PantsTemplate)."""
+    return make_rbxm([{"class": "Pants",
+                       "props": {"Name": "Formal",
+                                 "PantsTemplate": f"rbxassetid://{template_id}"},
+                       "Parent": None}])
+
+
 def _merta_downloads():
     box = lambda w, h, d: encode_v2(roblox_mesh.make_box(w, h, d))  # noqa: E731
     sphere = encode_v2(roblox_mesh.make_sphere(1.0, 12, 8))
@@ -82,8 +91,10 @@ def _merta_downloads():
         900000004: box(1.0, 2.0, 1.0),
         139607718: _rbxm_meshpart("RightLeg", 900000005),
         900000005: sphere,
-        # Accessoires (RBXM)
-        73553031478451: _rbxm_meshpart("Green", 900000011, size=(1.6, 0.8, 1.6)),
+        # Accessoires (RBXM; "Green" zusaetzlich gzip-gepackt, wie es die
+        # Asset Delivery im echten Lauf ausgeliefert hat)
+        73553031478451: gzip.compress(
+            _rbxm_meshpart("Green", 900000011, size=(1.6, 0.8, 1.6))),
         900000011: sphere,
         126241427519956: _rbxm_meshpart("White Void Crown", 900000012,
                                         size=(1.4, 1.2, 1.4)),
@@ -94,9 +105,11 @@ def _merta_downloads():
         # Headless Head: RBXM zeigt auf ein degeneriertes Mesh (1 Face)
         15093053680: _rbxm_meshpart("Head", 900000014, size=(0.01, 0.01, 0.01)),
         900000014: encode_v2(_tiny_mesh()),
-        # Kleidung
+        # Kleidung: Shirt kommt direkt als PNG, Pants als RBXM-Modell
+        # mit PantsTemplate (beides im echten Lauf so beobachtet)
         13576957688: PNG_BYTES,   # Shirt
-        99060033706897: PNG_BYTES,  # Pants
+        99060033706897: _pants_rbxm(900000021),  # Pants "Formal"
+        900000021: PNG_BYTES,
     }
 
 
@@ -165,8 +178,9 @@ def test_merta_avatar_keine_uebersprungen(merta_avatar, monkeypatch, tmp_path):
         assert "Echtes Mesh aus RBXM" in (part.get("note") or "")
         assert (tmp_path / part["obj"]).stat().st_size > 50
     assert by_name["torso"]["texture"].endswith("13576957688.png")
-    assert by_name["links_bein"]["texture"].endswith("99060033706897.png")
-    assert by_name["rechts_bein"]["texture"].endswith("99060033706897.png")
+    # Hosen-Textur wurde aus dem Pants-RBXM (PantsTemplate) nachgeladen
+    assert by_name["links_bein"]["texture"].endswith("900000021.png")
+    assert by_name["rechts_bein"]["texture"].endswith("900000021.png")
 
     # 6 Koerper-Teile (ohne Kopf, mit Hals) + 3 Accessoires
     assert stats["parts"] == 9

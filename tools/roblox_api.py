@@ -26,6 +26,7 @@ rendert dann trotzdem einen Avatar aus den Teilen, die verfuegbar waren.
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import random
@@ -34,6 +35,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -316,6 +318,27 @@ def _is_roblox_binary(data: bytes) -> bool:
     return data[:8] == b"<roblox!" or data[:8].startswith(b"<roblox")
 
 
+def maybe_decompress(data: bytes) -> bytes:
+    """Entpackt gzip-/zlib-gepackte Asset-Daten transparent.
+
+    Die Asset Delivery (v. a. der Legacy-Endpunkt) liefert Modell-Dateien
+    (RBXM) haeufig gzip-komprimiert aus - erkennbar an der Magic
+    ``1F 8B``. Ohne Entpacken wuerde classify_asset() sie faelschlich
+    fuer ein Mesh halten. Unbekannte/kaputte Daten bleiben unveraendert.
+    """
+    if data[:2] == b"\x1f\x8b":
+        try:
+            return gzip.decompress(data)
+        except (OSError, EOFError, zlib.error):
+            return data
+    if data[:1] == b"\x78":  # zlib-Header (z. B. 78 9C)
+        try:
+            return zlib.decompress(data)
+        except zlib.error:
+            return data
+    return data
+
+
 def download_asset(client: HttpClient, asset_id: int) -> DownloadedAsset:
     """Laedt ein Asset-Binaerfile ueber alle verfuegbaren Endpunkte."""
     attempts: List[Tuple[str, Dict[str, str]]] = []
@@ -364,7 +387,7 @@ def download_asset(client: HttpClient, asset_id: int) -> DownloadedAsset:
                     notes.append(f"CDN: {exc}")
                     continue
                 if cdn.ok:
-                    return DownloadedAsset(asset_id, cdn.body,
+                    return DownloadedAsset(asset_id, maybe_decompress(cdn.body),
                                            cdn.headers.get("Content-Type", ctype),
                                            "cdn", "; ".join(notes))
             notes.append(f"{_host(url)}: JSON ohne CDN-URL")
@@ -374,7 +397,8 @@ def download_asset(client: HttpClient, asset_id: int) -> DownloadedAsset:
             notes.append(f"{_host(url)}: leere Antwort")
             continue
 
-        return DownloadedAsset(asset_id, body, ctype, _host(url), "; ".join(notes))
+        return DownloadedAsset(asset_id, maybe_decompress(body), ctype,
+                               _host(url), "; ".join(notes))
 
     return DownloadedAsset(asset_id, None, "", "", "; ".join(notes))
 
