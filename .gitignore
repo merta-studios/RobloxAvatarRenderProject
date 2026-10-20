@@ -1,0 +1,12 @@
+# Build-Ausgaben der Pipeline
+build/
+render_avatar.png
+.blend
+*.blend1
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/

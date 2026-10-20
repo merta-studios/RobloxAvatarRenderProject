@@ -1,0 +1,156 @@
+name: Auto-Merge (agent-changes -> main)
+
+# Zweck: Änderungen, die auf den Branch `agent-changes` gepusht werden, landen
+# automatisch in `main` - ohne manuellen Pull Request.
+#
+# Zwei Betriebsarten:
+#   1. Direkter Merge + Push nach main (Standard, wenn main nicht geschützt ist).
+#   2. Ist main geschützt (Branch Rules), wird automatisch ein Pull Request
+#      erstellt und - wenn möglich - per Auto-Merge gemerged.
+#
+# Bei Merge-Konflikten wird der Merge abgebrochen und ein Issue erstellt.
+
+on:
+  push:
+    branches:
+      - agent-changes
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: "Quell-Branch (Standard: agent-changes)"
+        required: false
+        default: "agent-changes"
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: auto-merge-main
+  cancel-in-progress: false   # Merges nie abbrechen, sonst bleibt der Zustand unklar
+
+env:
+  SOURCE_BRANCH: ${{ github.event.inputs.source_branch || 'agent-changes' }}
+  TARGET_BRANCH: main
+  # Optional: eigenes Token (Secret AUTO_MERGE_TOKEN) mit Repo-Rechten.
+  # Nötig, wenn nach dem Merge weitere Workflows (z. B. der Avatar-Render)
+  # automatisch starten sollen - Pushes mit dem Standard-GITHUB_TOKEN lösen
+  # keine neuen Workflow-Läufe aus.
+  MERGE_TOKEN: ${{ secrets.AUTO_MERGE_TOKEN || github.token }}
+
+jobs:
+  auto-merge:
+    name: Merge nach main
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 1) Repository auschecken
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          token: ${{ env.MERGE_TOKEN }}
+          persist-credentials: true
+
+      - name: 2) Git-User konfigurieren
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: 3) main und Quell-Branch fetchen
+        run: |
+          set -euo pipefail
+          git fetch origin "$TARGET_BRANCH" "$SOURCE_BRANCH"
+          echo "Quell-Branch HEAD: $(git rev-parse --short "origin/$SOURCE_BRANCH")"
+
+      - name: 4) Prüfen, ob es etwas zu mergen gibt
+        id: check
+        run: |
+          set -euo pipefail
+          git checkout -B "$TARGET_BRANCH" "origin/$TARGET_BRANCH"
+          if git merge-base --is-ancestor "origin/$SOURCE_BRANCH" HEAD; then
+            echo "needs_merge=false" >> "$GITHUB_OUTPUT"
+            echo "### Kein Merge nötig" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`$SOURCE_BRANCH\` ist bereits vollständig in \`$TARGET_BRANCH\` enthalten." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "needs_merge=true" >> "$GITHUB_OUTPUT"
+            echo "### Merge wird vorbereitet" >> "$GITHUB_STEP_SUMMARY"
+            git log --oneline "HEAD..origin/$SOURCE_BRANCH" | head -n 20 >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 5) Quell-Branch in main mergen
+        id: merge
+        if: steps.check.outputs.needs_merge == 'true'
+        run: |
+          set -uo pipefail
+          if git merge --no-ff --no-edit -m \
+              "Auto-Merge: ${SOURCE_BRANCH} -> ${TARGET_BRANCH}" "origin/${SOURCE_BRANCH}"; then
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+            echo "### Merge erfolgreich" >> "$GITHUB_STEP_SUMMARY"
+            git log -1 --pretty='%h %s' >> "$GITHUB_STEP_SUMMARY"
+          else
+            git merge --abort || true
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Merge-Konflikt"
+              echo ""
+              echo "\`$SOURCE_BRANCH\` konnte nicht automatisch in \`$TARGET_BRANCH\` gemerged werden."
+              echo "Der Merge wurde abgebrochen, \`$TARGET_BRANCH\` ist unverändert."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Merge-Konflikt zwischen $SOURCE_BRANCH und $TARGET_BRANCH"
+            exit 1
+          fi
+
+      - name: 6) main pushen
+        if: steps.merge.outputs.merged == 'true'
+        id: push
+        env:
+          GH_TOKEN: ${{ env.MERGE_TOKEN }}
+        run: |
+          set -uo pipefail
+          if git push origin "HEAD:${TARGET_BRANCH}"; then
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+            echo "### Nach \`$TARGET_BRANCH\` gepusht" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "pushed=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::Direkter Push auf $TARGET_BRANCH fehlgeschlagen (vermutlich Branch-Schutz). Es wird ein Pull Request erstellt."
+
+      - name: "7) Fallback: Pull Request erstellen und Auto-Merge aktivieren"
+        if: steps.merge.outputs.merged == 'true' && steps.push.outputs.pushed != 'true'
+        env:
+          GH_TOKEN: ${{ env.MERGE_TOKEN }}
+        run: |
+          set -uo pipefail
+          git reset --hard "origin/${TARGET_BRANCH}" >/dev/null
+          PR_URL="$(gh pr list --base "$TARGET_BRANCH" --head "$SOURCE_BRANCH" \
+                     --state open --json url --jq '.[0].url' || true)"
+          if [ -z "$PR_URL" ]; then
+            PR_URL="$(gh pr create --base "$TARGET_BRANCH" --head "$SOURCE_BRANCH" \
+              --title "Auto-Merge: ${SOURCE_BRANCH} -> ${TARGET_BRANCH}" \
+              --body "Automatisch erstellt vom Auto-Merge-Workflow, weil \`${TARGET_BRANCH}\` geschützt ist.")"
+          fi
+          echo "Pull Request: $PR_URL"
+          echo "### Pull Request: $PR_URL" >> "$GITHUB_STEP_SUMMARY"
+          gh pr merge "$PR_URL" --merge --auto || \
+            echo "::warning::Auto-Merge konnte nicht aktiviert werden - bitte PR manuell mergen."
+
+      - name: 8) Issue bei Merge-Konflikt erstellen
+        if: failure() && steps.merge.outputs.merged == 'false'
+        env:
+          GH_TOKEN: ${{ env.MERGE_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          TITLE="Auto-Merge-Konflikt: ${SOURCE_BRANCH} -> ${TARGET_BRANCH}"
+          EXISTING="$(gh issue list --state open --search "$TITLE in:title" \
+                       --json number,title --jq '.[0].number' || true)"
+          if [ -n "$EXISTING" ]; then
+            echo "Es gibt bereits Issue #$EXISTING - kein neues Issue nötig."
+            gh issue comment "$EXISTING" --body "Erneuter Konflikt beim Auto-Merge. Lauf: $RUN_URL" || true
+            exit 0
+          fi
+          gh issue create \
+            --title "$TITLE" \
+            --body "$(printf 'Der automatische Merge von `%s` nach `%s` ist an einem Konflikt gescheitert.\n\n**Lauf:** %s\n\n**Nächste Schritte**\n\n1. `%s` lokal auschecken\n2. Konflikt auflösen und committen\n3. erneut pushen - der Auto-Merge startet dann automatisch neu\n' "$SOURCE_BRANCH" "$TARGET_BRANCH" "$RUN_URL" "$SOURCE_BRANCH")" || true
