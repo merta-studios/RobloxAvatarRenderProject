@@ -69,8 +69,11 @@ def main() -> int:
                 if raw:
                     try:
                         mesh = roblox_mesh.parse(raw)
+                        lo, hi = mesh.bbox()
                         e["mesh_size"] = [round(v, 4) for v in mesh.size()]
                         e["mesh_center"] = [round(v, 4) for v in mesh.center()]
+                        e["mesh_bbox"] = [[round(v, 4) for v in lo],
+                                          [round(v, 4) for v in hi]]
                         e["mesh_faces"] = len(mesh.faces)
                     except Exception as exc:
                         e["mesh_error"] = str(exc)
