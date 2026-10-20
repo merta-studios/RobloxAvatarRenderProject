@@ -1,0 +1,199 @@
+name: Avatar-Render (Glas)
+
+# Auslöser:
+#   * Push, sobald sich username.txt (oder die Pipeline selbst) ändert
+#   * Manuell über "Run workflow" (optional mit eigenem Usernamen)
+on:
+  push:
+    paths:
+      - "username.txt"
+      - "tools/**"
+      - "blender/**"
+      - ".github/workflows/avatar-render.yml"
+  workflow_dispatch:
+    inputs:
+      username:
+        description: "Roblox-Username (leer lassen = username.txt verwenden)"
+        required: false
+        default: ""
+      resolution:
+        description: "Auflösung, z. B. 1280x720 oder 960x540"
+        required: false
+        default: "1280x720"
+      samples:
+        description: "Cycles-Samples (niedriger = schneller)"
+        required: false
+        default: "64"
+
+# Nur ein Render pro Branch gleichzeitig; neue Pushes brechen den alten Lauf ab.
+concurrency:
+  group: avatar-render-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  BLENDER_VERSION: "4.2.0"
+  BLENDER_SERIES: "Blender4.2"
+  PIPELINE_RESOLUTION: ${{ github.event.inputs.resolution || '1280x720' }}
+  PIPELINE_SAMPLES: ${{ github.event.inputs.samples || '64' }}
+
+jobs:
+  render:
+    name: Avatar rendern
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 1) Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: 2) Username aus username.txt lesen
+        id: username
+        env:
+          INPUT_USERNAME: ${{ github.event.inputs.username }}
+        run: |
+          set -euo pipefail
+          # workflow_dispatch-Eingabe hat Vorrang, sonst Datei lesen.
+          RAW="${INPUT_USERNAME:-}"
+          if [ -z "${RAW// /}" ]; then
+            RAW="$(cat username.txt 2>/dev/null || true)"
+          fi
+          # BOM, Zeilenumbrüche und überflüssige Leerzeichen entfernen
+          RAW="${RAW#$'\xef\xbb\xbf'}"
+          USERNAME="$(printf '%s' "$RAW" | tr -d '\r' | head -n 1 | xargs || true)"
+          if [ -z "$USERNAME" ]; then
+            echo "::error file=username.txt::username.txt ist leer. Bitte einen Roblox-Usernamen eintragen."
+            exit 1
+          fi
+          # Falls jemand eine Profil-URL eingetragen hat
+          if printf '%s' "$USERNAME" | grep -qi 'roblox\.com/users/'; then
+            USERNAME="$(printf '%s' "$USERNAME" | sed -E 's#.*roblox\.com/users/([0-9]+).*#\1#')"
+          fi
+          echo "username=$USERNAME" >> "$GITHUB_OUTPUT"
+          echo "### Roblox-Username: \`$USERNAME\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 3) Python-Umgebung prüfen
+        run: |
+          set -euo pipefail
+          python3 --version
+          python3 -c "import json, urllib.request; print('Standardbibliothek OK')"
+
+      - name: 4) Avatar laden und Rig bauen
+        id: build
+        env:
+          ROBLOX_OPEN_CLOUD_API_KEY: ${{ secrets.ROBLOX_OPEN_CLOUD_API_KEY }}
+          USERNAME: ${{ steps.username.outputs.username }}
+        run: |
+          set -uo pipefail
+          echo "== Avatar-Daten und Meshes laden =="
+          if python3 tools/build_avatar.py --username "$USERNAME" --out build; then
+            echo "build_mode=live" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Live-Download fehlgeschlagen - es wird ein Platzhalter-Körper gerendert."
+            echo "build_mode=fallback" >> "$GITHUB_OUTPUT"
+            python3 tools/build_avatar.py --dry-run --out build
+          fi
+          # Zusammenfassung für die Actions-Seite
+          if [ -f build/summary.md ]; then
+            cat build/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 5) Blender installieren
+        id: blender
+        run: |
+          set -euo pipefail
+          if [ -x /usr/local/bin/blender ]; then
+            echo "Blender ist bereits im Image vorhanden."
+            /usr/local/bin/blender --version | head -n 1 | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "bin=/usr/local/bin/blender" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "== Systembibliotheken für Blender =="
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libxrender1 libxi6 libxxf86vm1 libxfixes3 libgl1 libegl1 \
+            libsm6 libxkbcommon0 libx11-6 libxext6 libgomp1 xz-utils
+
+          echo "== Blender ${BLENDER_VERSION} laden =="
+          TARBALL="blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+          mkdir -p "$HOME/blender"
+          DOWNLOADED=0
+          for BASE in \
+            "https://download.blender.org/release/${BLENDER_SERIES}" \
+            "https://mirror.clarkson.edu/blender/release/${BLENDER_SERIES}" \
+            "https://ftp.nluug.nl/pub/graphics/blender/release/${BLENDER_SERIES}"
+          do
+            echo "Versuche $BASE/$TARBALL"
+            if curl -fsSL --retry 3 --retry-delay 2 --max-time 900 \
+                 -o "$HOME/blender/$TARBALL" "$BASE/$TARBALL"; then
+              DOWNLOADED=1
+              break
+            fi
+          done
+          if [ "$DOWNLOADED" -ne 1 ]; then
+            echo "::error::Blender konnte nicht heruntergeladen werden."
+            exit 1
+          fi
+
+          tar -xf "$HOME/blender/$TARBALL" -C "$HOME/blender" --strip-components=1
+          test -x "$HOME/blender/blender" || { echo "::error::Blender-Binary fehlt"; exit 1; }
+          "$HOME/blender/blender" --version | head -n 1 | tee "$HOME/blender/version.txt"
+          cat "$HOME/blender/version.txt" >> "$GITHUB_STEP_SUMMARY"
+          echo "bin=$HOME/blender/blender" >> "$GITHUB_OUTPUT"
+
+      - name: 6) Glas-Render mit Cycles (CPU)
+        id: render
+        run: |
+          set -o pipefail
+          BLENDER_BIN="${{ steps.blender.outputs.bin }}"
+          echo "== Rendern: ${PIPELINE_RESOLUTION}, ${PIPELINE_SAMPLES} Samples =="
+          mkdir -p build/logs
+          START=$(date +%s)
+          set +e
+          "$BLENDER_BIN" -b --factory-startup --python blender/render_glass.py -- \
+            --manifest build/manifest.json \
+            --out render_avatar.png \
+            --resolution "${PIPELINE_RESOLUTION}" \
+            --samples "${PIPELINE_SAMPLES}" \
+            --save-blend build/avatar.blend \
+            2>&1 | tee build/logs/blender.log
+          RC=${PIPESTATUS[0]}
+          set -e
+          DURATION=$(( $(date +%s) - START ))
+          echo "render_seconds=$DURATION" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Render"
+            echo ""
+            echo "* Auflösung: ${PIPELINE_RESOLUTION}"
+            echo "* Samples: ${PIPELINE_SAMPLES} (Cycles, CPU, Denoising an)"
+            echo "* Dauer: ${DURATION}s"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::Blender-Render fehlgeschlagen (Exitcode $RC). Log siehe Artifact 'render-debug'."
+            exit "$RC"
+          fi
+          test -s render_avatar.png || { echo "::error::render_avatar.png wurde nicht erzeugt."; exit 1; }
+          ls -lh render_avatar.png
+
+      - name: 7) Ergebnis als Artifact hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: avatar-render
+          path: render_avatar.png
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: 8) Debug-Daten hochladen (nur bei Problemen)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-debug
+          path: |
+            build/manifest.json
+            build/summary.md
+            build/logs/
+          retention-days: 7
+          if-no-files-found: ignore

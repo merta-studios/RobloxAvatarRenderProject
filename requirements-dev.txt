@@ -1,0 +1,6 @@
+# Abhaengigkeiten fuer lokale Entwicklung/Tests (die Pipeline selbst braucht nur die Standardbibliothek)
+pytest>=8.0
+PyYAML>=6.0
+
+# Optional, nur fuer lokale Render-Tests ohne installiertes Blender:
+# bpy==4.2.0
