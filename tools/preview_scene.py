@@ -150,9 +150,11 @@ def render(manifest_path: str, out_path: str, resolution=DEFAULT_RESOLUTION,
                 if tex_path not in textures:
                     textures[tex_path] = load_texture(tex_path)
                 tex = textures[tex_path]
+        tint = part.get("tint") or part.get("color")
         parts.append({"part": part, "V": V, "VT": VT, "VN": VN,
                       "faces": faces, "tex": tex,
-                      "color": hex_rgb(part.get("color"))})
+                      "color": hex_rgb(part.get("color")),
+                      "tint": hex_rgb(tint)})
     if not parts:
         raise SystemExit("Keine Geometrie im Manifest gefunden.")
 
@@ -188,6 +190,9 @@ def render(manifest_path: str, out_path: str, resolution=DEFAULT_RESOLUTION,
     for entry in parts:
         V, VT, VN, faces = entry["V"], entry["VT"], entry["VN"], entry["faces"]
         color = srgb_to_linear(entry["color"])
+        # Kleidungsfarbe (Durchschnitt der Atlas-Panels) - wie im
+        # Blender-Material, das damit das Glas einfaerbt.
+        cloth = srgb_to_linear(entry["tint"])
         kind = entry["part"].get("kind")
         tex = entry["tex"]
         for face in faces:
@@ -249,11 +254,14 @@ def render(manifest_path: str, out_path: str, resolution=DEFAULT_RESOLUTION,
                 # Kleidung bleibt lesbar)
                 tex_rgb = srgb_to_linear(sample[:, :3]) ** 0.72
                 # Textur fest mit der Teilfarbe mischen (wie im Blender-Material)
-                lit = tex_rgb * strength + color * (1.0 - strength)
+                lit = tex_rgb * strength + cloth * (1.0 - strength)
                 rgb = lit * sample[:, 3:4] + color * (1.0 - sample[:, 3:4])
 
             if kind == "decal":
                 out = linear_to_srgb(rgb * shade[:, None])
+                if tex is not None:
+                    alpha = sample[:, 3]
+                    out = out * alpha[:, None] + image[rows + y0, cols + x0] * (1.0 - alpha[:, None])
             elif kind == "accessory":
                 out = linear_to_srgb(rgb * shade[:, None])
             else:

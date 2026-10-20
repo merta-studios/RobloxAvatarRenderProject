@@ -60,7 +60,7 @@ def parse_args() -> argparse.Namespace:
                         help="Farbe fuer metallisch glaenzende Accessoires")
     parser.add_argument("--mono-glass", action="store_true",
                         help="alle Teile in derselben hellblauen Glasfarbe")
-    parser.add_argument("--texture-strength", type=float, default=0.85,
+    parser.add_argument("--texture-strength", type=float, default=0.92,
                         help="Anteil der deckenden Textur am Glas "
                              "(0 = reines Glas, 1 = Textur pur)")
     parser.add_argument("--camera-azimuth", type=float, default=24.0,
@@ -204,7 +204,7 @@ def _surface_socket(out_node):
 
 def make_material(name: str, body_rgb, tint_rgb, texture_path: str = "",
                   mono: bool = False, kind: str = "body",
-                  texture_strength: float = 0.85):
+                  texture_strength: float = 0.92, part_tint=None):
     """Material fuer ein Teil: Glas mit sichtbarer Textur.
 
     ``texture_strength`` ist der Anteil des **deckenden** Textur-Shaders.
@@ -244,11 +244,18 @@ def make_material(name: str, body_rgb, tint_rgb, texture_path: str = "",
 
     tint_linear = srgb_to_linear(tup(tint_rgb))
     body_linear = srgb_to_linear(tup(body_rgb))
+    # Farbe des Kleidungsstuecks (Durchschnitt der genutzten Atlas-Panels).
+    # Ohne diesen Wert war das Glas immer hellblau, obwohl der Avatar ein
+    # schwarzes Shirt und eine blaue Jeans traegt.
+    cloth_linear = srgb_to_linear(tup(part_tint)) if part_tint else body_linear
     if mono:
         body_linear = tint_linear
+        cloth_linear = tint_linear
 
     # --- Glas-Shader einrichten -------------------------------------------
-    glass_color = mix(tint_linear, body_linear, 0.45)
+    # Grundton = Kleidungsfarbe, nur leicht mit dem Glasblau verschoben -
+    # so bleibt ein schwarzes Shirt schwarz und die Jeans blau.
+    glass_color = mix(cloth_linear, tint_linear, 0.28)
     set_input(bsdf, "Base Color", (glass_color[0], glass_color[1],
                                    glass_color[2], 1.0))
     set_input(bsdf, "Roughness", 0.05)
@@ -261,13 +268,21 @@ def make_material(name: str, body_rgb, tint_rgb, texture_path: str = "",
     set_input(bsdf, ("Subsurface Weight", "Subsurface"), 0.0)
 
     if not has_texture or mono:
-        # Ohne Textur (oder mit --mono-glass) bleibt es beim reinen Glas.
+        # Ohne Textur bleibt es beim Glas - bei Koerperteilen (Hals, Haut
+        # ohne Kleidung) aber als *mattes* Koerperfarben-Glas, damit sie
+        # nicht wie ein unsichtbarer Glasklotz aussehen.
+        if kind == "body" and not mono:
+            set_input(bsdf, "Base Color", (body_linear[0], body_linear[1],
+                                           body_linear[2], 1.0))
+            set_input(bsdf, "Roughness", 0.42)
+            set_input(bsdf, ("Transmission Weight", "Transmission"), 0.45)
+            set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.1)
         return mat
 
     # Kein Glas-Tint auf der Textur: die Glasfarbe kommt ueber den
     # Shader-Mix (siehe unten), so bleibt die Textur farbecht.
     base_out, tex_node = make_textured_base(
-        nodes, links, image, body_linear, tint_linear, 0.0,
+        nodes, links, image, body_linear, cloth_linear, 0.0,
         os.path.basename(texture_path))
     # Dunkle Kleidung (schwarzes Shirt, dunkle Hose) versinkt im Glas sonst
     # komplett. Ein Gamma-Knoten hebt die Mitteltöne an, ohne die Farben
@@ -600,8 +615,11 @@ def main() -> int:
             candidate = os.path.join(base_dir, part["texture"])
             texture = candidate if os.path.exists(candidate) else ""
 
+        part_tint = (hex_to_rgb(part["tint"]) if part.get("tint")
+                     else None)
         key = ("mat", kind, tuple(round(c, 3) for c in color), texture,
-               args.mono_glass)
+               args.mono_glass,
+               tuple(round(c, 3) for c in part_tint) if part_tint else None)
         mat = material_cache.get(key)
         if mat is None:
             if kind == "accessory" and not texture and not args.mono_glass:
@@ -610,7 +628,8 @@ def main() -> int:
                 mat = make_material(
                     f"{kind.capitalize()} {part.get('name')}", color, glass_tint,
                     texture, args.mono_glass, kind=kind,
-                    texture_strength=max(0.0, min(1.0, args.texture_strength)))
+                    texture_strength=max(0.0, min(1.0, args.texture_strength)),
+                    part_tint=part_tint)
             material_cache[key] = mat
 
         if texture:

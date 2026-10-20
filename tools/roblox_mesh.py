@@ -668,6 +668,102 @@ def _smooth_normals(positions, faces):
     return normals
 
 
+def stack_segments(items, source_version: str = "stacked",
+                   target_height: float = 0.0) -> MeshData:
+    """Setzt R15-Segmente lueckenlos zu einem geraden Koerperteil zusammen.
+
+    ``items``: Liste aus ``(MeshData, size|None, position|None)`` in der
+    Reihenfolge von oben nach unten (z. B. UpperArm, LowerArm, Hand).
+
+    Die Segmente werden einzeln auf ihre Part-Groesse gebracht und dann
+    senkrecht gestapelt (Oberkante des naechsten Segments = Unterkante des
+    vorherigen). Die Positionen aus dem RBXM werden **nicht** uebernommen:
+    sie beschreiben die Bind-Pose des Pakets, in der die Arme oft schraeg
+    nach aussen haengen - uebernommen steht der Avatar im Spagat und die
+    Arme werden beim Einpassen zerdrueckt. ``target_height`` (Hoehe der
+    Bind-Pose) dient nur dazu, den Stapel gleichmaessig zu stauchen, falls
+    die Segmente mit Ueberlappung modelliert sind.
+    """
+    positions: List[Vec3] = []
+    normals: List[Vec3] = []
+    uvs: List[Tuple[float, float]] = []
+    faces: List[Tuple[int, int, int]] = []
+    colors: List[Tuple[int, int, int, int]] = []
+    all_colors = True
+    cursor = 0.0
+    for mesh, size, _position in items:
+        part = mesh
+        if size:
+            current = mesh.size()
+            factors = tuple(
+                float(size[i]) / current[i] if current[i] > 1e-9 else 1.0
+                for i in range(3))
+            part = mesh.transform(factors)
+        height = part.size()[1]
+        center = part.center()
+        part = part.transform(
+            1.0, (-center[0], cursor - height / 2.0 - center[1], -center[2]))
+        base = len(positions)
+        positions.extend(part.positions)
+        normals.extend(part.normals or [(0.0, 1.0, 0.0)] * len(part.positions))
+        uvs.extend(part.uvs or [(0.0, 0.0)] * len(part.positions))
+        faces.extend((a + base, b + base, c + base) for a, b, c in part.faces)
+        if part.colors:
+            colors.extend(part.colors)
+        else:
+            all_colors = False
+        cursor -= height
+    result = MeshData(positions, normals, uvs, faces,
+                      colors if all_colors and colors else None, source_version)
+    if target_height and target_height > 0.05:
+        height = cursor if cursor < 0 else 0.0
+        height = abs(height)
+        if height > 0:
+            factor = target_height / height
+            # Nur stauchen, wenn die Segmente deutlich ueberlappen wuerden -
+            # gleichmaessig, damit die Form erhalten bleibt.
+            if 0.3 < factor < 1.0:
+                lo, hi = result.bbox()
+                result = (result.transform(1.0, (0.0, -hi[1], 0.0))
+                          .transform(factor)
+                          .transform(1.0, (0.0, hi[1], 0.0)))
+    return result
+
+
+def split_mesh_x(mesh: MeshData) -> Tuple[MeshData, MeshData]:
+    """Teilt ein Mesh an x = 0 in linke (-X) und rechte (+X) Haelfte.
+
+    Manche Accessoires (z. B. ein Paar Handschuhe) sind ein einziges Mesh
+    mit beiden Seiten. Wird so ein Mesh als Ganzes an einen Anker gesetzt,
+    schwebt es quer durch den Koerper. Rueckgabe: (links, rechts); eine
+    Seite kann leer sein.
+    """
+    def half(keep_left: bool) -> MeshData:
+        faces = []
+        for a, b, c in mesh.faces:
+            cx = (mesh.positions[a][0] + mesh.positions[b][0]
+                  + mesh.positions[c][0]) / 3.0
+            if (cx <= 0.0) == keep_left:
+                faces.append((a, b, c))
+        if not faces:
+            return MeshData(source_version=mesh.source_version)
+        used = sorted({i for face in faces for i in face})
+        remap = {old: new for new, old in enumerate(used)}
+        return MeshData(
+            positions=[mesh.positions[i] for i in used],
+            normals=([mesh.normals[i] for i in used]
+                     if len(mesh.normals) == len(mesh.positions) else []),
+            uvs=([mesh.uvs[i] for i in used]
+                 if len(mesh.uvs) == len(mesh.positions) else []),
+            faces=[(remap[a], remap[b], remap[c]) for a, b, c in faces],
+            colors=([mesh.colors[i] for i in used]
+                    if mesh.colors and len(mesh.colors) == len(mesh.positions)
+                    else None),
+            source_version=mesh.source_version,
+        )
+    return half(True), half(False)
+
+
 def merge_meshes(items, source_version: str = "merged") -> MeshData:
     """Mehrere Meshes (z. B. R15-Segmente eines RBXM) zu einem verbinden.
 

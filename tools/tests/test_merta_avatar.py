@@ -295,9 +295,9 @@ def test_riesiges_mesh_wird_neu_skaliert(monkeypatch, tmp_path):
 
     hut = next(p for p in manifest["parts"] if p["kind"] == "accessory")
     assert _obj_max_axis(tmp_path / hut["obj"]) <= 12.0
-    assert any("Sanity-Check" in w for w in manifest["warnings"])
+    assert any("begrenzt" in w for w in manifest["warnings"])
     summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
-    assert "Sanity-Check" in summary
+    assert "unplausibel" in summary
 
 
 def test_rbxm_textur_wird_ans_teil_gehaengt(monkeypatch, tmp_path):

@@ -200,8 +200,9 @@ def test_rig_teile_sitzen_lueckenlos_aufeinander():
     # Hals im Torso, Kopf auf dem Hals
     assert bottom["hals"] < top["torso"]
     assert bottom["kopf"] < top["hals"]
-    # Arme haengen an den Schultern (Oberkante auf Torso-Hoehe)
-    assert abs(top["links_arm"] - top["torso"]) < 0.1
+    # Arme haengen an den Schultern (Oberkante knapp unter der
+    # Torso-Oberkante, wie beim R15-Schultergelenk)
+    assert -0.02 <= top["torso"] - top["links_arm"] < 0.2
     assert abs(bottom["links_arm"] - bottom["rechts_arm"]) < 1e-6
     # Linke/rechte Seite ist spiegelbildlich (nichts einseitig verschoben)
     assert by_name["links_arm"].mesh.center()[0] == pytest.approx(
@@ -287,8 +288,10 @@ def test_teilfarbe_kommt_aus_der_textur(monkeypatch, tmp_path):
     _install(monkeypatch, avatar, {11: atlas})
     manifest = build_avatar.build("Test", str(tmp_path), verbose=False)
     torso = next(p for p in manifest["parts"] if p["name"] == "torso")
-    r = int(torso["color"][1:3], 16)
-    g = int(torso["color"][3:5], 16)
+    # Grundfarbe = Hautfarbe (fuer durchsichtige Atlas-Stellen), Tint =
+    # Durchschnitt der eigenen Atlas-Panels (hier rot).
+    r = int(torso["tint"][1:3], 16)
+    g = int(torso["tint"][3:5], 16)
     assert r + g > 120          # nicht schwarz/grau
     assert r > g or g > r       # rote oder gruene Durchschnittsfarbe
 
@@ -602,3 +605,208 @@ def test_helle_kopf_textur_bleibt_erhalten(monkeypatch, tmp_path):
     manifest = build_avatar.build("Test", str(tmp_path), verbose=False)
     kopf = next(p for p in manifest["parts"] if p["name"] == "kopf_mesh")
     assert kopf["texture"] == "textures/7902.png"
+
+
+# ---------------------------------------------------------------------------
+# Runde 3: echte Bundle-Masse, gerade Glieder, Accessoire-Groesse/-Farbe
+# ---------------------------------------------------------------------------
+
+def test_rbxm_masse_werden_nicht_erneut_skaliert():
+    """Bundle-Groessen sind bereits skaliert - Scales nicht doppelt anwenden.
+
+    Vorher wurde der Torso eines Avatars mit width=0,7 zusaetzlich
+    gequetscht: 1,33 statt 1,77 Studs breit, Gesamthoehe 4,7 statt 5,5.
+    """
+    scales = {"width": 0.7, "height": 0.9, "depth": 0.85, "head": 0.95}
+    sizes = {"torso": (1.77, 1.85, 0.94), "rechts_arm": (0.75, 1.9, 0.8),
+             "links_arm": (0.75, 1.9, 0.8), "rechts_bein": (0.75, 1.8, 0.94),
+             "links_bein": (0.75, 1.8, 0.94), "kopf": (1.2, 1.2, 1.2)}
+    parts, metrics = avatar_rig.build_body(roblox_api.DEFAULT_BODY_COLORS,
+                                           scales, sizes)
+    torso = next(p for p in parts if p.name == "torso")
+    assert torso.mesh.size()[0] == pytest.approx(1.77, abs=0.01)
+    assert metrics.head_radius == pytest.approx(0.6, abs=0.01)
+    # Kein Schrumpfen: Beine (1,8) + Torso (1,85) + Kopf (~1,2) = ~5 Studs
+    assert 4.8 < metrics.height < 5.2
+
+
+def test_fehlende_teile_werden_aus_dem_torso_abgeleitet():
+    """Nur Torso/Arme aus dem Bundle -> Beine passen zum Torso statt R6."""
+    parts, _ = avatar_rig.build_body(
+        roblox_api.DEFAULT_BODY_COLORS, roblox_api.DEFAULT_SCALES,
+        {"torso": (1.8, 1.9, 0.95), "rechts_arm": (0.8, 1.9, 0.8),
+         "links_arm": (0.8, 1.9, 0.8)})
+    by_name = {p.name: p for p in parts}
+    assert by_name["links_bein"].mesh.size()[0] == pytest.approx(0.9, abs=0.01)
+
+
+def test_gestapelte_glieder_stehen_gerade():
+    """R15-Segmente: senkrecht gestapelt, kein A-Pose-Spagat.
+
+    Vorher wurden die Bind-Pose-X-Positionen uebernommen (Hand 1,48 Studs
+    neben der Schulter) und das Ganze dann in die senkrechte Rig-Box
+    gepresst - die Arme wirkten verrenkt/zerknittert.
+    """
+    upper = roblox_mesh.make_box(0.75, 0.9, 0.6)
+    lower = roblox_mesh.make_box(0.66, 0.9, 0.6)
+    hand = roblox_mesh.make_box(0.55, 0.6, 0.55)
+    stacked = roblox_mesh.stack_segments([
+        (upper, (0.75, 0.9, 0.6), (0.85, 0.0, 0.0)),
+        (lower, (0.66, 0.9, 0.6), (1.20, -0.58, 0.0)),
+        (hand, (0.55, 0.6, 0.55), (1.48, -1.14, -0.30)),
+    ], target_height=2.3)
+    lo, hi = stacked.bbox()
+    # alle Segmente liegen uebereinander (keine seitliche Streuung)
+    assert hi[0] - lo[0] <= 0.76
+    # und der Stapel ist so hoch wie die Bind-Pose
+    assert (hi[1] - lo[1]) == pytest.approx(2.3, abs=0.02)
+    # Oberkante = Schulter, Unterkante = Hand
+    assert hi[1] == pytest.approx(0.0, abs=0.02)
+
+
+def test_bundle_positionen_ergeben_keinen_Spagat(monkeypatch, tmp_path):
+    avatar = _base_avatar([{"id": 28, "name": "RightArm", "assetType": {"id": 28}}])
+    arm = make_rbxm([
+        _meshpart("RightUpperArm", 2801, (0.75, 0.9, 0.6), (0.85, 0.0, 0.0)),
+        _meshpart("RightLowerArm", 2802, (0.66, 0.9, 0.6), (1.20, -0.58, 0.0)),
+        _meshpart("RightHand", 2803, (0.55, 0.6, 0.55), (1.48, -1.14, -0.3)),
+    ])
+    _install(monkeypatch, avatar, {
+        28: arm,
+        2801: encode_v2(roblox_mesh.make_box(0.75, 0.9, 0.6)),
+        2802: encode_v2(roblox_mesh.make_box(0.66, 0.9, 0.6)),
+        2803: encode_v2(roblox_mesh.make_box(0.55, 0.6, 0.55)),
+    })
+    manifest = build_avatar.build("Test", str(tmp_path), verbose=False)
+    arm_part = next(p for p in manifest["parts"] if p["name"] == "rechts_arm")
+    xs, ys = [], []
+    for line in (tmp_path / arm_part["obj"]).read_text().splitlines():
+        if line.startswith("v "):
+            xs.append(float(line.split()[1]))
+            ys.append(float(line.split()[2]))
+    assert max(xs) - min(xs) <= 0.8      # senkrecht, nicht schraeg
+    assert max(ys) - min(ys) > 1.5       # volle Arm-Laenge
+    assert "gestapelt" in arm_part["note"]
+
+
+def test_teilfarbe_kommt_aus_den_eigenen_atlas_panels():
+    """Das weisse Template darf die Kleidungsfarbe nicht nach grau ziehen."""
+    def px(x, y):
+        # Alle Panels dunkelblau, der Rest des Atlas weiss (Template)
+        for rect in list(avatar_uv.TORSO.values()):
+            if rect[0] <= x < rect[2] and rect[1] <= y < rect[3]:
+                return (20, 40, 90, 255)
+        return (255, 255, 255, 255)
+    atlas = png_rgba(585, 559, px)
+    path = _write(tmp_path_png(atlas), atlas)
+    whole = build_avatar.texture_average_color(path, "#ffffff")
+    panels = build_avatar.panel_average_color(path, "torso", "#ffffff")
+    assert int(whole[1:3], 16) > 150          # weiss-grau (falsch)
+    assert int(panels[1:3], 16) < 60          # dunkelblau (richtig)
+    assert int(panels[5:7], 16) > 70
+
+
+def tmp_path_png(data: bytes):
+    import tempfile
+    fd, name = tempfile.mkstemp(suffix=".png")
+    os.close(fd)
+    with open(name, "wb") as fh:
+        fh.write(data)
+    return name
+
+
+def _write(path, data):
+    with open(path, "wb") as fh:
+        fh.write(data)
+    return path
+
+
+def test_transparentes_gesicht_ist_keine_zusatz_map(monkeypatch, tmp_path):
+    """Gesichter sind durchsichtige PNGs mit schwarzen Augen."""
+    avatar = _base_avatar([{"id": 79, "name": "Head", "assetType": {"id": 79}}])
+    head = make_rbxm([_meshpart("Head", 7901, (1.0, 1.0, 1.0),
+                                (0.0, 5.0, 0.0), texture_id=7902)])
+    face = png_rgba(64, 64, lambda x, y: (0, 0, 0, 255)
+                    if 28 <= y <= 34 and (26 <= x <= 32 or 40 <= x <= 46)
+                    else (0, 0, 0, 0))
+    _install(monkeypatch, avatar, {
+        79: head, 7901: encode_v2(roblox_mesh.make_sphere(0.5, 16, 12)),
+        7902: face,
+    })
+    manifest = build_avatar.build("Test", str(tmp_path), verbose=False)
+    kopf = next(p for p in manifest["parts"] if p["name"] == "kopf_mesh")
+    assert kopf.get("texture")
+    assert not any("Zusatz-Map" in w for w in manifest["warnings"])
+
+
+def test_handschuh_paar_wird_an_beide_haende_gesetzt(monkeypatch, tmp_path):
+    avatar = _base_avatar([{"id": 67, "name": "Gloves",
+                            "assetType": {"id": 67}}])
+    pair = make_rbxm([_meshpart("Handle", 6701, (3.5, 0.55, 0.6), (0.0, 0.0, 0.0))])
+    _install(monkeypatch, avatar, {
+        67: pair,
+        6701: encode_v2(roblox_mesh.merge_meshes([
+            (roblox_mesh.make_box(0.5, 0.55, 0.6),
+             (0.5, 0.55, 0.6), (1.5, 0.0, 0.0)),
+            (roblox_mesh.make_box(0.5, 0.55, 0.6),
+             (0.5, 0.55, 0.6), (-1.5, 0.0, 0.0)),
+        ])),
+    })
+    manifest = build_avatar.build("Test", str(tmp_path), verbose=False)
+    gloves = [p for p in manifest["parts"] if p["kind"] == "accessory"]
+    assert len(gloves) == 2
+    xs = []
+    for part in gloves:
+        for line in (tmp_path / part["obj"]).read_text().splitlines():
+            if line.startswith("v "):
+                xs.append(float(line.split()[1]))
+    assert min(xs) < -1.0 and max(xs) > 1.0        # links und rechts
+    assert not any(-0.6 < x < 0.6 for x in xs)     # nicht mehr quer im Koerper
+
+
+def test_accessoire_farbe_kommt_aus_der_textur(monkeypatch, tmp_path):
+    avatar = _base_avatar([{"id": 8, "name": "Hut", "assetType": {"id": 8}}])
+    hat = make_rbxm([_meshpart("Handle", 8001, (1.0, 1.0, 1.0),
+                              (0.0, 5.0, 0.0), texture_id=8002)])
+    red = png_rgba(16, 16, lambda x, y: (180, 20, 30, 255))
+    _install(monkeypatch, avatar, {
+        8: hat, 8001: encode_v2(roblox_mesh.make_box(1.2, 0.5, 1.2)),
+        8002: red,
+    })
+    manifest = build_avatar.build("Test", str(tmp_path), verbose=False)
+    hut = next(p for p in manifest["parts"] if p["kind"] == "accessory")
+    assert int(hut["color"][1:3], 16) > 100        # rot, nicht hellblau
+    assert hut["color"] != "#dff4ff"
+
+
+def test_layered_jacke_umfasst_auch_die_arme(monkeypatch, tmp_path):
+    avatar = _base_avatar([{"id": 67, "name": "Jacke",
+                            "assetType": {"id": 67}}])
+    jacket = make_rbxm([_meshpart("Handle", 6701, (1.0, 1.0, 1.0), (0.0, 0.0, 0.0))])
+    _install(monkeypatch, avatar, {
+        67: jacket, 6701: encode_v2(roblox_mesh.make_box(3.0, 2.0, 1.0)),
+    })
+    manifest = build_avatar.build("Test", str(tmp_path), verbose=False)
+    size = manifest["metrics"]
+    xs = [float(line.split()[1]) for line in
+          (tmp_path / next(p for p in manifest["parts"]
+                           if p["kind"] == "accessory")["obj"]).read_text().splitlines()
+          if line.startswith("v ")]
+    # Huelle deckt Torso + Aermel ab, bleibt aber innerhalb der Schultern
+    assert max(xs) - min(xs) == pytest.approx(
+        size["torso_width"] + 2 * 0.5 * 1.0 * 1.95, abs=0.2)
+
+
+def test_rock_haengt_an_der_taillie(monkeypatch, tmp_path):
+    avatar = _base_avatar([{"id": 47, "name": "Rock", "assetType": {"id": 47}}])
+    skirt = make_rbxm([_meshpart("Handle", 4701, (1.0, 1.0, 1.0), (0.0, 0.0, 0.0))])
+    _install(monkeypatch, avatar, {
+        47: skirt, 4701: encode_v2(roblox_mesh.make_box(3.4, 2.4, 3.8)),
+    })
+    manifest = build_avatar.build("Test", str(tmp_path), verbose=False)
+    part = next(p for p in manifest["parts"] if p["kind"] == "accessory")
+    ys = [float(line.split()[2]) for line in (tmp_path / part["obj"]).read_text().splitlines()
+          if line.startswith("v ")]
+    torso_top = 4.0  # Torso-Oberkante des Standard-Rigs (~4,0)
+    assert max(ys) < torso_top        # kein Umhang bis zur Brust
+    assert min(ys) < 1.5              # Rock reicht bis zu den Beinen

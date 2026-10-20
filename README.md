@@ -105,15 +105,24 @@ python3 -m pytest tools/tests -q
   Gliedmaßen-Blöcke. Echte R15-Meshes bekommen die Panels per Projektion,
   weil ihre eigenen UVs nicht zu Kleidungs-Atlanten passen. T-Shirt-Grafik
   und Gesicht liegen als Dekals vor Brust bzw. Gesicht.
-* **Farben:** Das Manifest speichert die Durchschnittsfarbe jeder Textur,
-  damit bekleidete Teile im Glas in ihrer echten Farbe leuchten; unbekleidete
-  Teile bleiben klares Glas. Damit Texturen überhaupt sichtbar sind, mischt
-  das Material einen deckenden Textur-Shader mit Glas (`--texture-strength`,
-  Standard 0,85 – reines Glas zeigt von einer Textur fast nichts); dunkle
-  Kleidung wird per Gamma aufgehellt und bleibt matt, damit das Muster
-  lesbar ist.
-* **Körperteile:** R15-Bundles liefern echte Maße – der Rig stapelt Beine,
-  Torso, Hals und Kopf lückenlos und richtet in T-Pose gelieferte Arme auf.
+* **Farben:** Das Manifest speichert je Teil `color` (Körperfarbe unter
+  durchsichtigen Atlas-Stellen) und `tint` (Durchschnitt der *eigenen*
+  Atlas-Panels). Ein Durchschnitt über den ganzen Atlas ergibt immer Grau –
+  deshalb wirkte vorher alles grau/weiß. Accessoires werden nach ihrer
+  eigenen Textur eingefärbt, unbekleidete Teile sind mattes Glas in
+  Körperfarbe. Damit Texturen sichtbar sind, mischt das Material einen
+  deckenden Textur-Shader mit Glas (`--texture-strength`, Standard 0,92 –
+  reines Glas zeigt von einer Textur fast nichts); dunkle Kleidung wird per
+  Gamma aufgehellt und bleibt matt, damit das Muster lesbar ist.
+* **Körperteile:** R15-Bundles liefern echte, bereits skalierte Maße – der
+  Rig stapelt Beine, Torso, Hals und Kopf lückenlos. Mehrsegmentige Glieder
+  (Oberarm/Unterarm/Hand) werden senkrecht gestapelt, statt die A-Pose-
+  Positionen aus dem RBXM zu übernehmen (das ergab verrenkte Arme);
+  fehlende Teile werden aus dem Torso abgeleitet.
+* **Accessoires:** in echter Mesh-Größe (Studs) platziert und nur so weit
+  begrenzt, dass sie zum Anker passen; Layered-Kleidung als Hülle
+  (Jacke inklusive Ärmel), Paar-Accessoires wie Handschuhe auf beide Hände
+  verteilt.
 
 ## Grenzen
 

@@ -265,12 +265,85 @@ def sanity_check(mesh: roblox_mesh.MeshData, target_max: float, label: str,
     return rescaled
 
 
+def _segment_size(mesh_part: Dict[str, Any]) -> tuple:
+    """Part-Groesse eines R15-Segments in Studs (RBXM-Size, sonst Mesh-BBox)."""
+    hint = mesh_part.get("rbxm_size")
+    if hint and len(hint) == 3 and all(float(v) > 0.05 for v in hint):
+        return tuple(float(v) for v in hint)
+    return mesh_part["mesh"].size()
+
+
+def _combine_segments(rig_name: str, group: List[Dict[str, Any]],
+                      warnings: List[str]) -> Dict[str, Any]:
+    """Mehrere R15-Segmente (Oberarm/Unterarm/Hand ...) zu einem Teil machen.
+
+    Die Segmente werden anhand ihrer Instanznamen ausgewaehlt, auf ihre
+    Part-Groesse gebracht und **senkrecht gestapelt**. Die Positionen aus
+    dem RBXM beschreiben dagegen die Bind-Pose des Pakets (Arme oft
+    schraeg) - uebernommen ergibt das verrenkte Gliedmassen.
+    """
+    segments = _pick_r15_segments(group, R15_SEGMENT_NAMES.get(rig_name, []))
+    segments = [mp for mp in segments
+                if mp.get("mesh") is not None and not mp["mesh"].is_empty
+                and max(_segment_size(mp)) > 0.05]
+    if len(segments) >= 2:
+        # Zielhoehe = Abstand von Oberkante des ersten bis Unterkante des
+        # letzten Segments in der Bind-Pose (ohne die schraege A-Pose).
+        target_height = 0.0
+        tops, bottoms = [], []
+        for mp in segments:
+            pos = mp.get("rbxm_position")
+            if pos is None:
+                continue
+            half = _segment_size(mp)[1] / 2.0
+            tops.append(float(pos[1]) + half)
+            bottoms.append(float(pos[1]) - half)
+        if tops and bottoms:
+            target_height = max(tops) - min(bottoms)
+        stacked = roblox_mesh.stack_segments(
+            [(mp["mesh"], _segment_size(mp), mp.get("rbxm_position"))
+             for mp in segments],
+            source_version="stacked-r15", target_height=target_height)
+        pseudo = dict(segments[0])
+        pseudo["mesh"] = stacked
+        pseudo["stacked"] = True
+        # Part-Groesse aus den Segmenten selbst: Breite/Tiefe = dickstes
+        # Segment, Hoehe = Bind-Pose. So bleibt der Torso so breit wie im
+        # Bundle, auch wenn der Stapel zum Verbinden gestaucht wurde.
+        widths = [_segment_size(mp) for mp in segments]
+        pseudo["part_size"] = (
+            max(w[0] for w in widths),
+            target_height or stacked.size()[1],
+            max(w[2] for w in widths))
+        pseudo["source_ids"] = [id(mp) for mp in segments]
+        pseudo["texture_file"] = next(
+            (mp["texture_file"] for mp in segments if mp.get("texture_file")),
+            None)
+        names = ", ".join((mp.get("label") or "?") for mp in segments)
+        pseudo["note_suffix"] = (f", {len(segments)} R15-Segmente gestapelt "
+                                 f"({names})")
+        return pseudo
+    if len(group) == 1:
+        single = dict(group[0])
+        single["part_size"] = _segment_size(single)
+        single["source_ids"] = [id(group[0])]
+        return single
+    largest = max(group, key=lambda mp: max(mp["mesh"].size()))
+    replacement = dict(largest)
+    replacement["part_size"] = _segment_size(replacement)
+    replacement["source_ids"] = [id(mp) for mp in group]
+    warnings.append(
+        f"Koerperteil '{rig_name}': {len(group)} Meshes gefunden, aber kein "
+        f"R15-Segmentsatz - nur das groesste Segment verwendet "
+        f"(Asset {largest['asset_id']}).")
+    return replacement
+
+
 def _replacement_size(mesh_part: Dict[str, Any], warnings: List[str],
                       label: str, prefer_geometry: bool = False):
     """Plausible Teilgroesse (Studs) fuer den Rig-Aufbau bestimmen.
 
-    * zusammengefuehrte R15-Glieder: Bounding-Box des zusammengesetzten
-      Meshes (die RBXM-Positionen sind bereits in Studs),
+    * gestapelte R15-Glieder: Bounding-Box des Stapels,
     * einzelne Meshes: die Part-Groesse aus dem RBXM (so rendert Roblox
       das Mesh ebenfalls - gestreckt auf die Part-Groesse),
     * sonst die Mesh-Bounding-Box.
@@ -279,8 +352,8 @@ def _replacement_size(mesh_part: Dict[str, Any], warnings: List[str],
     verworfen, dann greifen die Standardmasse des Rigs.
     """
     size = None
-    if mesh_part.get("merged"):
-        size = mesh_part["mesh"].size()
+    if mesh_part.get("part_size"):
+        size = tuple(float(v) for v in mesh_part["part_size"])
     elif prefer_geometry:
         # Koepfe erscheinen in Roblox groesser als ihre Part-Groesse -
         # die Geometrie beschreibt den sichtbaren Kopf besser.
@@ -467,10 +540,18 @@ DARK_TEXTURE_LUMINANCE = 0.12
 
 def _usable_head_texture(texture: Optional[str], out_dir: str,
                          body_color: str) -> Optional[str]:
-    """Kopf-Textur nur uebernehmen, wenn sie wie ein Farbbild aussieht."""
+    """Kopf-Textur nur uebernehmen, wenn sie wie ein Farbbild aussieht.
+
+    Gesichter (DynamicHead/Face) sind fast immer durchsichtige PNGs mit
+    schwarzen Augen/Brauen - die Durchschnittsfarbe ist dann schwarz, das
+    Bild aber trotzdem die richtige Gesichts-Textur. Nur *flaechendeckend*
+    dunkle Karten sind Zusatz-Maps (Roughness/Metallic).
+    """
     if not texture:
         return None
     path = os.path.join(out_dir, texture)
+    if texture_is_mostly_transparent(path, threshold=200, max_ratio=0.5):
+        return texture
     color = texture_average_color(path, "", alpha_min=32)
     if not color:
         return texture          # nicht dekodierbar -> unveraendert lassen
@@ -479,12 +560,210 @@ def _usable_head_texture(texture: Optional[str], out_dir: str,
     return texture
 
 
+def panel_average_color(path: str, part_name: str, fallback: str,
+                        alpha_min: int = 64) -> str:
+    """Durchschnittsfarbe **nur der Panels** eines Koerperteils (Hex).
+
+    Ein Kleidungs-Atlas enthaelt alle Koerperflaechen plus ein weisses
+    Template mit Beschriftungen. Der Durchschnitt ueber das ganze Bild ist
+    deshalb grau ("alles grau/weiss") - erst der Durchschnitt ueber die
+    Panels des jeweiligen Teils liefert die echte Kleidungsfarbe
+    (schwarzes Shirt, blaue Jeans, ...). Nur deckende Pixel zaehlen.
+    """
+    regions = avatar_uv.part_regions(part_name)
+    if not regions:
+        return texture_average_color(path, fallback, alpha_min)
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return fallback
+    decoded = png_pixels(data)
+    if not decoded:
+        return texture_average_color(path, fallback, alpha_min)
+    width, height, rgba = decoded
+    total = [0, 0, 0]
+    count = 0
+    for (x0, y0, x1, y1) in regions.values():
+        x0, x1 = max(0, int(x0)), min(width, int(x1))
+        y0, y1 = max(0, int(y0)), min(height, int(y1))
+        if x1 <= x0 or y1 <= y0:
+            continue
+        step = max(1, int(((x1 - x0) * (y1 - y0)) / 900))
+        for y in range(y0, y1, step):
+            row = y * width
+            for x in range(x0, x1, step):
+                i = (row + x) * 4
+                if rgba[i + 3] < alpha_min:
+                    continue
+                total[0] += rgba[i]
+                total[1] += rgba[i + 1]
+                total[2] += rgba[i + 2]
+                count += 1
+    if not count:
+        return fallback
+    return "#%02x%02x%02x" % (total[0] // count, total[1] // count,
+                              total[2] // count)
+
+
 def _texture_color_hint(texture: Optional[str], body_color: str,
-                        out_dir: str) -> str:
-    """Farbe fuer ein Teil: Durchschnitt der Textur, sonst Koerperfarbe."""
+                        out_dir: str, part_name: str = "") -> str:
+    """Farbe fuer ein Teil: Durchschnitt der Textur, sonst Koerperfarbe.
+
+    Bei Kleidungs-Atlanten (Shirt/Pants) wird nur der Bereich der eigenen
+    Panels ausgewertet, sonst zieht das weisse Template die Farbe nach
+    grau.
+    """
     if not texture:
         return body_color
-    return texture_average_color(os.path.join(out_dir, texture), body_color)
+    path = os.path.join(out_dir, texture)
+    if part_name and avatar_uv.has_clothing_layout(part_name):
+        return panel_average_color(path, part_name, body_color)
+    return texture_average_color(path, body_color)
+
+
+def texture_is_mostly_transparent(path: str, threshold: int = 200,
+                                  max_ratio: float = 0.5) -> bool:
+    """True, wenn der Grossteil der Textur durchsichtig ist.
+
+    Gesichts-/Dekal-Texturen bestehen fast nur aus transparenten Pixeln mit
+    Augen, Mund und Brauen. Solche Bilder sind *keine* Zusatz-Maps
+    (Roughness/Normal), auch wenn ihre Durchschnittsfarbe schwarz ist.
+    """
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return False
+    decoded = png_pixels(data)
+    if not decoded:
+        return False
+    width, height, rgba = decoded
+    total = width * height
+    if total <= 0:
+        return False
+    step = max(1, total // 8192)
+    opaque = 0
+    seen = 0
+    for index in range(0, total, step):
+        seen += 1
+        if rgba[index * 4 + 3] >= threshold:
+            opaque += 1
+    return seen > 0 and (opaque / seen) < max_ratio
+
+
+def texture_visible_ratio(path: str, min_alpha: int = 40) -> float:
+    """Anteil der Pixel mit sichtbarer Deckkraft (0..1)."""
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return 0.0
+    decoded = png_pixels(data)
+    if not decoded:
+        return 1.0
+    width, height, rgba = decoded
+    total = width * height
+    if total <= 0:
+        return 0.0
+    step = max(1, total // 8192)
+    seen = visible = 0
+    for index in range(0, total, step):
+        seen += 1
+        if rgba[index * 4 + 3] >= min_alpha:
+            visible += 1
+    return visible / seen if seen else 0.0
+
+
+def texture_mean_alpha(path: str) -> float:
+    """Mittlere Deckkraft einer Textur (0..1).
+
+    Shirt-Grafiken sind deckend (1.0). Ein "Belly"-Overlay mit 10 %
+    Deckkraft wuerde als Dekal nur als milchige Flaeche vor der Brust
+    haengen - solche Grafiken werden uebersprungen.
+    """
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return 1.0
+    decoded = png_pixels(data)
+    if not decoded:
+        return 1.0
+    width, height, rgba = decoded
+    total = width * height
+    if total <= 0:
+        return 1.0
+    step = max(1, total // 8192)
+    acc = 0.0
+    seen = 0
+    for index in range(0, total, step):
+        acc += rgba[index * 4 + 3] / 255.0
+        seen += 1
+    return acc / seen if seen else 1.0
+
+
+def _looks_like_pair(mesh) -> bool:
+    """Spricht das Mesh fuer ein Paar (Handschuhe, Stiefel)?
+
+    Ein Paar ist deutlich breiter als hoch, flach und liegt symmetrisch um
+    x = 0 (beide Seiten in einem Mesh).
+    """
+    size = mesh.size()
+    if max(size) <= 0:
+        return False
+    lo, hi = mesh.bbox()
+    if not (lo[0] < -0.2 * size[0] and hi[0] > 0.2 * size[0]):
+        return False
+    return size[0] > 1.6 * max(size[1], size[2]) and size[0] > 1.2
+
+
+def _place_accessory_variants(mesh_part: Dict[str, Any], metrics,
+                              warnings: List[str]) -> List[Any]:
+    """Accessoire platzieren - ein oder zwei Teile.
+
+    * Ein Paar (z. B. Handschuhe, beide Seiten in einem Mesh) wird an
+      x = 0 getrennt und je Haelfte an die passende Hand gesetzt.
+    * Alles andere geht durch ``avatar_rig.place_accessory``.
+
+    Wichtig fuer die Groesse: die Part-Groesse ``size`` aus dem RBXM ist
+    bei SpecialMesh-Objekten immer 1x1x1 - sie beschreibt *nicht* die
+    sichtbare Groesse. Solche Meshes sind bereits in Studs modelliert und
+    werden unveraendert uebernommen (nur mit ``mesh_scale`` skaliert).
+    """
+    mesh = mesh_part["mesh"]
+    scale = mesh_part.get("rbxm_scale")
+    if (isinstance(scale, (list, tuple)) and len(scale) == 3
+            and all(float(v) > 0 for v in scale)
+            and any(abs(float(v) - 1.0) > 1e-3 for v in scale)):
+        mesh = mesh.transform(tuple(float(v) for v in scale))
+
+    type_id = int(mesh_part["type_id"])
+    if _looks_like_pair(mesh):
+        left, right = roblox_mesh.split_mesh_x(mesh)
+        variants = []
+        for side, half in ((-1.0, left), (1.0, right)):
+            if half.is_empty:
+                continue
+            variants.append(avatar_rig.place_hand_accessory(half, metrics, side))
+        if variants:
+            return variants
+
+    # Kein size_hint: die Part-Groesse im Accessoire-RBXM ist 1x1x1 (der
+    # Roblox-Accessoire-Pipe skaliert das Handle erst zur Laufzeit). Wer sie
+    # als Groesse nimmt, schrumpft jeden Hut und jeden Rock auf 1 Stud.
+    placed, note = avatar_rig.place_accessory(mesh, type_id, metrics)
+    hint = mesh_part.get("rbxm_size")
+    if (hint and len(hint) == 3 and max(float(v) for v in hint) > SANITY_MAX_AXIS):
+        warnings.append(
+            f"Accessoire '{mesh_part['label'] or mesh_part['type_name']}': "
+            f"RBXM-Groesse {fmt_de(max(float(v) for v in hint))} Studs ist "
+            f"unplausibel - auf {fmt_de(max(placed.size()))} Studs begrenzt "
+            "(Mesh-Einheiten sind nicht immer Studs).")
+    placed = sanity_check(
+        placed, avatar_rig.accessory_target_size(type_id, metrics),
+        mesh_part["label"] or mesh_part["type_name"], warnings)
+    return [(placed, note)]
 
 
 def _add_decals(parts_dir: str, textures: List[Dict[str, Any]],
@@ -502,6 +781,12 @@ def _add_decals(parts_dir: str, textures: List[Dict[str, Any]],
     torso = next((p for p in body_parts if p.name == "torso"), None)
     if torso is not None:
         tshirt = next((tex for tex in textures if int(tex["type_id"]) == 2), None)
+        if tshirt is not None and texture_mean_alpha(
+                os.path.join(os.path.dirname(parts_dir), tshirt["file"])) < 0.5:
+            # Fast vollstaendig durchsichtige Grafik (z. B. ein kaum
+            # sichtbares "Belly"-Overlay) - als Dekal wuerde sie nur als
+            # weisse Flaeche vor der Brust haengen.
+            tshirt = None
         if tshirt is not None:
             lo, hi = torso.mesh.bbox()
             width, depth = hi[0] - lo[0], hi[2] - lo[2]
@@ -693,6 +978,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 "mesh": mesh,
                 "rbxm_size": rbxm_size,
                 "rbxm_position": rbxm_position,
+                "rbxm_scale": None,
+                "class": None,
                 "texture_file": texture_file,
                 "head_info": head_info,
             })
@@ -756,6 +1043,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 add_mesh(raw, parent_asset_id, mesh_id, type_id, type_name,
                          entry_label, entry.get("size"), texture_file,
                          entry.get("position"))
+                mesh_parts[-1]["rbxm_scale"] = entry.get("mesh_scale")
+                mesh_parts[-1]["class"] = entry.get("class")
 
             if (len(mesh_parts) == parts_before and len(skipped) == skips_before
                     and len(textures) == textures_before
@@ -859,55 +1148,27 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
 
     body_replacements: Dict[str, Dict[str, Any]] = {}
     for rig_name, group in body_groups.items():
-        if len(group) == 1:
-            body_replacements[rig_name] = dict(group[0])
-            continue
-        segments = _pick_r15_segments(group, R15_SEGMENT_NAMES.get(rig_name, []))
-        mergeable = segments if len(segments) >= 2 else group
-        if len(mergeable) <= 6 and all(
-                mp.get("rbxm_size") and mp.get("rbxm_position")
-                for mp in mergeable):
-            merged = roblox_mesh.merge_meshes(
-                [(mp["mesh"], mp["rbxm_size"], mp["rbxm_position"])
-                 for mp in mergeable],
-                source_version="merged-rbxm")
-            pseudo = dict(mergeable[0])
-            pseudo["mesh"] = merged
-            pseudo["merged"] = True
-            pseudo["texture_file"] = next(
-                (mp["texture_file"] for mp in mergeable
-                 if mp.get("texture_file")), None)
-            pseudo["note_suffix"] = (
-                f", {len(mergeable)} R15-Segmente per RBXM-Position "
-                f"zusammengefuehrt")
-            body_replacements[rig_name] = pseudo
-        else:
-            largest = max(group, key=lambda mp: max(mp["mesh"].size()))
-            body_replacements[rig_name] = dict(largest)
-            warnings.append(
-                f"Koerperteil '{rig_name}': {len(group)} Meshes gefunden, "
-                f"aber nicht zusammenfuehrbar (fehlende RBXM-Positionen) - "
-                f"nur das groesste Segment verwendet "
-                f"(Asset {largest['asset_id']}).")
+        body_replacements[rig_name] = _combine_segments(rig_name, group, warnings)
 
-    # Gliedmassen aus T-Pose aufrichten (R15-Bundles liefern Arme oft
-    # waagerecht) und die echten Teilmaße fuer den Rig bestimmen. Ohne
-    # diesen Schritt werden Arme/Beine in feste R6-Quader gepresst - genau
-    # daher kamen die "verschobenen" bzw. verrenkten Koerperteile.
+    # Teilmasse fuer den Rig. Sie kommen aus den RBXM-Bundles und sind dort
+    # **bereits skalierte** Roblox-Part-Groessen (Studs) - sie duerfen nicht
+    # noch einmal mit den Avatar-Scales multipliziert werden.
     part_sizes: Dict[str, Any] = {}
     for rig_name, replacement in body_replacements.items():
-        rotated = False
         if rig_name.endswith("arm") or rig_name.endswith("bein"):
-            straightened, note = avatar_rig.upright_limb(replacement["mesh"], rig_name)
-            if note:
-                replacement["mesh"] = straightened
-                replacement["upright_note"] = note
-                rotated = True
+            # Einzelnes, waagerecht modelliertes Glied (R6-Pakete):
+            # aufrichten, damit es senkrecht haengt.
+            if not replacement.get("stacked"):
+                straightened, note = avatar_rig.upright_limb(
+                    replacement["mesh"], rig_name)
+                if note:
+                    replacement["mesh"] = straightened
+                    replacement["upright_note"] = note
+                    replacement["part_size"] = (replacement["part_size"][1],
+                                                replacement["part_size"][0],
+                                                replacement["part_size"][2])
         size = _replacement_size(replacement, warnings, rig_name)
         if size is not None:
-            if rotated and not replacement.get("merged"):
-                # Auch die Part-Groesse aus dem RBXM lag in T-Pose.
-                size = (size[1], size[0], size[2])
             part_sizes[rig_name] = size
 
     # Kopf: echtes Head-/DynamicHead-Mesh suchen (DynamicHead hat Vorrang).
@@ -957,11 +1218,14 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                         "(Roughness/Normal) - der Kopf nutzt die "
                         "Koerperfarbe des Avatars."
                     )
-                farbe = _texture_color_hint(kopf_textur, part.color, out_dir)
+                # Grundfarbe bleibt die Hautfarbe: durchsichtige Stellen
+                # der Gesichts-Textur (Stirn, Wangen) zeigen sie.
                 parts.append({
                     "name": "kopf_mesh",
                     "obj": f"parts/{fname}",
-                    "color": farbe,
+                    "color": part.color,
+                    "tint": _texture_color_hint(kopf_textur, part.color,
+                                                out_dir, "kopf"),
                     "kind": "body",
                     "smooth": True,
                     "texture": (kopf_textur
@@ -997,7 +1261,11 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             parts.append({
                 "name": part.name,
                 "obj": f"parts/{fname}",
-                "color": _texture_color_hint(texture, part.color, out_dir),
+                # Grundfarbe = Koerperfarbe (Haut unter durchsichtigen
+                # Atlas-Stellen), Tint = echte Kleidungsfarbe der Panels.
+                "color": part.color,
+                "tint": _texture_color_hint(texture, part.color, out_dir,
+                                            part.name),
                 "kind": "body",
                 "smooth": True,
                 "texture": texture,
@@ -1018,7 +1286,9 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         parts.append({
             "name": part.name,
             "obj": f"parts/{fname}",
-            "color": _texture_color_hint(texture, part.color, out_dir),
+            "color": part.color,
+            "tint": _texture_color_hint(texture, part.color, out_dir,
+                                        part.name),
             "kind": "body",
             "smooth": part.name in SMOOTH_BODY_PARTS,
             "texture": texture,
@@ -1047,7 +1317,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         )
 
     # Accessoires platzieren
-    consumed = {id(mp) for mp in body_replacements.values()}
+    consumed = {source for replacement in body_replacements.values()
+                for source in replacement.get("source_ids", [])}
     if head_mesh is not None:
         consumed.add(id(head_mesh))
     used_filenames = set()
@@ -1059,34 +1330,41 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             continue  # Duplikat (Warnung steht oben)
         if int(mesh_part["type_id"]) == HEAD_ASSET_TYPE:
             continue  # nur ein Kopf wird verwendet
-        placed, note = avatar_rig.place_accessory(
-            mesh_part["mesh"], int(mesh_part["type_id"]), metrics,
-            size_hint=mesh_part.get("rbxm_size"))
-        placed = sanity_check(
-            placed, avatar_rig.accessory_target_size(int(mesh_part["type_id"]), metrics),
-            mesh_part["label"] or mesh_part["type_name"], warnings)
+
+        placed_variants = _place_accessory_variants(mesh_part, metrics, warnings)
         safe = "".join(ch if ch.isalnum() or ch in "-_" else "_"
                        for ch in (mesh_part["label"] or mesh_part["type_name"]))[:28]
         file_id = mesh_part.get("mesh_asset_id") or mesh_part["asset_id"]
-        fname = f"accessoire_{file_id}_{safe or 'teil'}.obj"
-        counter = 2
-        while fname in used_filenames:
-            fname = f"accessoire_{file_id}_{safe or 'teil'}_{counter}.obj"
-            counter += 1
-        used_filenames.add(fname)
-        placed.write_obj(os.path.join(parts_dir, fname))
-        parts.append({
-            "name": f"{safe or mesh_part['type_name']} ({mesh_part['asset_id']})",
-            "obj": f"parts/{fname}",
-            "color": "#dff4ff",
-            "kind": "accessory",
-            "smooth": True,
-            "asset_id": mesh_part["asset_id"],
-            "asset_type": mesh_part["type_name"],
-            "note": note,
-            "texture": mesh_part.get("texture_file"),
-        })
-        accessory_assets += 1
+        # Accessoires faerben sich nach ihrer Textur (schwarze Haare bleiben
+        # schwarz). Vorher waren alle hart auf hellblau gesetzt - daher
+        # "der Rest hat gar keine passende Farbe".
+        farbe = _texture_color_hint(mesh_part.get("texture_file"), "#c9d3dc",
+                                   out_dir)
+        for index, (placed, note) in enumerate(placed_variants):
+            fname = f"accessoire_{file_id}_{safe or 'teil'}.obj"
+            if index:
+                fname = (f"accessoire_{file_id}_{safe or 'teil'}"
+                         f"_{index + 1}.obj")
+            counter = 2
+            while fname in used_filenames:
+                fname = (f"accessoire_{file_id}_{safe or 'teil'}"
+                         f"_{index + counter + 1}.obj")
+                counter += 1
+            used_filenames.add(fname)
+            placed.write_obj(os.path.join(parts_dir, fname))
+            parts.append({
+                "name": (f"{safe or mesh_part['type_name']} "
+                         f"({mesh_part['asset_id']})"),
+                "obj": f"parts/{fname}",
+                "color": farbe,
+                "kind": "accessory",
+                "smooth": True,
+                "asset_id": mesh_part["asset_id"],
+                "asset_type": mesh_part["type_name"],
+                "note": note,
+                "texture": mesh_part.get("texture_file"),
+            })
+            accessory_assets += 1
 
     # ---- Manifest ---------------------------------------------------------
     bounds_lo = [1e9, 1e9, 1e9]

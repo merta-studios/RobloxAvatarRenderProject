@@ -170,28 +170,35 @@ class BodyMetrics:
 
 def part_box_size(part_name: str, part_sizes: Optional[Dict[str, Sequence[float]]],
                   scales: Dict[str, Any]) -> Tuple[float, float, float]:
-    """Groesse eines Koerperteil-Quad ers in Studs (inkl. Avatar-Scales)."""
+    """Groesse eines Koerperteils in Studs.
+
+    Wichtig: Groessen aus den RBXM-Bundles (``part_sizes``) sind bereits
+    **fertig skaliert** - Roblox liefert die getragenen Koerperteile in der
+    Groesse, die sich aus den Avatar-Scales ergibt. Wer die Scales darauf
+    noch einmal anwendet, quetscht den Koerper (genau das war der Fall:
+    Torso 1,33 statt 1,77 Studs breit, Avatar nur 4,7 statt 5,5 hoch).
+    Die Scales gelten deshalb nur fuer nachgebaute Teile (z. B. Beine
+    ohne eigenes Bundle).
+    """
+    if part_sizes:
+        given = part_sizes.get(part_name)
+        if given and len(given) == 3 and all(float(v) > 0.05 for v in given):
+            return tuple(float(v) for v in given)
     w = _clamp(scales.get("width"), 0.75, 1.30)
     h = _clamp(scales.get("height"), 0.75, 1.30)
     d = _clamp(scales.get("depth"), 0.75, 1.30)
     base = DEFAULT_PART_SIZES.get(part_name, (1.0, 2.0, 1.0))
-    size = base
-    if part_sizes:
-        given = part_sizes.get(part_name)
-        if given and len(given) == 3 and all(float(v) > 0.05 for v in given):
-            size = tuple(float(v) for v in given)
-    return (size[0] * w, size[1] * h, size[2] * d)
+    return (base[0] * w, base[1] * h, base[2] * d)
 
 
 def head_diameter(scales: Dict[str, Any],
                   part_sizes: Optional[Dict[str, Sequence[float]]] = None) -> float:
-    hs = _clamp(scales.get("head"), 0.75, 1.40)
-    diameter = DEFAULT_HEAD_DIAMETER
+    """Kopfdurchmesser in Studs (Mesh-Groesse oder Standard * Head-Scale)."""
     if part_sizes:
         given = part_sizes.get("kopf")
         if given and len(given) == 3 and all(float(v) > 0.05 for v in given):
-            diameter = max(float(v) for v in given)
-    return diameter * hs
+            return max(float(v) for v in given)
+    return DEFAULT_HEAD_DIAMETER * _clamp(scales.get("head"), 0.75, 1.40)
 
 
 def harmonize_part_sizes(sizes: Dict[str, Sequence[float]]) -> List[str]:
@@ -239,6 +246,30 @@ def harmonize_part_sizes(sizes: Dict[str, Sequence[float]]) -> List[str]:
     return notes
 
 
+def resolve_part_sizes(part_sizes: Optional[Dict[str, Sequence[float]]],
+                       scales: Dict[str, Any]) -> Dict[str, Tuple[float, float, float]]:
+    """Masse aller Rig-Teile bestimmen (echte Bundle-Masse haben Vorrang).
+
+    Fehlt ein Teil (z. B. Beine, weil das getragene Paket nur Torso und
+    Arme mitbringt), wird es aus dem Torso abgeleitet statt aus festen
+    R6-Quadern: R15-Beine sind halb so breit wie der Torso und etwa so
+    hoch, Arme etwas kuerzer und etwas schmaler.
+    """
+    torso = part_box_size("torso", part_sizes, scales)
+    sizes: Dict[str, Tuple[float, float, float]] = {"torso": torso}
+
+    def derived(name: str, width: float, height: float, depth: float):
+        given = part_sizes.get(name) if part_sizes else None
+        if given and len(given) == 3 and all(float(v) > 0.05 for v in given):
+            return tuple(float(v) for v in given)
+        return (torso[0] * width, torso[1] * height, torso[2] * depth)
+
+    for side in ("rechts", "links"):
+        sizes[f"{side}_bein"] = derived(f"{side}_bein", 0.50, 0.97, 1.00)
+        sizes[f"{side}_arm"] = derived(f"{side}_arm", 0.50, 0.93, 0.88)
+    return sizes
+
+
 def build_body(body_colors: Dict[str, Any], scales: Dict[str, Any],
                part_sizes: Optional[Dict[str, Sequence[float]]] = None
                ) -> Tuple[List[Part], BodyMetrics]:
@@ -263,9 +294,7 @@ def build_body(body_colors: Dict[str, Any], scales: Dict[str, Any],
         "right_leg": brick_color_hex(body_colors.get("rightLegColorId", 9)),
     }
 
-    sizes = {name: part_box_size(name, part_sizes, scales)
-             for name in ("torso", "rechts_arm", "links_arm",
-                          "rechts_bein", "links_bein")}
+    sizes = resolve_part_sizes(part_sizes, scales)
     proportion_notes = harmonize_part_sizes(sizes)
 
     torso_w, torso_h, torso_d = sizes["torso"]
@@ -297,27 +326,30 @@ def build_body(body_colors: Dict[str, Any], scales: Dict[str, Any],
                      (0.0, torso_center_y, 0.0), colors["torso"]))
     shoulder_y = torso_bottom + torso_h
 
-    # --- Arme: oben an der Schulter, haengen seitlich herab --------------
+    # --- Arme: haengen seitlich an der Schulter herab --------------------
     arm_x = torso_w / 2.0 + arm_w / 2.0 - JOINT_OVERLAP
-    arm_top = shoulder_y + JOINT_OVERLAP
+    # Die Schulter liegt etwas unter der Torso-Oberkante (R15-Joint).
+    arm_top = shoulder_y - 0.06 * torso_h
     arm_center_y = arm_top - arm_h / 2.0
+    arm_bottom = arm_top - arm_h
     parts.append(box("rechts_arm", (arm_w, arm_h, arm_d),
                      (arm_x, arm_center_y, 0.0), colors["right_arm"]))
     parts.append(box("links_arm", (arm_w, arm_h, arm_d),
                      (-arm_x, arm_center_y, 0.0), colors["left_arm"]))
 
     # --- Hals: kurz, verschwindet in Torso und Kopf ----------------------
-    neck_h = min(0.30 * (head_r * 2.0), 0.35 * torso_h)
-    neck_w = max(0.55, min(torso_w * 0.42, head_r * 0.85))
-    neck_d = max(0.5, min(torso_d * 0.55, head_r * 0.85))
-    neck_bottom = shoulder_y - 0.05 - JOINT_OVERLAP
+    head_d = head_r * 2.0
+    neck_h = max(0.16, min(0.34 * head_d, 0.30 * torso_h))
+    neck_w = max(0.30, min(torso_w * 0.42, head_d * 0.58))
+    neck_d = max(0.30, min(torso_d * 0.55, head_d * 0.58))
+    neck_bottom = shoulder_y - neck_h * 0.45
     neck_center_y = neck_bottom + neck_h / 2.0
     parts.append(Part("hals", make_box(neck_w, neck_h, neck_d,
                                       (0.0, neck_center_y, 0.0)),
                       colors["head"], "body"))
 
     # --- Kopf: sitzt auf dem Hals, leicht nach vorne ---------------------
-    head_center_y = neck_bottom + neck_h + head_r * 0.80
+    head_center_y = neck_bottom + neck_h + head_r * 0.86
     parts.append(Part("kopf", make_sphere(head_r, 32, 22,
                                          (0.0, head_center_y, -0.02)),
                       colors["head"], "body"))
@@ -328,16 +360,16 @@ def build_body(body_colors: Dict[str, Any], scales: Dict[str, Any],
         torso_depth=torso_d,
         torso_height=torso_h,
         torso_bottom=torso_bottom,
-        shoulder_y=shoulder_y,
+        shoulder_y=arm_top,
         neck_y=neck_bottom + neck_h * 0.5,
         head_center_y=head_center_y,
         head_radius=head_r,
-        hand_y=arm_center_y - arm_h / 2.0 + 0.18 * arm_h,
+        hand_y=arm_bottom + 0.22 * arm_h,
         hand_x=arm_x,
-        waist_y=torso_bottom + torso_h * 0.22,
+        waist_y=torso_bottom + torso_h * 0.24,
         arm_height=arm_h,
         arm_width=arm_w,
-        arm_bottom=arm_center_y - arm_h / 2.0,
+        arm_bottom=arm_bottom,
         leg_height=leg_h,
         leg_width=leg_w,
         parts=dict(sizes),
@@ -412,8 +444,11 @@ def _shell_box(anchor: str, metrics: BodyMetrics):
     """
     cx = 0.0
     if anchor == "torso_shell":
+        # Layered-Jacken haben Aermel: die Huelle muss auch die Arme
+        # umfassen. Nur um den Torso gezogen, wird der Aermel-Stoff
+        # seitlich herausgequetscht und sieht wie lose Schulterplatten aus.
         center = (cx, metrics.torso_center_y, 0.0)
-        size = (metrics.torso_width * 1.08,
+        size = (metrics.torso_width + metrics.arm_width * 1.95,
                 metrics.torso_height * 1.02,
                 metrics.torso_depth * 1.45)
     elif anchor == "hip_shell":
@@ -479,9 +514,22 @@ def place_accessory(mesh: MeshData, asset_type_id: int,
         scale_note = ("RBXM-Groesse " + "x".join(_de(v, 2) for v in size_hint)
                       + " Studs, form-erhaltend skaliert")
     else:
-        scale = target / max_dim
+        # Kein brauchbares Size im RBXM (SpecialMesh = 1x1x1): dann gilt
+        # die echte Mesh-Groesse (Studs), begrenzt auf die Anker-Groesse.
+        # Ohne Begrenzung haengen z. B. lange Haare bis zum Boden, mit zu
+        # kleiner Begrenzung verschwinden sie im Kopf.
+        max_allowed = _anchor_max_size(layout["anchor"], metrics)
+        # Breite/Tiefe begrenzen (sonst wird der Koerper verdeckt), Hoehe
+        # darf bei Haaren/Roecken deutlich groesser sein.
+        horizontal = max(size[0], size[2]) or 1.0
+        height_cap = max_allowed * (2.4 if layout["anchor"] == "head_top"
+                                    else 1.7)
+        scale = min(1.0, max_allowed / horizontal)
+        if size[1] * scale > height_cap:
+            scale = height_cap / size[1]
         placed = mesh.transform(scale)
-        scale_note = f"skaliert x{scale:.2f}"
+        scale_note = ("echte Groesse (Studs)" if abs(scale - 1.0) < 1e-3
+                      else f"auf Anker-Groesse skaliert x{scale:.2f}")
     c = placed.center()
     placed = placed.transform(1.0, (-c[0], -c[1], -c[2]))  # um Ursprung zentrieren
 
@@ -495,8 +543,13 @@ def place_accessory(mesh: MeshData, asset_type_id: int,
     # `sink` bestimmt, wie weit es in den Koerper eintaucht (Hut sitzt auf
     # dem Kopf, Haare umschliessen die obere Kopfhaelfte).
     if anchor == "head_top":
-        bottom = metrics.head_center_y + metrics.head_radius * sink
-        offset = (0.0, bottom + hy - ao[1], 0.0)
+        if asset_type_id == 41:
+            # Haare umschliessen den Kopf: Mitte auf Kopfmitte, damit
+            # Stirn und Gesicht frei bleiben.
+            offset = (0.0, metrics.head_center_y - ao[1], 0.0)
+        else:
+            bottom = metrics.head_center_y + metrics.head_radius * sink
+            offset = (0.0, bottom + hy - ao[1], 0.0)
     elif anchor == "head_center":
         offset = (0.0, 0.0, 0.0)
     elif anchor == "face_front":
@@ -510,7 +563,10 @@ def place_accessory(mesh: MeshData, asset_type_id: int,
     elif anchor == "back":
         offset = (0.0, 0.0, hz * sink)
     elif anchor == "waist":
-        offset = (0.0, 0.0, 0.0)
+        # Roecke/Hueft-Accessoires haengen am Becken: Oberkante auf
+        # Taillenhoehe, der Stoff faellt nach unten. Mittig gesetzt wuerde
+        # der Rock bis zur Brust reichen (sieht wie ein Umhang aus).
+        offset = (0.0, metrics.waist_y + 0.05 - hy - ao[1], 0.0)
     elif anchor == "right_hand":
         offset = (hx * sink, 0.0, 0.0)
     else:
@@ -520,6 +576,54 @@ def place_accessory(mesh: MeshData, asset_type_id: int,
 
     note = (f"{layout['label']}: {scale_note} (Originalgroesse "
             + "x".join(_de(v, 1) for v in size) + f" Studs), Anker '{anchor}'")
+    return placed, note
+
+
+def _anchor_max_size(anchor: str, metrics: BodyMetrics) -> float:
+    """Groesste sinnvolle Ausdehnung eines Accessoires an diesem Anker."""
+    head_d = metrics.head_radius * 2.0
+    if anchor == "head_top":
+        return head_d * 1.25
+    if anchor == "head_center":
+        return head_d * 1.6
+    if anchor == "face_front":
+        return head_d * 1.05
+    if anchor == "neck":
+        return head_d * 0.95
+    if anchor == "shoulders":
+        return metrics.torso_width * 1.7
+    if anchor == "chest_front":
+        return metrics.torso_width * 1.5
+    if anchor == "back":
+        return metrics.torso_width * 1.8
+    if anchor == "waist":
+        return metrics.torso_width * 2.2
+    if anchor == "right_hand":
+        return head_d * 0.7
+    return metrics.torso_width * 1.6
+
+
+def place_hand_accessory(mesh: MeshData, metrics: BodyMetrics,
+                         side: float) -> Tuple[MeshData, str]:
+    """Setzt ein Accessoire mittig auf die linke (``side<0``) oder rechte
+    (``side>0``) Hand.
+
+    Handschuhe/Stulpen liegen in Roblox oft als *ein* Mesh mit beiden
+    Seiten vor. Wird das Ganze an einen Anker gesetzt, schwebt es quer
+    durch den Koerper - deshalb wird es vorher getrennt und je Haelfte
+    zentriert auf die Hand gesetzt.
+    """
+    center = mesh.center()
+    placed = mesh.transform(1.0, (-center[0], -center[1], -center[2]))
+    size = placed.size()
+    # Etwas unter die Handmitte, damit die Stulpe ueber das Handgelenk greift
+    anchor = (side * metrics.hand_x,
+              metrics.hand_y + size[1] * 0.12,
+              0.0)
+    placed = placed.transform(1.0, anchor)
+    note = (f"Paar-Accessoire: Haelfte als Handschuh an der "
+            f"{'linken' if side < 0 else 'rechten'} Hand "
+            f"({_de(size[0])}x{_de(size[1])}x{_de(size[2])} Studs)")
     return placed, note
 
 

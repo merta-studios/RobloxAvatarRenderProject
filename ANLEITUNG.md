@@ -169,16 +169,23 @@ die UVs:
 
 Wird eine Textur fälschlich auf einen ganzen Körper gelegt, erscheint der
 komplette Atlas als Raster auf Brust und Beinen – genau das war der alte
-Render. Zusätzlich speichert das Manifest als `color` die
-Durchschnittsfarbe der Textur, damit das Glas in der Kleidungsfarbe und
-nicht in Hautfarbe leuchtet.
+Render. Damit das Glas in der Kleidungsfarbe leuchtet, speichert das
+Manifest zwei Farben: `color` ist die **Körperfarbe** (Haut unter
+durchsichtigen Atlas-Stellen), `tint` der Durchschnitt **nur der eigenen
+Atlas-Panels**. Ein Durchschnitt über das ganze Bild ergibt immer Grau,
+weil das weiße Template mitgezählt wird – daher wirkte vorher alles
+grau/weiß.
 
 **Texturen im Glas.** Reines Glas (Transmission 1,0) lässt die Umgebung
 durch und zeigt von einer Textur fast nichts – genau deshalb wirkte der
 Avatar grau/blau. Deshalb wird das Material aus zwei Shadern gemischt:
 einem Glas-Shader (Transmission, Coat, IOR) für den Glaseindruck und einem
 deckenden Shader mit der Textur. `--texture-strength` steuert den Anteil
-(Standard `0.85` = 85 % Textur, `0` = reines Glas, `1` = Textur pur).
+(Standard `0.92` = 92 % Textur, `0` = reines Glas, `1` = Textur pur).
+Unbekleidete Teile (Hals, Haut) sind mattes Glas in Körperfarbe statt
+unsichtbarem Glasklotz. Accessoires werden nach ihrer eigenen Textur
+eingefärbt (schwarze Haare bleiben schwarz); ohne Textur bleiben sie
+metallisch.
 Dunkle Kleidung wird über einen Gamma-Knoten aufgehellt und die Textilien
 sind matt (kein Lack), damit Muster und Farben klar lesbar bleiben.
 Transparente Bereiche des Kleidungs-Atlasses werden mit der Körperfarbe
@@ -188,13 +195,37 @@ Texturen ganz.
 **Körperteile.** Bringt der Avatar echte R15-Körper-Meshes mit (Bundles),
 werden deren RBXM-Maße für Torso, Arme, Beine und Kopf verwendet und die
 Teile lückenlos gestapelt (Beine → Torso → Hals → Kopf, Arme an den
-Schultern). Liegen Arme in T-Pose vor, werden sie automatisch um 90° nach
-unten gedreht. Unplausible Größen (Mesh-Einheiten sind nicht immer Studs)
-werden begrenzt; das steht als Hinweis im Manifest. Anschließend werden die
-Proportionen harmonisiert: beide Beine zusammen füllen höchstens die
-Torso-Breite, Arme bleiben schmaler als der halbe Torso und enden etwa auf
-Hüfthöhe. Alle Korrekturen erscheinen als `Proportionen: …` unter
+Schultern). Wichtig: diese Maße sind **bereits skaliert** (Roblox liefert
+die Teile in der Größe, die sich aus den Avatar-Scales ergibt) – sie werden
+deshalb nicht ein zweites Mal mit den Scales multipliziert, sonst schrumpft
+der ganze Avatar (1,33 statt 1,77 Studs Torso-Breite).
+
+Mehrsegmentige Glieder (Oberarm/Unterarm/Hand, Oberschenkel/Unterschenkel/
+Fuß) werden senkrecht **gestapelt** und dabei auf die Höhe der Bind-Pose
+gestaucht. Die X-Positionen aus dem RBXM werden bewusst ignoriert: sie
+beschreiben bei vielen Paketen eine A-Pose (Arme schräg nach außen), und
+einmal in die senkrechte Rig-Box gepresst sehen die Arme verrenkt und
+zerknittert aus.
+
+Fehlt ein Teil im Bundle (z. B. Beine bei einem Paket, das nur Torso und
+Arme mitbringt), wird es aus dem Torso abgeleitet (R15-Proportionen) statt
+aus festen R6-Quadern. Unplausible Größen (Mesh-Einheiten sind nicht immer
+Studs) werden begrenzt; das steht als Hinweis im Manifest. Anschließend
+werden die Proportionen harmonisiert: beide Beine zusammen füllen höchstens
+die Torso-Breite, Arme bleiben schmaler als der halbe Torso und enden etwa
+auf Hüfthöhe. Alle Korrekturen erscheinen als `Proportionen: …` unter
 *Hinweise* im Manifest/Summary.
+
+**Accessoires.** Meshes von Accessoires sind in Studs modelliert (die
+Part-Größe im RBXM ist bei `SpecialMesh` immer 1×1×1 und sagt nichts über
+die sichtbare Größe). Sie werden deshalb in echter Größe platziert und nur
+so weit verkleinert, dass sie an ihren Anker passen (Hut ≤ 1,25
+Kopfdurchmesser in der Breite, Rock/Hüfte ≤ 2,2 Torso-Breiten). Layered-
+Kleidung (Jacke, T-Shirt, Hose …) wird als Hülle über den Körper gezogen –
+die Jacke umfasst auch die Ärmel, sonst wird der Ärmelstoff zu losen
+Schulterplatten gequetscht. Paar-Accessoires (Handschuhe, Stulpen, die als
+*ein* Mesh mit beiden Seiten kommen) werden an x = 0 getrennt und je Hälfte
+auf die passende Hand gesetzt.
 
 ---
 

@@ -382,6 +382,9 @@ def _assemble(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                      and rec["Parent"].get("name") else rec["name"]),
             "mesh_id": mesh_id,
             "texture_id": texture_id,
+            # SpecialMesh skaliert sein Mesh mit "Scale" (die Part-Groesse
+            # 1x1x1 sagt dort nichts ueber die sichtbare Groesse aus).
+            "mesh_scale": rec.get("scale"),
             "size": effective_size(rec),
             "position": effective_position(rec),
         }
@@ -541,7 +544,7 @@ def _scan_for_asset_ids(payloads: List[bytes]) -> List[Dict[str, Any]]:
                     found.append(number)
     return [
         {"class": "Unbekannt", "name": "", "mesh_id": number,
-         "texture_id": None, "size": None, "position": None}
+         "texture_id": None, "mesh_scale": None, "size": None, "position": None}
         for number in found
     ]
 

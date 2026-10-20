@@ -84,6 +84,11 @@ def has_clothing_layout(part_name: str) -> bool:
     return part_name in PART_REGIONS
 
 
+def part_regions(part_name: str) -> Dict[str, Rect]:
+    """Alle Panels eines Koerperteils (fuer die Farbbestimmung)."""
+    return dict(PART_REGIONS.get(part_name) or {})
+
+
 def side_region(part_name: str, axis: str) -> str:
     """Panelname fuer eine Seitenflaeche.
 

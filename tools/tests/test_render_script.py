@@ -379,11 +379,21 @@ def test_dunkle_textur_wird_aufgehellt(render_module, tmp_path):
     assert sources and sources[0] is gamma.outputs["Color"]
 
 
-def test_unbekleidetes_teil_ist_glas_ohne_textur(render_module):
+def test_unbekleidetes_teil_ist_matttes_koerperfarben_glas(render_module):
+    """Haut/Hals ohne Textur: mattes Glas in Koerperfarbe.
+
+    Reines Glas (Transmission 1.0) liess unbekleidete Teile wie einen
+    unsichtbaren Glasklotz aussehen; die Hautfarbe kam nicht durch.
+    """
     mat = render_module.make_material("Haut", (0.8, 0.6, 0.4), (0.56, 0.83, 1.0))
     nodes = mat.node_tree.nodes
     bsdf = nodes.get("Principled BSDF")
-    assert bsdf.inputs["Transmission Weight"].default_value == pytest.approx(1.0)
+    transmission = bsdf.inputs["Transmission Weight"].default_value
+    assert 0.0 < transmission < 1.0
+    assert bsdf.inputs["Roughness"].default_value > 0.2
+    base = bsdf.inputs["Base Color"].default_value
+    # Koerperfarbe (sRGB -> linear), nicht das Glasblau
+    assert base[0] > base[2]
     assert _node(mat, "ShaderNodeTexImage") is None
     assert _node(mat, "ShaderNodeMixShader") is None
 
