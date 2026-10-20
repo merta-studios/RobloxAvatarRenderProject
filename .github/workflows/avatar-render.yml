@@ -223,6 +223,10 @@ jobs:
           TMP="$(mktemp -d)"
           cp render_avatar.png "$TMP/latest.png"
           cp render_avatar.png "$TMP/${SAFE_NAME}.png"
+          # Diagnose-Dateien mit ablegen (Teileliste, Skip-Gruende) -
+          # so ist jeder Lauf ohne Artifact-Download nachvollziehbar.
+          cp build/summary.md "$TMP/summary.md" 2>/dev/null || true
+          cp build/manifest.json "$TMP/manifest.json" 2>/dev/null || true
           printf '%s\n' \
             '# Avatar-Renders (automatisch erzeugt)' \
             '' \
@@ -232,6 +236,7 @@ jobs:
             '' \
             '* `latest.png` – zuletzt gerenderter Avatar' \
             '* `<username>.png` – gleiches Bild unter dem Roblox-Namen' \
+            '* `summary.md` / `manifest.json` – Teileliste und Diagnose des Laufs' \
             > "$TMP/README.md"
 
           git -C "$TMP" init -q
