@@ -127,11 +127,105 @@ einen Usernamen, die Auflösung (z. B. `960x540`) und die Sample-Zahl
 * **Moderation/Archivierung:** Einzelne Assets können gesperrt oder archiviert
   sein. Dann fehlt das Teil im Render – im Manifest steht der Grund unter
   `skipped`, der Rest wird trotzdem gerendert.
-* **2D-Kleidung** (T-Shirts, Hosen) wird als Textur auf die Körperteile gelegt,
-  sofern sie herunterladbar ist; 3D-Kleidungs-Bundles werden wie Accessoires
-  behandelt. Beides kann farblich vom Original abweichen.
+* **2D-Kleidung** (klassische Shirts und Hosen) wird über den echten
+  Roblox-UV-Atlas auf Torso, Arme und Beine gelegt: Jede Fläche (vorne,
+  hinten, links, rechts, oben, unten) bekommt ihr eigenes Panel aus dem
+  585×559-Template – nicht das komplette Bild auf den ganzen Körper. Das
+  T-Shirt (eigene Grafik) und die Gesichts-Textur liegen als flache Dekals
+  vor Brust bzw. Gesicht. Layered-Kleidung (Jacke, Pullover, Hose als
+  3D-Asset) wird als Hülle um den Körper gezogen. Farben können vom
+  Original abweichen, weil das Glasmaterial die Textur einfärbt.
 * **RoProxy o. Ä. wird nicht verwendet.** Alle Anfragen gehen direkt an
   Roblox-Domains.
+
+---
+
+## Wie der Render aussieht (Kamera, Kleidung, Texturen)
+
+**Kamera.** Der OBJ-Import (`forward_axis="NEGATIVE_Z"`, `up_axis="Y"`)
+dreht Roblox-Koordinaten `(x, y, z)` nach Blender `(x, -z, y)`. Die
+Roblox-Front (-Z) landet damit auf **+Y** – die Kamera steht deshalb auf
+der +Y-Seite und schaut den Avatar von vorne an. Leicht schräg und leicht
+von oben:
+
+```bash
+blender -b --factory-startup --python blender/render_glass.py -- \
+  --manifest build/manifest.json --out render_avatar.png \
+  --camera-azimuth 24 --camera-elevation 9
+```
+
+`--camera-azimuth 0` ist exakt frontal, negative Werte drehen zur anderen
+Körperseite. Die Mathematik dazu liegt in `tools/scene_camera.py` und ist
+ohne Blender testbar (`tools/tests/test_render_fixes.py`).
+
+**Kleidung.** Klassische Shirts und Hosen sind kein freies Bild, sondern ein
+UV-Atlas (585×559 px). `tools/avatar_uv.py` kennt die Panels (Pixel-genau,
+Torso vorne/hinten/links/rechts/oben/unten, Arm- und Bein-Blöcke) und vergibt
+die UVs:
+
+* Rig-Quader (Avatar ohne eigene Körper-Meshes): pro Fläche das passende Panel,
+* echte R15-Meshes: zylindrische Projektion der Panels auf das Mesh –
+  die mitgelieferten Mesh-UVs passen nicht zu Kleidungs-Atlanten.
+
+Wird eine Textur fälschlich auf einen ganzen Körper gelegt, erscheint der
+komplette Atlas als Raster auf Brust und Beinen – genau das war der alte
+Render. Damit das Glas in der Kleidungsfarbe leuchtet, speichert das
+Manifest zwei Farben: `color` ist die **Körperfarbe** (Haut unter
+durchsichtigen Atlas-Stellen), `tint` der Durchschnitt **nur der eigenen
+Atlas-Panels**. Ein Durchschnitt über das ganze Bild ergibt immer Grau,
+weil das weiße Template mitgezählt wird – daher wirkte vorher alles
+grau/weiß.
+
+**Texturen im Glas.** Reines Glas (Transmission 1,0) lässt die Umgebung
+durch und zeigt von einer Textur fast nichts – genau deshalb wirkte der
+Avatar grau/blau. Deshalb wird das Material aus zwei Shadern gemischt:
+einem Glas-Shader (Transmission, Coat, IOR) für den Glaseindruck und einem
+deckenden Shader mit der Textur. `--texture-strength` steuert den Anteil
+(Standard `0.92` = 92 % Textur, `0` = reines Glas, `1` = Textur pur).
+Unbekleidete Teile (Hals, Haut) sind mattes Glas in Körperfarbe statt
+unsichtbarem Glasklotz. Accessoires werden nach ihrer eigenen Textur
+eingefärbt (schwarze Haare bleiben schwarz); ohne Textur bleiben sie
+metallisch.
+Dunkle Kleidung wird über einen Gamma-Knoten aufgehellt und die Textilien
+sind matt (kein Lack), damit Muster und Farben klar lesbar bleiben.
+Transparente Bereiche des Kleidungs-Atlasses werden mit der Körperfarbe
+gemischt, sonst rendert Blender sie schwarz. `--mono-glass` ignoriert
+Texturen ganz.
+
+**Körperteile.** Bringt der Avatar echte R15-Körper-Meshes mit (Bundles),
+werden deren RBXM-Maße für Torso, Arme, Beine und Kopf verwendet und die
+Teile lückenlos gestapelt (Beine → Torso → Hals → Kopf, Arme an den
+Schultern). Wichtig: diese Maße sind **bereits skaliert** (Roblox liefert
+die Teile in der Größe, die sich aus den Avatar-Scales ergibt) – sie werden
+deshalb nicht ein zweites Mal mit den Scales multipliziert, sonst schrumpft
+der ganze Avatar (1,33 statt 1,77 Studs Torso-Breite).
+
+Mehrsegmentige Glieder (Oberarm/Unterarm/Hand, Oberschenkel/Unterschenkel/
+Fuß) werden senkrecht **gestapelt** und dabei auf die Höhe der Bind-Pose
+gestaucht. Die X-Positionen aus dem RBXM werden bewusst ignoriert: sie
+beschreiben bei vielen Paketen eine A-Pose (Arme schräg nach außen), und
+einmal in die senkrechte Rig-Box gepresst sehen die Arme verrenkt und
+zerknittert aus.
+
+Fehlt ein Teil im Bundle (z. B. Beine bei einem Paket, das nur Torso und
+Arme mitbringt), wird es aus dem Torso abgeleitet (R15-Proportionen) statt
+aus festen R6-Quadern. Unplausible Größen (Mesh-Einheiten sind nicht immer
+Studs) werden begrenzt; das steht als Hinweis im Manifest. Anschließend
+werden die Proportionen harmonisiert: beide Beine zusammen füllen höchstens
+die Torso-Breite, Arme bleiben schmaler als der halbe Torso und enden etwa
+auf Hüfthöhe. Alle Korrekturen erscheinen als `Proportionen: …` unter
+*Hinweise* im Manifest/Summary.
+
+**Accessoires.** Meshes von Accessoires sind in Studs modelliert (die
+Part-Größe im RBXM ist bei `SpecialMesh` immer 1×1×1 und sagt nichts über
+die sichtbare Größe). Sie werden deshalb in echter Größe platziert und nur
+so weit verkleinert, dass sie an ihren Anker passen (Hut ≤ 1,25
+Kopfdurchmesser in der Breite, Rock/Hüfte ≤ 2,2 Torso-Breiten). Layered-
+Kleidung (Jacke, T-Shirt, Hose …) wird als Hülle über den Körper gezogen –
+die Jacke umfasst auch die Ärmel, sonst wird der Ärmelstoff zu losen
+Schulterplatten gequetscht. Paar-Accessoires (Handschuhe, Stulpen, die als
+*ein* Mesh mit beiden Seiten kommen) werden an x = 0 getrennt und je Hälfte
+auf die passende Hand gesetzt.
 
 ---
 
@@ -236,8 +330,11 @@ tools/
   roblox_api.py                  Web-APIs, Asset Delivery, BrickColor-Tabelle
   roblox_mesh.py                 FileMesh-Parser (v1–v7) → OBJ
   avatar_rig.py                  Stand-Pose-Rig + Accessoire-Platzierung
+  avatar_uv.py                   UV-Panels des klassischen Kleidungs-Atlasses
+  scene_camera.py                Kamera-Mathematik (vorne = +Y, testbar)
   brick_colors.json              208 Roblox-BrickColors (ID → RGB)
   tests/test_pipeline.py         Tests ohne Netzwerk/Blender
+  tests/test_render_fixes.py     Tests für Rig, Kamera und Texturen
 ```
 
 ## Erster Testlauf (Referenz)

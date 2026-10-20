@@ -17,11 +17,13 @@ aus; die FileMesh-ID steckt erst darin. Ein eigener Parser
 (`tools/rbxm.py`) extrahiert Mesh-/Textur-IDs, Größe und Position – erst
 danach werden die echten Meshes geladen.
 
-![Beispiel-Render](docs/demo_render.png)
+![Vorschau des Rigs](docs/preview_rig.png)
 
-*Beispielausgabe (960×540, 64 Samples, Cycles CPU). Gerendert mit dem Test-Rig
-und synthetischen Accessoire-Meshes – echte Avatare bringen ihre eigenen
-Roblox-Meshes und Texturen mit.*
+*Vorschau aus `tools/preview_scene.py` (Software-Render ohne Blender,
+Test-Rig mit beschriftetem Test-Texturatlas): Der Avatar steht von vorne
+leicht schräg im Bild, Torso vorne/hinten und die Arm- und Beinpanels kommen
+aus dem richtigen Bereich des Kleidungs-Atlasses. Den finalen Glas-Render
+macht Blender (`blender/render_glass.py`).*
 
 ## Schnellstart
 
@@ -50,6 +52,7 @@ vermutlich fehl (401) – es wird dann ein Platzhalter-Körper gerendert.
 | 4 | `tools/rbxm.py` | RBXM-/RBXMX-Parser: Mesh-/Textur-IDs aus Modellen |
 | 5 | `tools/roblox_mesh.py` | Roblox-`.mesh`-Parser (v1.00–v7.00) → OBJ |
 | 6 | `tools/avatar_rig.py` | Stand-Pose-Rig, Accessoire-Platzierung |
+| 6b | `tools/avatar_uv.py` | Kleidungs-UV-Atlas (Shirt/Pants, 585×559) |
 | 7 | `blender/render_glass.py` | Cycles-Glasmaterial, Kamera, Licht, Render |
 | 8 | `.github/workflows/avatar-render.yml` | Veröffentlichen: Artifact + Branch `renders` + Release |
 | – | `tools/diagnose.py` | prüft Endpunkte/Key-Rechte (Workflow *Roblox-Diagnose*) |
@@ -62,6 +65,9 @@ Ergebnis im Build-Ordner: `manifest.json`, `parts/*.obj`, `textures/*`,
 ```bash
 # nur den Körper bauen, ohne Netzwerk
 python3 tools/build_avatar.py --dry-run --out build
+
+# Rig/UVs/Kamera ohne Blender prüfen (braucht numpy + Pillow)
+python3 tools/preview_scene.py --manifest build/manifest.json --out preview.png
 
 # echten Avatar laden (Key optional, aber empfohlen)
 export ROBLOX_OPEN_CLOUD_API_KEY="..."
@@ -85,6 +91,38 @@ Tests (ohne Netzwerk, ohne Blender):
 pip install -r requirements-dev.txt
 python3 -m pytest tools/tests -q
 ```
+
+## Kamera, Kleidung und Texturen
+
+* **Blickrichtung:** Der Avatar wird von **vorne, leicht schräg** gerendert
+  (Azimut 24°, Höhe 9°). Der OBJ-Import dreht Roblox-`-Z` auf Blender-`+Y`,
+  deshalb steht die Kamera auf der +Y-Seite. Anpassbar mit
+  `--camera-azimuth` / `--camera-elevation`; die Mathematik steckt in
+  `tools/scene_camera.py`.
+* **Klassische Kleidung** (Shirt/Pants) liegt im echten Roblox-UV-Atlas
+  (585×559): `tools/avatar_uv.py` vergibt pro Fläche das richtige Panel –
+  vorne, hinten, Seiten, oben, unten, und für Arme/Beine die
+  Gliedmaßen-Blöcke. Echte R15-Meshes bekommen die Panels per Projektion,
+  weil ihre eigenen UVs nicht zu Kleidungs-Atlanten passen. T-Shirt-Grafik
+  und Gesicht liegen als Dekals vor Brust bzw. Gesicht.
+* **Farben:** Das Manifest speichert je Teil `color` (Körperfarbe unter
+  durchsichtigen Atlas-Stellen) und `tint` (Durchschnitt der *eigenen*
+  Atlas-Panels). Ein Durchschnitt über den ganzen Atlas ergibt immer Grau –
+  deshalb wirkte vorher alles grau/weiß. Accessoires werden nach ihrer
+  eigenen Textur eingefärbt, unbekleidete Teile sind mattes Glas in
+  Körperfarbe. Damit Texturen sichtbar sind, mischt das Material einen
+  deckenden Textur-Shader mit Glas (`--texture-strength`, Standard 0,92 –
+  reines Glas zeigt von einer Textur fast nichts); dunkle Kleidung wird per
+  Gamma aufgehellt und bleibt matt, damit das Muster lesbar ist.
+* **Körperteile:** R15-Bundles liefern echte, bereits skalierte Maße – der
+  Rig stapelt Beine, Torso, Hals und Kopf lückenlos. Mehrsegmentige Glieder
+  (Oberarm/Unterarm/Hand) werden senkrecht gestapelt, statt die A-Pose-
+  Positionen aus dem RBXM zu übernehmen (das ergab verrenkte Arme);
+  fehlende Teile werden aus dem Torso abgeleitet.
+* **Accessoires:** in echter Mesh-Größe (Studs) platziert und nur so weit
+  begrenzt, dass sie zum Anker passen; Layered-Kleidung als Hülle
+  (Jacke inklusive Ärmel), Paar-Accessoires wie Handschuhe auf beide Hände
+  verteilt.
 
 ## Grenzen
 

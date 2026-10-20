@@ -109,6 +109,30 @@ class MeshData:
             source_version=self.source_version,
         )
 
+    def rotate_z(self, degrees: float) -> "MeshData":
+        """Dreht das Mesh um die Z-Achse (Roblox: vorne = -Z, oben = +Y).
+
+        Praktisch fuer Gliedmassen aus R15-Bundles: die sind teils in
+        T-Pose modelliert (Arm zeigt nach +X/-X) und muessen fuer die
+        Standpose senkrecht haengen. Die Drehung in der X/Y-Ebene laesst
+        die Blickrichtung (-Z) unveraendert.
+        """
+        angle = math.radians(degrees)
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+
+        def rotate_point(p):
+            x, y, z = p
+            return (x * cos_a - y * sin_a, x * sin_a + y * cos_a, z)
+
+        return MeshData(
+            positions=[rotate_point(p) for p in self.positions],
+            normals=[rotate_point(n) for n in self.normals],
+            uvs=list(self.uvs),
+            faces=list(self.faces),
+            colors=list(self.colors) if self.colors else None,
+            source_version=self.source_version,
+        )
+
     def write_obj(self, path) -> None:
         """Schreibt das Mesh als OBJ (v/vt/vn + f)."""
         has_uv = len(self.uvs) == len(self.positions)
@@ -200,10 +224,87 @@ def make_sphere(radius: float = 0.5, segments: int = 24, rings: int = 16,
         for j in range(segments):
             a = i * (segments + 1) + j
             b = a + segments + 1
+            # An den Polen fallen je zwei Vertices zusammen - solche
+            # Null-Flaechen-Dreiecke erst gar nicht erzeugen.
+            if i > 0:
+                faces.append((a, a + 1, b))
+            if i < rings - 1:
+                faces.append((a + 1, b + 1, b))
+    return MeshData(positions=positions, normals=normals, uvs=uvs, faces=faces,
+                    source_version="generated-sphere")
+
+
+def make_plane(width: float, height: float, center: Vec3 = (0, 0, 0),
+               facing: str = "-Z") -> MeshData:
+    """Flaches Rechteck (zwei Dreiecke) mit UV 0..1 - fuer Dekals.
+
+    ``facing`` gibt an, wohin die sichtbare Seite zeigt (Roblox: -Z ist
+    vorne). Das Rechteck liegt in der Ebene senkrecht zu dieser Richtung.
+    """
+    hw, hh = width / 2.0, height / 2.0
+    cx, cy, cz = center
+    if facing in ("-Z", "+Z"):
+        sign = -1.0 if facing == "-Z" else 1.0
+        corners = [(-hw, -hh, 0.0), (hw, -hh, 0.0), (hw, hh, 0.0), (-hw, hh, 0.0)]
+        normal = (0.0, 0.0, sign)
+    elif facing in ("-X", "+X"):
+        sign = -1.0 if facing == "-X" else 1.0
+        corners = [(0.0, -hh, hw * sign), (0.0, -hh, -hw * sign),
+                   (0.0, hh, -hw * sign), (0.0, hh, hw * sign)]
+        normal = (sign, 0.0, 0.0)
+    else:  # "+Y" / "-Y": liegende Flaeche
+        sign = 1.0 if facing == "+Y" else -1.0
+        corners = [(-hw, 0.0, hh * sign), (hw, 0.0, hh * sign),
+                   (hw, 0.0, -hh * sign), (-hw, 0.0, -hh * sign)]
+        normal = (0.0, sign, 0.0)
+    positions = [(cx + x, cy + y, cz + z) for (x, y, z) in corners]
+    uvs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    # Wickelrichtung passend zur Normale: sonst verschwindet die Flaeche
+    # bei Backface-Culling bzw. wird von innen beleuchtet.
+    faces = [(0, 1, 2), (0, 2, 3)]
+    if _face_normal(*positions[:3], positions[3])[0] * normal[0] \
+            + _face_normal(*positions[:3], positions[3])[1] * normal[1] \
+            + _face_normal(*positions[:3], positions[3])[2] * normal[2] < 0:
+        faces = [(0, 2, 1), (0, 3, 2)]
+    return MeshData(positions=positions, normals=[normal] * 4, uvs=uvs,
+                    faces=faces, source_version="generated-plane")
+
+
+def make_sphere_patch(radius: float, center: Vec3 = (0, 0, 0),
+                      spread_u: float = 1.15, spread_v: float = 1.05,
+                      segments: int = 8, rings: int = 8) -> MeshData:
+    """Gewoelbtes Patch auf der Vorderseite einer Kugel (fuer Gesichts-Dekals).
+
+    Die UVs laufen 0..1 ueber das Patch, die Normale zeigt radial nach
+    aussen. ``spread_u``/``spread_v`` sind die halben Winkel in Radiant.
+    """
+    cx, cy, cz = center
+    positions: List[Vec3] = []
+    normals: List[Vec3] = []
+    uvs: List[Tuple[float, float]] = []
+    faces: List[Tuple[int, int, int]] = []
+    for i in range(rings + 1):
+        tv = i / rings                      # 0 = unten, 1 = oben
+        elevation = (tv - 0.5) * 2.0 * spread_v
+        for j in range(segments + 1):
+            tu = j / segments               # 0 = links im Bild
+            azimuth = (0.5 - tu) * 2.0 * spread_u   # +X links vom Betrachter
+            cos_e = math.cos(elevation)
+            nx = math.sin(azimuth) * cos_e
+            ny = math.sin(elevation)
+            nz = -math.cos(azimuth) * cos_e         # Vorderseite = -Z
+            positions.append((cx + nx * radius, cy + ny * radius,
+                              cz + nz * radius))
+            normals.append((nx, ny, nz))
+            uvs.append((tu, tv))
+    for i in range(rings):
+        for j in range(segments):
+            a = i * (segments + 1) + j
+            b = a + segments + 1
             faces.append((a, a + 1, b))
             faces.append((a + 1, b + 1, b))
     return MeshData(positions=positions, normals=normals, uvs=uvs, faces=faces,
-                    source_version="generated-sphere")
+                    source_version="generated-sphere-patch")
 
 
 def _face_normal(a: Vec3, b: Vec3, c: Vec3, d: Vec3 | None = None) -> Vec3:
@@ -565,6 +666,102 @@ def _smooth_normals(positions, faces):
         else:
             normals.append((x / length, y / length, z / length))
     return normals
+
+
+def stack_segments(items, source_version: str = "stacked",
+                   target_height: float = 0.0) -> MeshData:
+    """Setzt R15-Segmente lueckenlos zu einem geraden Koerperteil zusammen.
+
+    ``items``: Liste aus ``(MeshData, size|None, position|None)`` in der
+    Reihenfolge von oben nach unten (z. B. UpperArm, LowerArm, Hand).
+
+    Die Segmente werden einzeln auf ihre Part-Groesse gebracht und dann
+    senkrecht gestapelt (Oberkante des naechsten Segments = Unterkante des
+    vorherigen). Die Positionen aus dem RBXM werden **nicht** uebernommen:
+    sie beschreiben die Bind-Pose des Pakets, in der die Arme oft schraeg
+    nach aussen haengen - uebernommen steht der Avatar im Spagat und die
+    Arme werden beim Einpassen zerdrueckt. ``target_height`` (Hoehe der
+    Bind-Pose) dient nur dazu, den Stapel gleichmaessig zu stauchen, falls
+    die Segmente mit Ueberlappung modelliert sind.
+    """
+    positions: List[Vec3] = []
+    normals: List[Vec3] = []
+    uvs: List[Tuple[float, float]] = []
+    faces: List[Tuple[int, int, int]] = []
+    colors: List[Tuple[int, int, int, int]] = []
+    all_colors = True
+    cursor = 0.0
+    for mesh, size, _position in items:
+        part = mesh
+        if size:
+            current = mesh.size()
+            factors = tuple(
+                float(size[i]) / current[i] if current[i] > 1e-9 else 1.0
+                for i in range(3))
+            part = mesh.transform(factors)
+        height = part.size()[1]
+        center = part.center()
+        part = part.transform(
+            1.0, (-center[0], cursor - height / 2.0 - center[1], -center[2]))
+        base = len(positions)
+        positions.extend(part.positions)
+        normals.extend(part.normals or [(0.0, 1.0, 0.0)] * len(part.positions))
+        uvs.extend(part.uvs or [(0.0, 0.0)] * len(part.positions))
+        faces.extend((a + base, b + base, c + base) for a, b, c in part.faces)
+        if part.colors:
+            colors.extend(part.colors)
+        else:
+            all_colors = False
+        cursor -= height
+    result = MeshData(positions, normals, uvs, faces,
+                      colors if all_colors and colors else None, source_version)
+    if target_height and target_height > 0.05:
+        height = cursor if cursor < 0 else 0.0
+        height = abs(height)
+        if height > 0:
+            factor = target_height / height
+            # Nur stauchen, wenn die Segmente deutlich ueberlappen wuerden -
+            # gleichmaessig, damit die Form erhalten bleibt.
+            if 0.3 < factor < 1.0:
+                lo, hi = result.bbox()
+                result = (result.transform(1.0, (0.0, -hi[1], 0.0))
+                          .transform(factor)
+                          .transform(1.0, (0.0, hi[1], 0.0)))
+    return result
+
+
+def split_mesh_x(mesh: MeshData) -> Tuple[MeshData, MeshData]:
+    """Teilt ein Mesh an x = 0 in linke (-X) und rechte (+X) Haelfte.
+
+    Manche Accessoires (z. B. ein Paar Handschuhe) sind ein einziges Mesh
+    mit beiden Seiten. Wird so ein Mesh als Ganzes an einen Anker gesetzt,
+    schwebt es quer durch den Koerper. Rueckgabe: (links, rechts); eine
+    Seite kann leer sein.
+    """
+    def half(keep_left: bool) -> MeshData:
+        faces = []
+        for a, b, c in mesh.faces:
+            cx = (mesh.positions[a][0] + mesh.positions[b][0]
+                  + mesh.positions[c][0]) / 3.0
+            if (cx <= 0.0) == keep_left:
+                faces.append((a, b, c))
+        if not faces:
+            return MeshData(source_version=mesh.source_version)
+        used = sorted({i for face in faces for i in face})
+        remap = {old: new for new, old in enumerate(used)}
+        return MeshData(
+            positions=[mesh.positions[i] for i in used],
+            normals=([mesh.normals[i] for i in used]
+                     if len(mesh.normals) == len(mesh.positions) else []),
+            uvs=([mesh.uvs[i] for i in used]
+                 if len(mesh.uvs) == len(mesh.positions) else []),
+            faces=[(remap[a], remap[b], remap[c]) for a, b, c in faces],
+            colors=([mesh.colors[i] for i in used]
+                    if mesh.colors and len(mesh.colors) == len(mesh.positions)
+                    else None),
+            source_version=mesh.source_version,
+        )
+    return half(True), half(False)
 
 
 def merge_meshes(items, source_version: str = "merged") -> MeshData:
