@@ -295,8 +295,11 @@ def _decompress_chunk(raw: bytes, expected_len: int) -> bytes:
 # Gemeinsames Zwischenformat: Instanz-Records -> Asset-Eintraege
 # ---------------------------------------------------------------------------
 
-# Property-Namen (serialisiert, kleingeschrieben) -> Feld im Record
-_TEXTURE_PROPS = {"textureid", "texture", "colormap", "basetextureid"}
+# Property-Namen (serialisiert, kleingeschrieben) -> Feld im Record.
+# Klassische Kleidung (Shirt/Pants/TShirt) wird ebenfalls als RBXM
+# ausgeliefert; die Bild-ID steht dort in ShirtTemplate/PantsTemplate/Graphic.
+_TEXTURE_PROPS = {"textureid", "texture", "colormap", "basetextureid",
+                  "shirtTemplate", "pantstemplate", "graphic"}
 _TEXTURE_OVERLAY_PROPS = {"overlaytextureid"}
 
 

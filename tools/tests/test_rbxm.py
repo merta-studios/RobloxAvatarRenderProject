@@ -133,6 +133,19 @@ def test_rbxm_cframe_mit_expliziter_matrix():
     assert entries[0]["position"] == pytest.approx((7.0, 8.0, 9.0))
 
 
+def test_rbxm_klassische_kleidung_template():
+    # Shirt/Pants kommen als RBXM-Modell; die Bild-ID steht in
+    # ShirtTemplate/PantsTemplate (so im echten Lauf fuer "Formal" gesehen)
+    hose = {"class": "Pants",
+            "props": {"Name": "Formal", "PantsTemplate": "rbxassetid://60321"},
+            "Parent": None}
+    entries = rbxm.extract_assets(make_rbxm([hose]))
+    assert len(entries) == 1
+    assert entries[0]["class"] == "Pants"
+    assert entries[0]["mesh_id"] is None
+    assert entries[0]["texture_id"] == 60321
+
+
 def test_rbxm_ohne_assets_ist_leere_liste():
     folder = {"class": "Ordner", "props": {"Name": "Leer"}, "Parent": None}
     assert rbxm.extract_assets(make_rbxm([folder])) == []

@@ -420,6 +420,9 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 log(f"      - {aid} {type_name}: Download fehlgeschlagen ({dl.note[:120]})")
                 continue
 
+            # Manche Endpunkte liefern RBXM-Modelle gzip-gepackt aus -
+            # erst entpacken, sonst erkennt classify_asset sie nicht.
+            dl.data = api.maybe_decompress(dl.data)
             kind = api.classify_asset(dl.data, type_id)
             log(f"      - {aid} {type_name:<22} {kind:<8} {len(dl.data)/1024:8.1f} KB via {dl.source}")
 
