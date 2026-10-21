@@ -63,6 +63,7 @@ _T_SHARED_STRING = 0x1C
 _T_CONTENT = 0x22
 
 Vec3 = Tuple[float, float, float]
+Matrix3 = Tuple[Vec3, Vec3, Vec3]
 
 
 class RbxmError(Exception):
@@ -192,16 +193,64 @@ def _read_vector3_array(reader: _Reader, count: int) -> List[Vec3]:
     return list(zip(xs, ys, zs))
 
 
-def _read_cframe_positions(reader: _Reader, count: int) -> List[Vec3]:
-    """Nur die Positionen der CFrames lesen (Rotationen ueberspringen).
+# 24 Sonder-Rotationen (Spec: "Roblox Binary Model Format", CFrame).
+# ID 0x00 bedeutet: 9 rohe Float32 (Matrix R00..R22) folgen; alle anderen
+# IDs sind vordefinierte Drehungen - KEINE Identitaet (nur 0x02 ist
+# identisch). Wer diese Tabelle ignoriert, setzt Fuesse/Haende/Huete aus
+# Bundle-Modellen an falscher Position und mit falscher Rotation zusammen.
+# Quelle: rbx-dom (rbx_types::Matrix3::from_basic_rotation_id), zeilenweise.
+_BASIC_ROTATIONS: Dict[int, Matrix3] = {
+    0x02: ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+    0x03: ((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0)),
+    0x05: ((1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, -1.0)),
+    0x06: ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, -1.0, 0.0)),
+    0x07: ((0.0, 1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, -1.0)),
+    0x09: ((0.0, 0.0, 1.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
+    0x0A: ((0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+    0x0C: ((0.0, 0.0, -1.0), (1.0, 0.0, 0.0), (0.0, -1.0, 0.0)),
+    0x0D: ((0.0, 1.0, 0.0), (0.0, 0.0, 1.0), (1.0, 0.0, 0.0)),
+    0x0E: ((0.0, 0.0, -1.0), (0.0, 1.0, 0.0), (1.0, 0.0, 0.0)),
+    0x10: ((0.0, -1.0, 0.0), (0.0, 0.0, -1.0), (1.0, 0.0, 0.0)),
+    0x11: ((0.0, 0.0, 1.0), (0.0, -1.0, 0.0), (1.0, 0.0, 0.0)),
+    0x14: ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, -1.0)),
+    0x15: ((-1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0)),
+    0x17: ((-1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, 1.0)),
+    0x18: ((-1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, -1.0, 0.0)),
+    0x19: ((0.0, 1.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+    0x1B: ((0.0, 0.0, -1.0), (-1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
+    0x1C: ((0.0, -1.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 0.0, -1.0)),
+    0x1E: ((0.0, 0.0, 1.0), (-1.0, 0.0, 0.0), (0.0, -1.0, 0.0)),
+    0x1F: ((0.0, 1.0, 0.0), (0.0, 0.0, -1.0), (-1.0, 0.0, 0.0)),
+    0x20: ((0.0, 0.0, 1.0), (0.0, 1.0, 0.0), (-1.0, 0.0, 0.0)),
+    0x22: ((0.0, -1.0, 0.0), (0.0, 0.0, 1.0), (-1.0, 0.0, 0.0)),
+    0x23: ((0.0, 0.0, -1.0), (0.0, -1.0, 0.0), (-1.0, 0.0, 0.0)),
+}
 
-    Pro Wert: 1 Byte Rotations-ID; nur bei ID 0x00 folgen 9 Float32
-    (Rotationsmatrix). Danach kommt ein Vector3-Array mit den Positionen.
+
+def _read_cframe_array(reader: _Reader, count: int) -> List[Tuple[Vec3, Optional[Matrix3]]]:
+    """CFrames lesen: (Position, Rotationsmatrix) je Wert.
+
+    Pro Wert: 1 Byte Rotations-ID. ID 0x00 -> 9 rohe Float32 (Matrix
+    zeilenweise R00..R22); andere ID -> Tabelle _BASIC_ROTATIONS.
+    Danach folgt das Vector3-Array der Positionen.
+
+    Rotationen sind fuer die Riggung entscheidend: Segmente aus
+    Bundle-Modellen tragen ihre eigene Drehung (z. B. Fuss 90 Grad,
+    Hut schraeg aufgesetzt). Sie bisher zu ueberspringen, war die
+    Ursache fuer falsche Position und Rotation der Rig-Teile.
     """
+    rotations: List[Optional[Matrix3]] = []
     for _ in range(count):
-        if reader.u8() == 0x00:
-            reader.skip(9 * 4)
-    return _read_vector3_array(reader, count)
+        rotation_id = reader.u8()
+        if rotation_id == 0x00:
+            values = struct.unpack("<9f", reader.read(9 * 4))
+            rotations.append(tuple(  # type: ignore[arg-type]
+                tuple(values[r * 3:r * 3 + 3]) for r in range(3)))
+        else:
+            # Unbekannte kuenftige ID -> None (Identitaet) statt Absturz.
+            rotations.append(_BASIC_ROTATIONS.get(rotation_id))
+    positions = _read_vector3_array(reader, count)
+    return list(zip(positions, rotations))
 
 
 def _read_content_array(reader: _Reader, count: int) -> List[str]:
@@ -306,7 +355,7 @@ _TEXTURE_OVERLAY_PROPS = {"overlaytextureid"}
 def _new_record(cls: str) -> Dict[str, Any]:
     return {
         "class": cls, "name": "", "mesh_url": "", "texture_url": "",
-        "overlay_url": "", "size": None, "position": None,
+        "overlay_url": "", "size": None, "position": None, "rotation": None,
         "scale": None, "offset": None, "Parent": None,
     }
 
@@ -326,7 +375,12 @@ def _apply_property(record: Dict[str, Any], prop_name: str, value: Any) -> None:
     elif key == "size":
         record["size"] = value
     elif key == "cframe":
-        record["position"] = value
+        # (Position, Rotation) vom Binary-Parser; XML liefert dasselbe.
+        if (isinstance(value, tuple) and len(value) == 2
+                and isinstance(value[0], tuple) and len(value[0]) == 3):
+            record["position"], record["rotation"] = value
+        else:  # nur Position (alte Aufrufer/Fallback)
+            record["position"] = value
     elif key == "scale":
         record["scale"] = value
     elif key == "offset":
@@ -360,8 +414,26 @@ def _assemble(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if pos is None and Parent is not None:
             pos = Parent.get("position")
         if pos is not None and rec.get("offset"):
-            pos = tuple(p + o for p, o in zip(pos, rec["offset"]))  # type: ignore[assignment]
+            # Offset liegt im lokalen Part-Rahmen: bei gedrehtem Part
+            # zuerst drehen, sonst verrutscht das Accessoire.
+            offset = rec["offset"]
+            rotation = effective_rotation(rec)
+            if rotation is not None:
+                offset = (
+                    rotation[0][0] * offset[0] + rotation[0][1] * offset[1] + rotation[0][2] * offset[2],
+                    rotation[1][0] * offset[0] + rotation[1][1] * offset[1] + rotation[1][2] * offset[2],
+                    rotation[2][0] * offset[0] + rotation[2][1] * offset[1] + rotation[2][2] * offset[2],
+                )
+            pos = tuple(p + o for p, o in zip(pos, offset))  # type: ignore[assignment]
         return pos
+
+    def effective_rotation(rec: Dict[str, Any]) -> Optional[Matrix3]:
+        if rec.get("rotation") is not None:
+            return rec["rotation"]
+        Parent = rec.get("Parent")
+        if Parent is not None:
+            return Parent.get("rotation")
+        return None
 
     for rec in records:
         texture_url = rec["texture_url"] or rec["overlay_url"]
@@ -384,6 +456,7 @@ def _assemble(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "texture_id": texture_id,
             "size": effective_size(rec),
             "position": effective_position(rec),
+            "rotation": effective_rotation(rec),
         }
         by_record[id(rec)] = entry
 
@@ -482,7 +555,7 @@ def _parse_binary(data: bytes) -> List[Dict[str, Any]]:
             elif key in _VECTOR3_PROPS and type_id == _T_VECTOR3:
                 values = _read_vector3_array(reader, len(recs))  # type: ignore[assignment]
             elif key == "cframe" and type_id == _T_CFRAME:
-                values = _read_cframe_positions(reader, len(recs))  # type: ignore[assignment]
+                values = _read_cframe_array(reader, len(recs))  # type: ignore[assignment]
             if values is not None:
                 for rec, value in zip(recs, values):
                     _apply_property(rec, prop_name, value)
@@ -541,7 +614,7 @@ def _scan_for_asset_ids(payloads: List[bytes]) -> List[Dict[str, Any]]:
                     found.append(number)
     return [
         {"class": "Unbekannt", "name": "", "mesh_id": number,
-         "texture_id": None, "size": None, "position": None}
+         "texture_id": None, "size": None, "position": None, "rotation": None}
         for number in found
     ]
 
@@ -594,7 +667,14 @@ def _parse_xml(data: bytes) -> List[Dict[str, Any]]:
                 elif prop.tag == "Vector3":
                     value = tuple(_xml_float(prop.findtext(axis)) for axis in ("X", "Y", "Z"))
                 elif prop.tag == "CoordinateFrame":
-                    value = tuple(_xml_float(prop.findtext(axis)) for axis in ("X", "Y", "Z"))
+                    position = tuple(_xml_float(prop.findtext(axis))
+                                     for axis in ("X", "Y", "Z"))
+                    rotation = None
+                    if prop.find("R00") is not None:
+                        flat = tuple(_xml_float(prop.findtext(f"R{i}{j}"))
+                                     for i in range(3) for j in range(3))
+                        rotation = (flat[0:3], flat[3:6], flat[6:9])  # type: ignore[assignment]
+                    value = (position, rotation)
                 else:
                     continue
                 _apply_property(rec, name, value)
@@ -620,7 +700,9 @@ def extract_assets(data: bytes) -> List[Dict[str, Any]]:
 
     Liefert eine Liste von Dicts mit den Schluesseln ``class``, ``name``,
     ``mesh_id`` (int | None), ``texture_id`` (int | None), ``size``
-    (x, y, z in Studs | None) und ``position`` (x, y, z | None).
+    (x, y, z in Studs | None), ``position`` (x, y, z | None) und
+    ``rotation`` (3x3-Matrix als drei Zeilen | None; Identitaet oder
+    bundletypische Drehung aus der Sonder-Rotation-Tabelle).
     Unleserliche Daten werfen einen :class:`RbxmError`.
     """
     if not data:

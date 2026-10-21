@@ -143,14 +143,15 @@ Körperteile (Torso, Arme, Beine aus Bundles wie „Roblox 2.0“ oder
 `.mesh`-Datei aus, sondern als RBXM-Modell (binär) bzw. RBXMX (XML).
 Die eigentliche FileMesh-ID steckt erst im Modell (`MeshPart.MeshId`,
 `SpecialMesh.MeshId`), dazu Texturen (`TextureID`, `SurfaceAppearance`),
-die Part-Größe (`size`) und die Position.
+die Part-Größe (`size`) und der CFrame (Position **und** Rotation –
+inkl. der 24 Sonder-Rotationen der Binärspec, z. B. 90° um Y).
 
 Deshalb läuft der Download zweistufig:
 
 1. RBXM herunterladen, mit dem eigenen Parser
-   ([`tools/rbxm.py`](tools/rbxm.py)) Mesh-/Textur-IDs, Größe und Position
-   extrahieren (Chunks sind oft LZ4-/ZSTD-komprimiert – der Workflow
-   installiert dafür `zstandard` und `lz4` per pip).
+   ([`tools/rbxm.py`](tools/rbxm.py)) Mesh-/Textur-IDs, Größe, Position
+   und Rotation extrahieren (Chunks sind oft LZ4-/ZSTD-komprimiert – der
+   Workflow installiert dafür `zstandard` und `lz4` per pip).
 2. Die so gefundenen Meshes/Texturen wie bisher laden und platzieren:
    Körperteil-Meshes (AssetTypen 27–31) **ersetzen** die Rig-Quader in
    der jeweiligen BodyColor, Accessoires kommen an ihre Anker
@@ -163,9 +164,16 @@ Besonderheiten:
   `stats.ignored_animations`) – sie tauchen **nicht** als „übersprungen“ auf.
 * **R15-Segmente:** Körperteil-Bundles (z. B. Korblox) liefern pro Asset
   mehrere Segmente (`RightUpperArm`, `RightLowerLeg`, `RightFoot` …).
-  Die Pipeline wählt die R15-Segmente per Name aus und führt sie über
-  ihre RBXM-Positionen zu einem zusammenhängenden Körperteil zusammen.
-  Drehungen der Segmente werden ignoriert (aufrechte Standardpose).
+  Die Pipeline wählt die R15-Segmente per Name aus und **stapelt sie
+  senkrecht** in der Stand-Pose (Obersegment oben, mit Mindestluft
+  zwischen den Stücken). Die RBXM-Positionen beschreiben dagegen die
+  *Bind-Pose* des Pakets (A-Pose, Arme schräg nach außen) – deren
+  Übernahme und das Pressen in die senkrechte Rig-Box war die Ursache
+  für verstellte/verrenkte Rig-Teile mit falscher Position und Rotation.
+* **CFrame-Rotationen:** Werden vollständig gelesen (explizite Matrix
+  *und* die 24 Sonder-Rotationen der Binärspec) und bei Accessoires
+  angewendet – ein um 90° gedrehtes Bruststück steht sonst seitlich
+  statt in Blickrichtung, Hüte/Haar schief.
 * **Moderne Meshes (FileMesh 6.00/7.00):** Neuere Assets nutzen ein
   Chunk-Format; Version 7.00 ist zusätzlich **Draco-komprimiert**.
   Der Parser liest beides; für 7.00 installiert der Workflow das Paket

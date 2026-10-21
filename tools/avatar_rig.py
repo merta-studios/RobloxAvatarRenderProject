@@ -218,9 +218,23 @@ def fit_mesh_to_part(mesh: MeshData, target_lo, target_hi) -> MeshData:
     return scaled.transform(1.0, tuple(target_center[i] - center[i] for i in range(3)))
 
 
+def _rotation_is_identity(matrix) -> bool:
+    if matrix is None:
+        return True
+    try:
+        flat = [float(v) for row in matrix for v in row]
+    except (TypeError, ValueError):
+        return True
+    if len(flat) != 9:
+        return True
+    expected = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    return all(abs(a - b) < 1e-6 for a, b in zip(flat, expected))
+
+
 def place_accessory(mesh: MeshData, asset_type_id: int,
                     metrics: BodyMetrics,
-                    size_hint=None) -> Tuple[MeshData, str]:
+                    size_hint=None,
+                    rotation=None) -> Tuple[MeshData, str]:
     """Zentriert, skaliert (relativ zur Kopf-/Koerpergroesse) und platziert
     ein Accessoire-Mesh.
 
@@ -228,6 +242,12 @@ def place_accessory(mesh: MeshData, asset_type_id: int,
     auf diese echte Groesse skaliert statt auf die heuristische
     Zielgroesse - der Sanity-Check in build_avatar.py faengt danach
     unplausible Werte ab (Mesh-Einheiten sind nicht immer Studs).
+
+    `rotation` ist die CFrame-Rotation des Teils aus dem RBXM-Modell
+    (3x3-Matrix als drei Zeilen). Sie beschreibt die Ausrichtung des
+    Stuecks selbst (z. B. ein Brust-Stueck, das im Modell um 90 Grad
+    gedreht liegt) und wird VOR dem Zentrieren angewendet - sonst steht
+    das Accessoire seitlich statt in Blickrichtung.
 
     Rueckgabe: (transformiertes Mesh, Hinweistext)
     """
@@ -245,12 +265,17 @@ def place_accessory(mesh: MeshData, asset_type_id: int,
         # eine flache Krone (im RBXM oft Size 1x1x1) zur Kugel verzerren.
         scale = max(size_hint) / max_dim
         placed = mesh.transform(scale)
-        scale_note = ("RBXM-Groesse " + "x".join(_de(v, 2) for v in size_hint)
-                      + " Studs, form-erhaltend skaliert")
+        scale_note = (("RBXM-Groesse " + "x".join(_de(v, 2) for v in size_hint)
+                       + " Studs, form-erhaltend skaliert"))
     else:
         scale = target / max_dim
         placed = mesh.transform(scale)
         scale_note = f"skaliert x{scale:.2f}"
+    if not _rotation_is_identity(rotation):
+        # Uniforme Skalierung kommutiert mit der Drehung - Reihenfolge egal,
+        # hier vor dem Zentrieren, damit um den Part-Ursprung gedreht wird.
+        placed = placed.rotate(rotation)
+        scale_note += ", CFrame-Rotation uebernommen"
     c = placed.center()
     placed = placed.transform(1.0, (-c[0], -c[1], -c[2]))  # um Ursprung zentrieren
 
