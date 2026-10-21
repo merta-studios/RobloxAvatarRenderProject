@@ -164,6 +164,27 @@ def _normalize_name(name: str) -> str:
     return "".join(ch for ch in name.lower() if ch.isalnum())
 
 
+def _sort_segments_top_down(group: list) -> list:
+    """Fallback-Reihenfolge fuer Segmente ohne passende Instanznamen.
+
+    Von oben nach unten nach der Bind-Pose-Y sortieren; doppelte Segmente
+    desselben Mesh-Assets (Bundles liefern oft zwei Varianten) werden
+    dedupliziert, sonst mischt der Stapel beide Varianten.
+    """
+    seen = set()
+    unique = []
+    for mp in group:
+        key = mp.get("mesh_asset_id") or id(mp.get("mesh"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(mp)
+    if all(mp.get("rbxm_position") for mp in unique):
+        return sorted(unique, key=lambda mp: float(mp["rbxm_position"][1]),
+                      reverse=True)
+    return unique
+
+
 def _pick_r15_segments(group: list, expected_names: list) -> list:
     """Aus einer Mesh-Gruppe die R15-Segmente per Instanzname auswaehlen.
 
@@ -377,7 +398,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         def add_mesh(raw: bytes, parent_asset_id: int, mesh_asset_id: int,
                      type_id: int, type_name: str, label: str,
                      rbxm_size: Optional[Any], texture_file: Optional[str],
-                     rbxm_position: Optional[Any] = None) -> None:
+                     rbxm_position: Optional[Any] = None,
+                     rbxm_rotation: Optional[Any] = None) -> None:
             """Parst ein FileMesh und reiht es in mesh_parts ein."""
             try:
                 mesh = roblox_mesh.parse(raw)
@@ -408,6 +430,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 "mesh": mesh,
                 "rbxm_size": rbxm_size,
                 "rbxm_position": rbxm_position,
+                "rbxm_rotation": rbxm_rotation,
                 "texture_file": texture_file,
                 "head_info": head_info,
             })
@@ -470,7 +493,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                     f"{', mit Textur' if texture_file else ''})")
                 add_mesh(raw, parent_asset_id, mesh_id, type_id, type_name,
                          entry_label, entry.get("size"), texture_file,
-                         entry.get("position"))
+                         entry.get("position"), entry.get("rotation"))
 
             if (len(mesh_parts) == parts_before and len(skipped) == skips_before
                     and len(textures) == textures_before
@@ -559,9 +582,12 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     # Echte Koerperteil-Meshes (Typ 27-31) den Rig-Teilen zuordnen.
     # R15-Bundles liefern pro Asset mehrere Segmente (z. B. LeftArm =
     # UpperArm + LowerArm + Hand, teils in mehreren Varianten). Die
-    # R15-Segmente werden anhand ihrer Instanznamen ausgewaehlt und per
-    # RBXM-Position zu einem Koerperteil zusammengefuehrt - statt wie
-    # frueher nur das erste Segment (z. B. nur die Hand) zu verwenden.
+    # R15-Segmente werden anhand ihrer Instanznamen ausgewaehlt und
+    # **senkrecht gestapelt** (Stand-Pose). Die RBXM-Positionen
+    # beschreiben dagegen die Bind-Pose des Pakets (A-Pose, Arme schraeg
+    # nach aussen) - deren Uebernahme war die Ursache fuer falsche
+    # Position und Rotation der Rig-Teile beim Pressen in die senkrechte
+    # Rig-Box.
     body_groups: Dict[str, list] = {}
     for mesh_part in mesh_parts:
         rig_name = BODY_PART_TYPES.get(int(mesh_part["type_id"]))
@@ -574,29 +600,30 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             body_replacements[rig_name] = group[0]
             continue
         segments = _pick_r15_segments(group, R15_SEGMENT_NAMES.get(rig_name, []))
-        mergeable = segments if len(segments) >= 2 else group
-        if len(mergeable) <= 6 and all(
-                mp.get("rbxm_size") and mp.get("rbxm_position")
-                for mp in mergeable):
-            merged = roblox_mesh.merge_meshes(
-                [(mp["mesh"], mp["rbxm_size"], mp["rbxm_position"])
+        mergeable = segments if len(segments) >= 2 else _sort_segments_top_down(group)
+        mergeable = [mp for mp in mergeable
+                     if mp.get("mesh") is not None and not mp["mesh"].is_empty]
+        if 2 <= len(mergeable) <= 6:
+            stacked = roblox_mesh.stack_segments(
+                [(mp["mesh"], mp.get("rbxm_size") or mp["mesh"].size())
                  for mp in mergeable],
-                source_version="merged-rbxm")
+                source_version="stacked-rbxm")
             pseudo = dict(mergeable[0])
-            pseudo["mesh"] = merged
+            pseudo["mesh"] = stacked
             pseudo["texture_file"] = next(
                 (mp["texture_file"] for mp in mergeable
                  if mp.get("texture_file")), None)
+            names = ", ".join(mp.get("label") or "?" for mp in mergeable)
             pseudo["note_suffix"] = (
-                f", {len(mergeable)} R15-Segmente per RBXM-Position "
-                f"zusammengefuehrt")
+                f", {len(mergeable)} R15-Segmente senkrecht gestapelt "
+                f"(Stand-Pose statt Bind-Pose: {names})")
             body_replacements[rig_name] = pseudo
         else:
             largest = max(group, key=lambda mp: max(mp["mesh"].size()))
             body_replacements[rig_name] = largest
             warnings.append(
                 f"Koerperteil '{rig_name}': {len(group)} Meshes gefunden, "
-                f"aber nicht zusammenfuehrbar (fehlende RBXM-Positionen) - "
+                f"aber kein Stapel aus 2-6 Segmenten moeglich - "
                 f"nur das groesste Segment verwendet "
                 f"(Asset {largest['asset_id']}).")
 
@@ -705,7 +732,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             continue  # nur ein Kopf wird verwendet
         placed, note = avatar_rig.place_accessory(
             mesh_part["mesh"], int(mesh_part["type_id"]), metrics,
-            size_hint=mesh_part.get("rbxm_size"))
+            size_hint=mesh_part.get("rbxm_size"),
+            rotation=mesh_part.get("rbxm_rotation"))
         placed = sanity_check(
             placed, avatar_rig.accessory_target_size(int(mesh_part["type_id"]), metrics),
             mesh_part["label"] or mesh_part["type_name"], warnings)

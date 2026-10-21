@@ -63,15 +63,21 @@ def enc_vector3_array(vecs: Sequence[Tuple[float, float, float]]) -> bytes:
 
 
 def enc_cframe_array(items: Sequence[Any]) -> bytes:
-    """items: (x,y,z) = Identitaets-Rotation (ID 0x02) oder ("M", (x,y,z))
-    fuer eine explizite Rotationsmatrix (ID 0x00 + 9 Floats)."""
+    """items: (x,y,z) = Identitaets-Rotation (ID 0x02),
+    ("M", (x,y,z)) oder ("M", (x,y,z), matrix9) = explizite Rotationsmatrix
+    (ID 0x00 + 9 rohe Floats), oder ("R", id, (x,y,z)) = Sonder-Rotation
+    aus der 24er-Tabelle (ID 0x03, 0x14, 0x20, ...)."""
     out = bytearray()
     positions: List[Tuple[float, float, float]] = []
     for item in items:
         if isinstance(item, tuple) and item and item[0] == "M":
             out.append(0x00)
-            out += struct.pack("<9f", 1, 0, 0, 0, 1, 0, 0, 0, 1)
+            matrix = item[2] if len(item) > 2 else (1, 0, 0, 0, 1, 0, 0, 0, 1)
+            out += struct.pack("<9f", *matrix)
             positions.append(tuple(item[1]))  # type: ignore[arg-type]
+        elif isinstance(item, tuple) and item and item[0] == "R":
+            out.append(int(item[1]) & 0xFF)
+            positions.append(tuple(item[2]))  # type: ignore[arg-type]
         else:
             out.append(0x02)
             positions.append(tuple(item))  # type: ignore[arg-type]

@@ -98,6 +98,37 @@ class MeshData:
             source_version=self.source_version,
         )
 
+    def rotate(self, matrix) -> "MeshData":
+        """Dreht Positionen und Normalen um den Ursprung.
+
+        ``matrix``: 3x3-Rotationsmatrix als Tupel von drei Zeilen (so, wie
+        Roblox CFrames speichert: Zeile 0 = R00 R01 R02). Anwendung auf
+        Spaltenvektoren: v' = R * v. Wird fuer die CFrame-Rotationen aus
+        RBXM-Modellen benutzt (z. B. gedrehte Accessoires).
+        """
+        if matrix is None:
+            return self.transform(1.0)
+        try:
+            rows = [[float(value) for value in row] for row in matrix]
+        except (TypeError, ValueError):
+            return self.transform(1.0)
+        if len(rows) != 3 or any(len(row) != 3 for row in rows):
+            return self.transform(1.0)
+
+        def apply(v):
+            return (rows[0][0] * v[0] + rows[0][1] * v[1] + rows[0][2] * v[2],
+                    rows[1][0] * v[0] + rows[1][1] * v[1] + rows[1][2] * v[2],
+                    rows[2][0] * v[0] + rows[2][1] * v[1] + rows[2][2] * v[2])
+
+        return MeshData(
+            positions=[apply(p) for p in self.positions],
+            normals=[apply(n) for n in self.normals] if self.normals else [],
+            uvs=list(self.uvs),
+            faces=list(self.faces),
+            colors=list(self.colors) if self.colors else None,
+            source_version=self.source_version,
+        )
+
     def flip_v(self) -> "MeshData":
         """Spiegelt die UV-V-Achse (Roblox oben-links -> Blender unten-links)."""
         return MeshData(
@@ -565,6 +596,74 @@ def _smooth_normals(positions, faces):
         else:
             normals.append((x / length, y / length, z / length))
     return normals
+
+
+def stack_segments(items, source_version: str = "stacked",
+                   gap: float = 0.012) -> MeshData:
+    """Setzt R15-Segmente lueckenlos und senkrecht zu einem Glied zusammen.
+
+    ``items``: Folge aus ``(MeshData, size|None)`` - oder
+    ``(MeshData, size|None, position|None[, rotation])`` wie bei
+    :func:`merge_meshes`; Position und Rotation werden hier **bewusst
+    ignoriert**. Reihenfolge: von oben nach unten (Obersegment zuerst,
+    z. B. UpperTorso, LowerTorso bzw. UpperArm, LowerArm, Hand).
+
+    Warum nicht die RBXM-Positionen? Die CFrames der Bundles beschreiben
+    die *Bind-Pose* (A-Pose: Arme schraeg nach aussen, Diagonalstufen wie
+    0,85 -> 1,20 -> 1,48 Studs). Wer diese Positionen uebernimmt und das
+    Ergebnis in die senkrechte Rig-Box presst, bekommt verrenkte,
+    auseinanderdriftende Teile - genau der Position/Rotation-Bug. In der
+    Standard-Stand-Pose stehen alle Segmente achsenparallell übereinander;
+    dafuer wird hier gestapelt: jede Segment-Box exakt auf ihre
+    RBXM-Groesse skaliert, Oberkante des naechsten an Unterkante des
+    vorherigen (``gap`` = minimale Luft, damit im Glasrender keine
+    Flaechen exakt aufeinander liegen - wie in build_body).
+
+    Danach reicht :func:`avatar_rig.fit_mesh_to_part`, um den Stapel in
+    die Rig-Box des Koerperteils einzuordnen (Endposition und Gesamt-
+    groesse stimmen dann exakt).
+    """
+    positions: List[Vec3] = []
+    normals: List[Vec3] = []
+    uvs: List[Tuple[float, float]] = []
+    faces: List[Tuple[int, int, int]] = []
+    colors: List[Tuple[int, int, int, int]] = []
+    all_colors = True
+    top = 0.0  # Unterkante des zuletzt gesetzten Segments (Start: 0)
+    first = True
+    for item in items:
+        mesh = item[0]
+        size = item[1] if len(item) > 1 else None
+        part = mesh
+        if size:
+            current = mesh.size()
+            factors = tuple(
+                float(size[i]) / current[i] if current[i] > 1e-9 else 1.0
+                for i in range(3))
+            part = mesh.transform(factors)
+        height = part.size()[1]
+        center = part.center()
+        if first:
+            target_top = 0.0
+            first = False
+        else:
+            target_top = top - gap
+        # Zentrum so setzen: Oberkante liegt auf target_top, x/z mittig.
+        part = part.transform(
+            1.0, (-center[0], target_top - (center[1] + height / 2.0),
+                  -center[2]))
+        top = target_top - height
+        base = len(positions)
+        positions.extend(part.positions)
+        normals.extend(part.normals or [(0.0, 1.0, 0.0)] * len(part.positions))
+        uvs.extend(part.uvs or [(0.0, 0.0)] * len(part.positions))
+        faces.extend((a + base, b + base, c_ + base) for a, b, c_ in part.faces)
+        if part.colors:
+            colors.extend(part.colors)
+        else:
+            all_colors = False
+    return MeshData(positions, normals, uvs, faces,
+                    colors if all_colors and colors else None, source_version)
 
 
 def merge_meshes(items, source_version: str = "merged") -> MeshData:
