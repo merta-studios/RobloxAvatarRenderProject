@@ -17,10 +17,14 @@ Dieses Modul bildet den offiziellen Roblox-R15-Humanoid-Kompositor nach:
 from __future__ import annotations
 
 import io
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
-import numpy as np
-from PIL import Image
+try:
+    import numpy as np
+    from PIL import Image
+except ImportError:  # pragma: no cover - optionale Bildbibliotheken
+    np = None  # type: ignore[assignment]
+    Image = None  # type: ignore[assignment]
 
 from roblox_mesh import MeshData
 
@@ -60,9 +64,9 @@ _LEFT_LIMB_TOP = (308, 289, 372, 353)
 _LEFT_LIMB_BOT = (308, 485, 372, 549)
 
 
-def open_rgba(raw: Optional[bytes]) -> Optional[Image.Image]:
+def open_rgba(raw: Optional[bytes]) -> Optional[Any]:
     """Dekodiert Bild-Bytes als RGBA-PIL-Image oder gibt None zurueck."""
-    if not raw:
+    if not raw or Image is None or np is None:
         return None
     try:
         img = Image.open(io.BytesIO(raw))
@@ -72,7 +76,7 @@ def open_rgba(raw: Optional[bytes]) -> Optional[Image.Image]:
         return None
 
 
-def is_classic_template(img: Optional[Image.Image]) -> bool:
+def is_classic_template(img: Optional[Any]) -> bool:
     """Erkennt ein klassisches 585x559-Shirt/Pants-Template (inkl. HD-Vielfache)."""
     if img is None:
         return False

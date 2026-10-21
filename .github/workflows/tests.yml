@@ -27,8 +27,8 @@ jobs:
           python-version: "3.11"
 
       - name: Abhängigkeiten installieren
-        # zstandard/lz4, damit auch die RBXM-Kompressionstests laufen
-        run: python -m pip install --upgrade pip pytest PyYAML zstandard lz4 DracoPy numpy
+        # zstandard/lz4/DracoPy/numpy/Pillow fuer RBXM, v7-Meshes & Textur-Kompositor
+        run: python -m pip install --upgrade pip pytest PyYAML zstandard lz4 DracoPy numpy Pillow
 
       - name: Tests ausführen
         run: python -m pytest tools/tests -q
