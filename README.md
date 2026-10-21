@@ -57,6 +57,14 @@ vermutlich fehl (401) – es wird dann ein Platzhalter-Körper gerendert.
 Ergebnis im Build-Ordner: `manifest.json`, `parts/*.obj`, `textures/*`,
 `summary.md` (landet in der GitHub-Step-Summary).
 
+## Änderungen landen ohne Pull Request in `main`
+
+[`auto-merge.yml`](.github/workflows/auto-merge.yml) merged **jeden Push auf
+einen Arbeitsbranch** automatisch nach `main` – der Branch, auf den gepusht
+wurde, ist die Quelle (`agent-changes`, `arena/<session-id>-…`, …). Es wird
+**kein Pull Request** erstellt. Regeln für Agenten:
+[AGENTS.md](AGENTS.md), Details: [ANLEITUNG.md](ANLEITUNG.md).
+
 ## Lokal ausprobieren
 
 ```bash

@@ -201,31 +201,40 @@ Früher stand dort der Rohwert mit Punkt (`5.398`), was man leicht als
 
 ---
 
-## Auto-Merge: direkt auf `main` arbeiten
+## Auto-Merge: jeder Arbeitsbranch landet automatisch in `main`
 
 Der Workflow [`auto-merge.yml`](.github/workflows/auto-merge.yml) merged
-Pushes auf den Branch **`agent-changes`** automatisch nach `main` – ohne
-manuellen Pull Request:
+**jeden Push auf einen Arbeitsbranch** automatisch nach `main` – ohne
+Pull Request. Es gibt keinen fest verdrahteten Quell-Branch: Gemerged wird
+immer genau der Branch, auf den gepusht wurde (`agent-changes`,
+`arena/<session-id>-robloxavatarrenderproject`, …):
 
 ```bash
-git checkout agent-changes
+git checkout -b arena/<session-id>-robloxavatarrenderproject
 # ... Änderungen ...
 git commit -am "Beschreibung"
-git push origin agent-changes     # löst den Auto-Merge aus
+git push origin HEAD              # löst den Auto-Merge aus
 ```
 
-Ablauf: auschecken → `main` fetchen → `agent-changes` nach `main` mergen →
-`git push origin main`. Bei Konflikten wird der Merge abgebrochen (`main`
-bleibt unverändert) und ein Issue mit der Lauf-URL erstellt.
+Ablauf: `main` auschecken → Quell-Branch fetchen → mergen →
+`git push origin HEAD:main`. `main` und `renders` sind als Quelle
+ausgeschlossen (kein Selbst-Merge, keine Endlosschleife). Bei einem
+parallelen Push auf `main` wird automatisch neu gemerged und erneut
+gepusht.
 
-Ist `main` durch Branch Rules geschützt, scheitert der direkte Push – der
-Workflow legt dann automatisch einen Pull Request an und aktiviert Auto-Merge.
+**Es wird nie ein Pull Request erstellt.** Scheitert der direkte Push
+(Branch-Schutz/Rules auf `main` oder fehlende Schreibrechte des Tokens),
+bricht der Lauf mit einem Issue ab; `main` bleibt unverändert. Bei einem
+Merge-Konflikt wird der Merge abgebrochen und ebenfalls ein Issue mit der
+Lauf-URL erstellt.
 
 **Optional – damit Folgeläufe automatisch starten:** Pushes, die mit dem
 Standard-`GITHUB_TOKEN` gemacht werden, lösen **keine** neuen Workflows aus.
 Wenn nach dem Merge automatisch ein Avatar-Render starten soll, hinterlege ein
 Fine-grained PAT mit *Contents: Read and write* als Secret
 **`AUTO_MERGE_TOKEN`**. Der Workflow nutzt es automatisch, sobald es existiert.
+Dasselbe Secret ist nötig, wenn `main` später durch Branch Rules geschützt
+wird (PAT dort als Bypass eintragen).
 
 ---
 
@@ -236,8 +245,8 @@ username.txt                     Roblox-Username (Trigger für den Render)
 ANLEITUNG.md                     diese Anleitung
 .github/workflows/
   avatar-render.yml              Push/Manuell → Avatar rendern → Artifact
-  auto-merge.yml                 agent-changes → main
-  tests.yml                      Tests bei Pull Requests
+  auto-merge.yml                 jeder Arbeitsbranch → main (ohne Pull Request)
+  tests.yml                      Tests bei jedem Push
 blender/render_glass.py          Blender-Script (Glasmaterial, Kamera, Licht)
 tools/
   build_avatar.py                Orchestrierung, schreibt manifest.json + OBJs
