@@ -654,10 +654,19 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         mergeable = [mp for mp in mergeable
                      if mp.get("mesh") is not None and not mp["mesh"].is_empty]
         if 2 <= len(mergeable) <= 6:
+            # Segmente leicht ueberlappen lassen: die Bundle-Meshes (z. B.
+            # Korblox-Felsstuecke) fuellen ihre Bounding-Box nicht aus, mit
+            # exakt aneinanderliegenden Boxen entstehen sichtbare Luftspalte
+            # ("schwebende Koerperteile"). Roblox verbindet die Segmente an
+            # den Gelenken - die Ueberlappung bildet das nach.
+            seg_heights = [max(0.05, float(mp.get("rbxm_size")[1])
+                               if mp.get("rbxm_size") else mp["mesh"].size()[1])
+                           for mp in mergeable]
+            overlap = -0.15 * (sum(seg_heights) / len(seg_heights))
             stacked = roblox_mesh.stack_segments(
                 [(mp["mesh"], mp.get("rbxm_size") or mp["mesh"].size())
                  for mp in mergeable],
-                source_version="stacked-rbxm")
+                source_version="stacked-rbxm", gap=overlap)
             pseudo = dict(mergeable[0])
             pseudo["mesh"] = stacked
             pseudo["texture_file"] = next(
