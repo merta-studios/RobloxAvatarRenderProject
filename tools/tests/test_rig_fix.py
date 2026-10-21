@@ -356,3 +356,24 @@ def test_relayout_body_kopf_sitzt_auf_dem_hals():
     assert hlo[1] <= hi[1] + 1e-6        # Hals beginnt im Torso
     assert hhi[1] >= klo[1] - 1e-6       # Hals reicht in den Kopf
     assert khi[1] == pytest.approx(neu_metrics.height, abs=1e-6)
+
+
+def test_headless_kein_kopf_und_huete_tief():
+    """Headless-Avatar: kein Kopf, kurzer Kragen und Hutfreigabe knapp ueber
+    dem Torso (vorher schwebten Huete weit ueber dem Koerper)."""
+    parts, metrics = avatar_rig.build_body(roblox_api.DEFAULT_BODY_COLORS,
+                                           dict(roblox_api.DEFAULT_SCALES))
+    neu_parts, neu_metrics = avatar_rig.relayout_body(
+        parts, metrics, {"torso": (2.0, 2.0, 1.0)}, dict(roblox_api.DEFAULT_SCALES),
+        headless=True)
+    assert "kopf" not in [p.name for p in neu_parts]
+    assert neu_metrics.hat_base_y is not None
+    hals = next(p for p in neu_parts if p.name == "hals")
+    hlo, hhi = hals.mesh.bbox()
+    assert hhi[1] - hlo[1] <= 0.5          # kurzer Kragen statt langem Hals
+    # Hut-Unterkante liegt nur wenig ueber dem Torso
+    assert neu_metrics.hat_base_y - neu_metrics.shoulder_y < 0.3
+    hut = roblox_mesh.make_box(1.5, 0.6, 1.5)
+    placed, _ = avatar_rig.place_accessory(hut, 8, neu_metrics)
+    lo, hi = placed.bbox()
+    assert lo[1] - neu_metrics.shoulder_y < 0.5

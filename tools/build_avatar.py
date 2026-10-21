@@ -709,7 +709,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             head_natural = tuple(float(v) for v in head_size)
     if mesh_sizes:
         body_parts, metrics = avatar_rig.relayout_body(
-            body_parts, metrics, mesh_sizes, scales, head_natural)
+            body_parts, metrics, mesh_sizes, scales, head_natural,
+            headless=headless["active"])
         if head_natural is not None:
             warnings.append(
                 "Rig aus den echten Mesh-Groessen neu aufgebaut "
@@ -890,6 +891,11 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             "height_de": fmt_de(metrics.height),
             "torso_width": round(metrics.torso_width, 3),
             "head_radius": round(metrics.head_radius, 3),
+            "headless": bool(headless["active"]),
+            # Groessen der Koerperteile (Studs) - zur Kontrolle der
+            # Proportionen im Manifest / in der Step Summary.
+            "parts": {p.name: [round(v, 3) for v in p.mesh.size()]
+                      for p in body_parts},
         },
         "bbox": {"min": [round(v, 3) for v in bounds_lo],
                  "max": [round(v, 3) for v in bounds_hi]},
