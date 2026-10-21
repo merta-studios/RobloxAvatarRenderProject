@@ -636,11 +636,16 @@ def stack_segments(items, source_version: str = "stacked",
         size = item[1] if len(item) > 1 else None
         part = mesh
         if size:
+            # Gleichmaessig auf die RBXM-Hoehe skalieren (nicht achsweise!):
+            # Mesh-Einheiten und Part-Groesse stimmen bei manchen Bundles
+            # nicht exakt ueberein; eine Pro-Achsen-Skalierung hat die
+            # Segmente sichtbar in die Laenge/Breite gezogen.
             current = mesh.size()
-            factors = tuple(
-                float(size[i]) / current[i] if current[i] > 1e-9 else 1.0
-                for i in range(3))
-            part = mesh.transform(factors)
+            if current[1] > 1e-9 and float(size[1]) > 0:
+                factor = float(size[1]) / current[1]
+            else:
+                factor = max(float(v) for v in size) / (max(current) or 1.0)
+            part = mesh.transform(factor)
         height = part.size()[1]
         center = part.center()
         if first:

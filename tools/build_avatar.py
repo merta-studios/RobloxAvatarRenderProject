@@ -39,6 +39,24 @@ import roblox_mesh  # noqa: E402
 # (glatte Normalen auf Quadern wirken sonst wie "Plattenpanzer").
 SMOOTH_BODY_PARTS = {"kopf", "kopf_mesh"}
 
+# Klassische Kleidung -> Vorlagen-Art. Der Renderer schneidet daraus das
+# passende Feld der Roblox-Vorlage (585x559) heraus, statt das ganze Bild
+# auf jede Flaeche zu legen.
+CLOTHING_TEXTURE_KINDS = {
+    2: "tshirt",   # TShirt (512x512, nur Vorderseite)
+    11: "shirt",   # Shirt (585x559)
+    12: "pants",   # Pants (585x559)
+    64: "shirt",
+    65: "shirt",
+    66: "pants",
+    67: "shirt",
+    68: "shirt",
+    69: "pants",
+    70: "pants",
+    71: "pants",
+    72: "pants",
+}
+
 CLOTHING_TARGETS = {
     2: ["torso"],                                  # TShirt
     11: ["torso"],                                 # Shirt
@@ -200,6 +218,29 @@ def _pick_r15_segments(group: list, expected_names: list) -> list:
                 picked.append(mesh_part)
                 break
     return picked
+
+
+def stacked_part_size(items: list, gap: float = 0.012) -> Optional[tuple]:
+    """Groesse eines Koerperteils aus den RBXM-Part-Groessen (in Studs).
+
+    Roblox-Bundles liefern die Part-Groesse in echten Studs
+    (``MeshPart.Size``), die Datei-Geometrie dagegen in willkuerlichen
+    Mesh-Einheiten. Fuer das Rig zaehlen die Stud-Masse - sonst wird ein
+    2x2x1-Torso aus einem Mesh mit Einheit 3x1x0,5 ploetzlich 3 Studs breit
+    ("zu gross / gedehnt"). Fehlt eine plausible Part-Groesse, dient die
+    Geometrie als Rueckfall.
+    """
+    sizes = []
+    for mesh_part in items:
+        size = mesh_part.get("rbxm_size")
+        if not size or len(size) != 3 or min(size) <= 1e-6:
+            size = mesh_part["mesh"].size()
+        sizes.append(tuple(float(v) for v in size))
+    if not sizes:
+        return None
+    return (max(s[0] for s in sizes),
+            sum(s[1] for s in sizes) + gap * (len(sizes) - 1),
+            max(s[2] for s in sizes))
 
 
 # ---------------------------------------------------------------------------
@@ -573,10 +614,19 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     body_colors = effective_body_colors(avatar_raw.get("bodyColors"))
     body_parts, metrics = avatar_rig.build_body(body_colors, scales)
 
-    # Texturen den Kleidungs-Parts zuordnen
+    # Texturen den Kleidungs-Parts zuordnen. Zusaetzlich wird vermerkt,
+    # ob es klassische Kleidung ist: deren Bilder sind Vorlagen mit
+    # getrennten Feldern fuer Vorder-/ Rueckseite und Aermel. Der Renderer
+    # schneidet daraus das passende Feld heraus, sonst liegt die komplette
+    # Vorlage (mit Aermeln und transparenten Luecken) auf jeder Flaeche.
     texture_for_part: Dict[str, str] = {}
+    clothing_kind_by_file: Dict[str, str] = {}
     for tex in textures:
-        for target in CLOTHING_TARGETS.get(int(tex["type_id"]), []):
+        type_id = int(tex["type_id"])
+        kind = CLOTHING_TEXTURE_KINDS.get(type_id)
+        if kind:
+            clothing_kind_by_file[tex["file"]] = kind
+        for target in CLOTHING_TARGETS.get(type_id, []):
             texture_for_part.setdefault(target, tex["file"])
 
     # Echte Koerperteil-Meshes (Typ 27-31) den Rig-Teilen zuordnen.
@@ -617,6 +667,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             pseudo["note_suffix"] = (
                 f", {len(mergeable)} R15-Segmente senkrecht gestapelt "
                 f"(Stand-Pose statt Bind-Pose: {names})")
+            pseudo["stacked_size"] = stacked_part_size(mergeable)
             body_replacements[rig_name] = pseudo
         else:
             largest = max(group, key=lambda mp: max(mp["mesh"].size()))
@@ -639,6 +690,33 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         if head_mesh is not None:
             break
 
+    # Rig-Boxen an die echten Mesh-Groessen anpassen: Vorher wurden die
+    # Bundle-Meshes achsweise in Schema-F-Boxen gepresst (Arme/Beine/Torso
+    # "gedehnt", "zu gross"). Jetzt liefert das Mesh die Proportionen, die
+    # Boxen werden daraus neu zusammengesetzt (Beine auf dem Boden, Torso
+    # darauf, Arme an der Schulter, Kopf auf dem Hals).
+    mesh_sizes: Dict[str, tuple] = {}
+    for rig_name, replacement in body_replacements.items():
+        size = replacement.get("stacked_size")
+        if not size:
+            size = replacement.get("rbxm_size") or replacement["mesh"].size()
+        if max(size) > 1e-6:
+            mesh_sizes[rig_name] = tuple(float(v) for v in size)
+    head_natural = None
+    if head_mesh is not None and not headless["active"]:
+        head_size = head_mesh.get("rbxm_size") or head_mesh["mesh"].size()
+        if max(head_size) > 1e-6:
+            head_natural = tuple(float(v) for v in head_size)
+    if mesh_sizes:
+        body_parts, metrics = avatar_rig.relayout_body(
+            body_parts, metrics, mesh_sizes, scales, head_natural)
+        if head_natural is not None:
+            warnings.append(
+                "Rig aus den echten Mesh-Groessen neu aufgebaut "
+                f"(Kopf {fmt_de(metrics.head_radius * 2)} Studs, "
+                f"Torso {fmt_de(metrics.torso_width)} breit) - "
+                "keine achsweise Streckung der Koerperteile mehr.")
+
     body_parts_from_mesh = 0
     for part in body_parts:
         if part.name == "kopf":
@@ -647,21 +725,25 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             if head_mesh is not None:
                 size = head_mesh["mesh"].size()
                 max_dim = max(size) or 1.0
-                target = metrics.head_radius * 2.15
+                # Kopf-Mesh gleichmaessig auf den Kopfdurchmesser bringen
+                # (vorher 2,15x Radius -> Kopf zu gross).
+                target = metrics.head_radius * 2.0
                 placed = head_mesh["mesh"].transform(target / max_dim)
                 c = placed.center()
                 placed = placed.transform(1.0, (-c[0], metrics.head_center_y - c[1], -c[2]))
                 placed = sanity_check(placed, target, "Kopf", warnings)
                 fname = "kopf_mesh.obj"
                 placed.write_obj(os.path.join(parts_dir, fname))
+                head_texture = (head_mesh.get("texture_file")
+                                or texture_for_part.get("kopf_mesh"))
                 parts.append({
                     "name": "kopf_mesh",
                     "obj": f"parts/{fname}",
                     "color": part.color,
                     "kind": "body",
                     "smooth": True,
-                    "texture": head_mesh.get("texture_file")
-                               or texture_for_part.get("kopf_mesh"),
+                    "texture": head_texture,
+                    "texture_kind": clothing_kind_by_file.get(head_texture or ""),
                     "asset_id": head_mesh["asset_id"],
                     "note": ("Echtes Kopf-Mesh des Avatars"
                              + (f" ({head_mesh['head_info']})"
@@ -673,19 +755,25 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         replacement = body_replacements.get(part.name)
         if replacement is not None:
             lo, hi = part.mesh.bbox()
-            placed = avatar_rig.fit_mesh_to_part(replacement["mesh"], lo, hi)
+            # Box stammt jetzt aus dem Mesh selbst -> achsweise ist hier
+            # nur noch die Avatar-Skalierung (width/height/depth), keine
+            # Verzerrung mehr.
+            placed = avatar_rig.fit_mesh_to_part(replacement["mesh"], lo, hi,
+                                                 uniform=False)
             placed = sanity_check(placed, max(hi[i] - lo[i] for i in range(3)),
                                   part.name, warnings)
             fname = f"{part.name}.obj"
             placed.write_obj(os.path.join(parts_dir, fname))
+            body_texture = (replacement.get("texture_file")
+                            or texture_for_part.get(part.name))
             parts.append({
                 "name": part.name,
                 "obj": f"parts/{fname}",
                 "color": part.color,
                 "kind": "body",
                 "smooth": True,
-                "texture": replacement.get("texture_file")
-                           or texture_for_part.get(part.name),
+                "texture": body_texture,
+                "texture_kind": clothing_kind_by_file.get(body_texture or ""),
                 "asset_id": replacement["asset_id"],
                 "note": (f"Echtes Mesh aus RBXM (Mesh-Asset "
                          f"{replacement['mesh_asset_id']})"
@@ -703,6 +791,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             "kind": "body",
             "smooth": part.name in SMOOTH_BODY_PARTS,
             "texture": texture_for_part.get(part.name),
+            "texture_kind": clothing_kind_by_file.get(
+                texture_for_part.get(part.name) or ""),
         })
 
     if headless["active"]:
@@ -734,6 +824,14 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             mesh_part["mesh"], int(mesh_part["type_id"]), metrics,
             size_hint=mesh_part.get("rbxm_size"),
             rotation=mesh_part.get("rbxm_rotation"))
+        if "unplausibel" in note:
+            # Diagnose: die Part-Groesse im RBXM passt nicht zur
+            # Accessoire-Art (z. B. Platzhalter 1x1x1 bei einem 3 Studs
+            # breiten Hut) - es gilt die Zielgroesse der Accessoire-Art.
+            warnings.append(
+                f"Accessoire '{mesh_part['label'] or mesh_part['type_name']}': "
+                "Groesse aus dem RBXM war unplausibel und wurde auf die "
+                "Zielgroesse der Accessoire-Art korrigiert.")
         placed = sanity_check(
             placed, avatar_rig.accessory_target_size(int(mesh_part["type_id"]), metrics),
             mesh_part["label"] or mesh_part["type_name"], warnings)

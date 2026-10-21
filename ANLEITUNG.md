@@ -128,8 +128,21 @@ einen Usernamen, die Auflösung (z. B. `960x540`) und die Sample-Zahl
   sein. Dann fehlt das Teil im Render – im Manifest steht der Grund unter
   `skipped`, der Rest wird trotzdem gerendert.
 * **2D-Kleidung** (T-Shirts, Hosen) wird als Textur auf die Körperteile gelegt,
-  sofern sie herunterladbar ist; 3D-Kleidungs-Bundles werden wie Accessoires
+  sofern sie herunterladbar ist. Bei den klassischen 585×559-Vorlagen schneidet
+  der Renderer das passende Feld heraus (Torso 128×128, Ärmel 64×128 …), damit
+  das Motiv groß und lesbar bleibt. 3D-Kleidungs-Bundles werden wie Accessoires
   behandelt. Beides kann farblich vom Original abweichen.
+* **Proportionen kommen aus den Meshes:** Die getragenen Bundle-Teile (Torso,
+  Arme, Beine, Kopf) bestimmen Größe und Position im Rig; es wird nichts mehr
+  in Schema-F-Boxen gepresst. Unplausible RBXM-Größen (z. B. Platzhalter
+  1×1×1 bei einem großen Hut) werden verworfen und im Manifest als Hinweis
+  vermerkt.
+* **Material-Look:** Das Glas lässt Texturen sichtbar, weil jedes Teil aus
+  einem Glas-Körper und einer deckenden Textur-Ebene besteht. Wer den alten,
+  sehr starken Glas-Look möchte, rendert mit `--transmission 1.0
+  --tint-strength 0.45 --env-strength 0.2` (Texturen werden dann blasser).
+  Weitere Regler: `--roughness`, `--ior`, `--texture-strength`,
+  `--env-color`.
 * **RoProxy o. Ä. wird nicht verwendet.** Alle Anfragen gehen direkt an
   Roblox-Domains.
 
@@ -247,7 +260,7 @@ ANLEITUNG.md                     diese Anleitung
   avatar-render.yml              Push/Manuell → Avatar rendern → Artifact
   auto-merge.yml                 jeder Arbeitsbranch → main (ohne Pull Request)
   tests.yml                      Tests bei jedem Push
-blender/render_glass.py          Blender-Script (Glasmaterial, Kamera, Licht)
+blender/render_glass.py          Blender-Script (Glas+Textur-Material, Kamera, Licht)
 tools/
   build_avatar.py                Orchestrierung, schreibt manifest.json + OBJs
   roblox_api.py                  Web-APIs, Asset Delivery, BrickColor-Tabelle

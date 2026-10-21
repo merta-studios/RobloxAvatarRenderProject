@@ -321,18 +321,34 @@ def test_accessoire_unbekannter_typ_bekommt_fallback():
 
 
 def test_accessoire_rbxm_groesse_form_erhaltend():
-    """RBXM-Size 1x1x1 darf eine flache Krone (3x0,7x2) nicht zur Kugel
-    verzerren: gleichmaessige Skalierung auf die groesste Achse."""
+    """Eine flache Krone (3x0,7x2) darf nicht zur Kugel verzerrt werden:
+    gleichmaessige Skalierung, Form bleibt erhalten."""
     _, metrics = avatar_rig.build_body(roblox_api.DEFAULT_BODY_COLORS,
                                        roblox_api.DEFAULT_SCALES)
     krone = roblox_mesh.make_box(3.0, 0.7, 2.0)
     placed, note = avatar_rig.place_accessory(
-        krone, 8, metrics, size_hint=(1.0, 1.0, 1.0))
+        krone, 8, metrics, size_hint=(1.75, 1.75, 1.75))
     size = placed.size()
-    assert max(size) == pytest.approx(1.0)
+    assert max(size) == pytest.approx(1.75)
     assert size[0] / size[2] == pytest.approx(1.5, abs=0.02)  # Proportion!
-    assert size[1] == pytest.approx(0.7 / 3.0, abs=0.02)
+    assert size[1] == pytest.approx(0.7 / 3.0 * 1.75, abs=0.02)
     assert "form-erhaltend" in note
+
+
+def test_accessoire_unplausible_rbxm_groesse_wird_ignoriert():
+    """RBXM-Platzhalter 1x1x1 bei einem 3 Studs breiten Hut: frueher wurde
+    der Hut auf 1 Stud geschrumpft (verschwand im Kopf). Jetzt gilt die
+    Zielgroesse der Accessoire-Art (Hut: 1,75 Studs)."""
+    _, metrics = avatar_rig.build_body(roblox_api.DEFAULT_BODY_COLORS,
+                                       roblox_api.DEFAULT_SCALES)
+    hut = roblox_mesh.make_box(3.0, 2.0, 0.7)
+    placed, note = avatar_rig.place_accessory(hut, 8, metrics,
+                                              size_hint=(1.0, 1.0, 1.0))
+    assert max(placed.size()) == pytest.approx(1.75)
+    assert "unplausibel" in note
+    # Form bleibt erhalten (3 : 2 : 0,7)
+    size = placed.size()
+    assert size[0] / size[1] == pytest.approx(1.5, abs=0.02)
 
 
 # ---------------------------------------------------------------------------
