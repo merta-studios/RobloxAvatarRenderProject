@@ -19,9 +19,12 @@ danach werden die echten Meshes geladen.
 
 ![Beispiel-Render](docs/demo_render.png)
 
-*Beispielausgabe (960×540, 64 Samples, Cycles CPU). Gerendert mit dem Test-Rig
-und synthetischen Accessoire-Meshes – echte Avatare bringen ihre eigenen
-Roblox-Meshes und Texturen mit.*
+*Beispielausgabe (960×540, 64 Samples, Cycles CPU) mit dem neuen Material
+(Texturen lesbar, Glas bleibt Glas). Gerendert mit dem Test-Rig und
+synthetischen Accessoire-Meshes.
+
+Vorher/Nachher am echten Avatar (`MertaStudios`):
+[`docs/before_after.png`](docs/before_after.png)
 
 ## Schnellstart
 
