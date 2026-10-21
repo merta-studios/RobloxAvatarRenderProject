@@ -8,9 +8,11 @@ import os
 import struct
 import sys
 
-import numpy as np
 import pytest
-from PIL import Image
+
+np = pytest.importorskip("numpy")
+PIL = pytest.importorskip("PIL")
+from PIL import Image  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.dirname(HERE)

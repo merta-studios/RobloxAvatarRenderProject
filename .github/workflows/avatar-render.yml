@@ -102,9 +102,9 @@ jobs:
           # solche Meshes nur uebersprungen (Begruendung im Manifest).
           # numpy muss mitinstalliert werden: DracoPy importiert es,
           # deklariert es aber nicht als Abhaengigkeit (sonst ImportError).
-          python3 -m pip install --quiet DracoPy numpy \
-            || python3 -m pip install --quiet --break-system-packages DracoPy numpy \
-            || echo "::warning::DracoPy nicht installierbar - FileMesh 7.00 wird uebersprungen"
+          python3 -m pip install --quiet DracoPy numpy Pillow \
+            || python3 -m pip install --quiet --break-system-packages DracoPy numpy Pillow \
+            || echo "::warning::DracoPy/Pillow nicht installierbar - FileMesh 7.00 wird uebersprungen"
           python3 -c "import DracoPy; print('DracoPy OK (FileMesh 7.00)')" \
             || echo "::warning::DracoPy nicht verfuegbar - v7-Meshes werden uebersprungen"
 
