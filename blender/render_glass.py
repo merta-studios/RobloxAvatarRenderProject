@@ -9,10 +9,16 @@ Alles nach dem ersten `--` geht an dieses Script. Ohne Blender-Argumente
 werden sinnvolle Defaults benutzt, damit man das Script auch aus der
 Blender-GUI (Texteditor -> Run Script) starten kann.
 
-Material: Principled BSDF mit Transmission 1.0, Roughness 0.05, IOR 1.45.
-Die Base Color ist ein helles Blau, das mit der jeweiligen Avatar-Farbe
-(vbzw. Textur) leicht eingefaerbt wird - so bleibt der Avatar erkennbar,
-wirkt aber wie Glas. Mit --mono-glass wird alles einfarbig hellblau.
+Material ("Milchglas mit sichtbaren Texturen"): Principled BSDF mit
+Transmission 0.35, Roughness 0.18, IOR 1.35. Die Base Color kommt aus der
+Textur des Teils (Alpha der Shirt-/Hosen-Vorlagen wird mit der Koerperfarbe
+aufgefuellt), das Glas-Blau wird nur noch schwach (--tint-strength, Default
+0.18) eingemischt - vorher hat eine MULTIPLY-Mischung mit kraeftigem Blau
+alle Texturen zugekleistert ("alles grau/dunkelblau").
+
+Zusaetzlich steuert die Textur-Helligkeit Roughness und Transmission:
+bedruckte Stellen bleiben kompakter und zeigen ihre Farbe, freie Stellen
+bleiben glasig. Mit --mono-glass wird alles einfarbig hellblau.
 """
 
 from __future__ import annotations
@@ -42,14 +48,33 @@ def parse_args() -> argparse.Namespace:
                         help="Breite x Hoehe, z. B. 1280x720 oder 960x540")
     parser.add_argument("--samples", type=int, default=64)
     parser.add_argument("--max-bounces", type=int, default=6)
-    parser.add_argument("--glass-tint", default="#8fd3ff",
-                        help="Grundfarbe des Glases (hellblau)")
-    parser.add_argument("--metal-tint", default="#cfeeff",
-                        help="Farbe fuer metallisch glaenzende Accessoires")
+    parser.add_argument("--transmission", type=float, default=0.65,
+                        help="Glasanteil 0..1 (Default 0.65; 1.0 = starkes Glas, "
+                             "Texturen verschwinden dann)")
+    parser.add_argument("--ior", type=float, default=1.35,
+                        help="Brechungsindex (nahe 1.0 = kaum Verzerrung, "
+                             "1.45 = starkes Glas)")
+    parser.add_argument("--roughness", type=float, default=0.05,
+                        help="Grund-Rauheit des Glases (Default 0.18)")
+    parser.add_argument("--tint-strength", type=float, default=0.10,
+                        help="Wie stark das Glas-Blau eingefaerbt wird (0 = keine "
+                             "Verfaerbung, 1 = alles blau)")
+    parser.add_argument("--texture-strength", type=float, default=1.0,
+                        help="Deckkraft der Texturen auf der Base Color (1.0 = voll)")
+    parser.add_argument("--glass-tint", default="#eaf7ff",
+                        help="Grundfarbe des Glases (sehr helles Blau)")
+    parser.add_argument("--metal-tint", default="#d8e9f2",
+                        help="Farbe fuer glaenzende Accessoires ohne Textur")
     parser.add_argument("--mono-glass", action="store_true",
                         help="alle Teile in derselben hellblauen Glasfarbe")
     parser.add_argument("--no-floor", action="store_true")
-    parser.add_argument("--background", default="#dfe8f2")
+    parser.add_argument("--background", default="#eaf1f8",
+                        help="Hintergrund (Kamera-Strahlen)")
+    parser.add_argument("--env-color", default="#3f4d5c",
+                        help="Umgebungslicht/Reflexionsfarbe des Glases")
+    parser.add_argument("--env-strength", type=float, default=1.15,
+                        help="Staerke des Umgebungslichts (kleiner = mehr "
+                             "Kontrast im Glas)")
     parser.add_argument("--denoise/--no-denoise", default=True, dest="denoise")
     parser.add_argument("--save-blend", default="", help="optional .blend speichern")
     return parser.parse_args(argv)
@@ -111,12 +136,169 @@ def set_input(node, names, value) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Roblox-Kleidungsvorlagen: passendes Feld herausschneiden
+# ---------------------------------------------------------------------------
+
+# Bekannte Feldgroessen der klassischen Roblox-Vorlage (585x559):
+#   Torso vorne/hinten 128x128, Aermel/Seiten 64x128, Schultern 128x64,
+#   Enden 64x64. Fuer ein Koerperteil wird das erste vollstaendig
+#   deckende Feld dieser Groessen benutzt.
+CLOTHING_PANELS = {
+    "shirt": ((128, 128), (64, 128), (128, 64)),
+    "tshirt": ((128, 128), (64, 128), (128, 64)),
+    "pants": ((64, 128), (128, 128), (128, 64)),
+}
+CLOTHING_TEMPLATE = (585.0, 559.0)
+
+
+def _image_alpha_grid(img, max_side: int = 320):
+    """Alpha-Kanal als numpy-Matrix, auf max_side verkleinert (0..1)."""
+    try:
+        import numpy as np
+    except ImportError:  # pragma: no cover - Blender bringt numpy mit
+        return None
+    width, height = img.size
+    if width <= 0 or height <= 0:
+        return None
+    step = max(1, int(max(width, height) // max_side))
+    sx = max(1, step)
+    pixels = np.empty(width * height * 4, dtype=np.float32)
+    try:
+        img.pixels.foreach_get(pixels)
+    except (TypeError, ValueError):  # pragma: no cover
+        return None
+    alpha = pixels.reshape(height, width, 4)[:, :, 3]
+    alpha = alpha[::sx, ::sx]
+    return alpha
+
+
+def _find_opaque_panel(img, kind: str):
+    """Position des groessten vollstaendig deckenden Vorlagen-Felds.
+
+    Rueckgabe: (u0, v0, u1, v1) in UV-Koordinaten (0..1, Ursprung unten
+    links wie bei Blender-Bildern) oder None, wenn nichts passt.
+    """
+    try:
+        import numpy as np
+    except ImportError:  # pragma: no cover
+        return None
+    grid = _image_alpha_grid(img)
+    if grid is None or grid.size == 0:
+        return None
+    height, width = grid.shape
+    # Ohne Transparenz ist es keine Vorlage (z. B. ein fertig gemaltes
+    # Bild oder ein Mesh-Atlas) - dann bleibt die Textur unbeschnitten.
+    if float((grid < 0.5).mean()) < 0.02:
+        return None
+    # Summed-Area-Table: damit ist "Fenster vollstaendig deckend?"
+    # in wenigen numpy-Operationen beantwortet (statt jeder Pixel-Schleife).
+    table = np.zeros((height + 1, width + 1), dtype=np.float64)
+    table[1:, 1:] = np.cumsum(np.cumsum(grid.astype(np.float64), axis=0), axis=1)
+
+    sizes = CLOTHING_PANELS.get(kind or "shirt", CLOTHING_PANELS["shirt"])
+    scale_x = width / CLOTHING_TEMPLATE[0]
+    scale_y = height / CLOTHING_TEMPLATE[1]
+    for panel_w, panel_h in sizes:
+        w = max(2, int(round(panel_w * scale_x)))
+        h = max(2, int(round(panel_h * scale_y)))
+        if w >= width or h >= height:
+            continue
+        window = (table[h:, w:] - table[:-h, w:]
+                  - table[h:, :-w] + table[:-h, :-w])
+        hits = np.argwhere(window >= 0.999 * w * h)
+        if len(hits) == 0:
+            continue
+        y, x = int(hits[0][0]), int(hits[0][1])
+        return (x / width, y / height, (x + w) / width, (y + h) / height)
+    return None
+
+
+def _apply_clothing_uv(nodes, links, tex, kind: str):
+    """Skaliert die UVs der Box auf das passende Vorlagen-Feld.
+
+    Ohne das liegt die komplette Shirt-Vorlage (Aermel, Rueckseite,
+    transparente Luecken) auf jeder Wuerfelflaeche - das Motiv ist dann
+    winzig und von Transparenz durchsetzt ("Textur nicht zu erkennen").
+    """
+    region = _find_opaque_panel(tex.image, kind)
+    if region is None:
+        return False
+    u0, v0, u1, v1 = region
+    mapping = nodes.new("ShaderNodeMapping")
+    mapping.location = (-760, 120)
+    mapping.vector_type = "POINT"
+    mapping.inputs["Scale"].default_value = (u1 - u0, v1 - v0, 1.0)
+    mapping.inputs["Location"].default_value = (u0, v0, 0.0)
+    uv = nodes.new("ShaderNodeUVMap")
+    uv.location = (-940, 120)
+    links.new(uv.outputs["UV"], mapping.inputs["Vector"])
+    links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
+    return True
+
+
+def _load_texture_node(nodes, texture_path: str):
+    """Bild-Textur-Node fuer eine Textur-Datei (oder None)."""
+    if not texture_path or not os.path.exists(texture_path):
+        return None
+    try:
+        img = bpy.data.images.load(texture_path, check_existing=True)
+    except Exception as exc:  # pragma: no cover
+        log(f"  ! Textur {texture_path} konnte nicht geladen werden: {exc}")
+        return None
+    tex = nodes.new("ShaderNodeTexImage")
+    tex.image = img
+    tex.projection = "FLAT"
+    tex.extension = "EXTEND"
+    tex.location = (-900, 240)
+    tex.label = os.path.basename(texture_path)
+    return tex
+
+
+def _texture_detail_nodes(nodes, links, tex, low: float, high: float):
+    """Helligkeit der Textur -> Wert zwischen low und high.
+
+    Roblox-Kleidung ist ein Template-Bild: bedruckte Stellen sind farbig
+    und eher dunkel, unbedruckte (transparente) Stellen hell. Ueber diese
+    Rampe bekommen bedruckte Flaechen ihre Farbe zurueck, weil sie dort
+    weniger durchsichtig/rauer sind.
+    """
+    bw = nodes.new("ShaderNodeRGBToBW")
+    bw.location = (-680, -120)
+    links.new(tex.outputs["Color"], bw.inputs["Color"])
+    ramp = nodes.new("ShaderNodeValToRGB")
+    ramp.location = (-480, -120)
+    ramp.color_ramp.elements[0].position = 0.05
+    ramp.color_ramp.elements[0].color = (low, low, low, 1.0)
+    ramp.color_ramp.elements[1].position = 0.95
+    ramp.color_ramp.elements[1].color = (high, high, high, 1.0)
+    links.new(bw.outputs["Val"], ramp.inputs["Fac"])
+    return ramp
+
+
 def make_glass_material(name: str, base_rgb, tint_rgb, texture_path: str = "",
-                        mono: bool = False):
-    """Glasiges Principled-BSDF-Material."""
+                        mono: bool = False, transmission: float = 0.65,
+                        roughness: float = 0.05, tint_strength: float = 0.10,
+                        texture_strength: float = 1.0, ior: float = 1.35,
+                        texture_kind: str = "", decal: bool = True):
+    """Glas-Material mit sichtbarer Textur ("farbiges Dekor auf Glas").
+
+    Aufbau (bei vorhandener Textur):
+      * Glas-Koerper: Principled mit Transmission (`transmission`), niedriger
+        Roughness, hohem IOR - die Roblox-Silhouette wirkt wie Glas.
+      * Textur-Ebene: zweiter Principled mit der **echten Texturfarbe**
+        (Alpha 0 = Glas). Sie wird ueber den Textur-Alpha mit dem Glas
+        gemischt - Kleidung/Logos bleiben also voll lesbar, waehrend
+        unbekleidete Stellen (Kopf, Arme ohne Shirt) Glas bleiben.
+      * Klassische Roblox-Kleidung (Shirt/Pants) nutzt nur das passende
+        Feld der Vorlage (`texture_kind`), nicht das ganze 585x559-Bild.
+
+    Vorher: eine einzige Principled-Surface mit Transmission 1.0, Base
+    Color = MULTIPLY aus kraeftigem Hellblau und Textur, Roughness 0.05.
+    Ergebnis: alles grau/dunkelblau, Texturen nicht erkennbar.
+    """
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
-    mat.blend_method = "BLEND" if hasattr(mat, "blend_method") else mat.blend_method
     tree = mat.node_tree
     nodes, links = tree.nodes, tree.links
 
@@ -125,37 +307,72 @@ def make_glass_material(name: str, base_rgb, tint_rgb, texture_path: str = "",
         bsdf = nodes.new("ShaderNodeBsdfPrincipled")
         out = nodes.get("Material Output") or nodes.new("ShaderNodeOutputMaterial")
         links.new(bsdf.outputs[0], out.inputs[0])
+    bsdf.location = (-120, 260)
+    bsdf.name = "Glas"
 
-    color = srgb_to_linear(tuple(tint_rgb) if mono else mix(tup(tint_rgb), tup(base_rgb), 0.45))
+    base = srgb_to_linear(tup(base_rgb)) if not mono else srgb_to_linear((0.93, 0.97, 1.0))
+    tint = srgb_to_linear(tup(tint_rgb))
+    tint_mix = 0.0 if mono else max(0.0, min(1.0, tint_strength))
+    color = mix(base, tint, tint_mix)
+
     set_input(bsdf, "Base Color", (color[0], color[1], color[2], 1.0))
-    set_input(bsdf, "Roughness", 0.05)
-    set_input(bsdf, "IOR", 1.45)
-    set_input(bsdf, ("Transmission Weight", "Transmission"), 1.0)
+    set_input(bsdf, "Roughness", roughness)
+    set_input(bsdf, "IOR", ior)
+    set_input(bsdf, ("Transmission Weight", "Transmission"), transmission)
     set_input(bsdf, ("Specular IOR Level", "Specular"), 0.5)
     set_input(bsdf, "Metallic", 0.0)
-    set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.15)
-    set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.02)
-    # Etwas Eigenfarbe, damit das Glas nicht wie Luft wirkt
-    set_input(bsdf, ("Subsurface Weight", "Subsurface"), 0.0)
+    set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.25)
+    set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.03)
 
-    if texture_path and os.path.exists(texture_path):
-        try:
-            img = bpy.data.images.load(texture_path, check_existing=True)
-            tex = nodes.new("ShaderNodeTexImage")
-            tex.image = img
-            tex.projection = "FLAT"
-            tex.extension = "EXTEND"
-            tex.location = (-700, 200)
-            blender_tint = nodes.new("ShaderNodeMixRGB")
-            blender_tint.blend_type = "MULTIPLY"
-            blender_tint.inputs["Fac"].default_value = 0.85
-            blender_tint.inputs["Color1"].default_value = (color[0], color[1], color[2], 1.0)
-            blender_tint.location = (-380, 200)
-            links.new(tex.outputs["Color"], blender_tint.inputs["Color2"])
-            links.new(blender_tint.outputs["Color"], bsdf.inputs["Base Color"])
-        except Exception as exc:  # pragma: no cover
-            log(f"  ! Textur {texture_path} konnte nicht geladen werden: {exc}")
+    tex = _load_texture_node(nodes, texture_path)
+    if tex is None or not decal:
+        return mat
+    if texture_kind:
+        _apply_clothing_uv(nodes, links, tex, texture_kind)
 
+    # Textur-Ebene: deckende, leicht matte Farbe mit etwas Eigenlicht, damit
+    # das Motiv auch in dunklen Reflexionen lesbar bleibt.
+    surface = nodes.new("ShaderNodeBsdfPrincipled")
+    surface.name = "Textur"
+    surface.location = (-120, -180)
+    set_input(surface, "Base Color", (color[0], color[1], color[2], 1.0))
+    set_input(surface, "Roughness", max(0.25, roughness + 0.22))
+    set_input(surface, "Metallic", 0.0)
+    set_input(surface, "IOR", 1.45)
+    set_input(surface, ("Specular IOR Level", "Specular"), 0.35)
+    set_input(surface, ("Coat Weight", "Clearcoat"), 0.1)
+
+    mix_color = nodes.new("ShaderNodeMixRGB")
+    mix_color.blend_type = "MIX"
+    mix_color.location = (-420, -60)
+    mix_color.inputs["Color1"].default_value = (color[0], color[1], color[2], 1.0)
+    links.new(tex.outputs["Color"], mix_color.inputs["Color2"])
+    links.new(tex.outputs["Alpha"], mix_color.inputs["Fac"])
+    links.new(mix_color.outputs["Color"], surface.inputs["Base Color"])
+    set_input(surface, ("Emission Color", "Emission"), (0.0, 0.0, 0.0, 1.0))
+
+    # Deckkraft der Textur: Alpha * texture_strength
+    alpha = tex.outputs["Alpha"]
+    if texture_strength < 0.999:
+        strength = nodes.new("ShaderNodeMath")
+        strength.operation = "MULTIPLY"
+        strength.location = (-620, -240)
+        strength.inputs[1].default_value = max(0.0, min(1.0, texture_strength))
+        links.new(alpha, strength.inputs[0])
+        alpha = strength.outputs["Value"]
+
+    mix_shader = nodes.new("ShaderNodeMixShader")
+    mix_shader.location = (220, 80)
+    links.new(alpha, mix_shader.inputs["Fac"])
+    links.new(bsdf.outputs[0], mix_shader.inputs[1])
+    links.new(surface.outputs[0], mix_shader.inputs[2])
+    out = nodes.get("Material Output") or nodes.new("ShaderNodeOutputMaterial")
+    # Bestehende Verbindung zur Ausgabe ersetzen
+    for link in list(links):
+        if link.to_node is out and link.to_socket.name == "Surface":
+            links.remove(link)
+    out.location = (460, 80)
+    links.new(mix_shader.outputs[0], out.inputs["Surface"])
     return mat
 
 
@@ -163,15 +380,58 @@ def tup(v):
     return (v[0], v[1], v[2])
 
 
-def make_metal_material(name: str, color_rgb):
-    """Metallischer Akzent fuer Accessoires (bricht das viele Glas auf)."""
+def make_accent_material(name: str, color_rgb, texture_path: str = "",
+                         roughness: float = 0.22, transmission: float = 0.10,
+                         texture_strength: float = 1.0, texture_kind: str = ""):
+    """Material fuer Accessoires (Huete, Badges, ...).
+
+    Frueher war das pures Metall (Metallic 0.95) in Hellblau - dadurch
+    waren Huete nur weisse/blaue Silhouetten und ihre Texturen unsichtbar.
+    Jetzt: glaenzend, leicht metallisch, mit der echten Textur als
+    Base Color, damit man Huete und Abzeichen erkennt.
+    """
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
-    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    tree = mat.node_tree
+    nodes, links = tree.nodes, tree.links
+    bsdf = nodes.get("Principled BSDF")
+
     c = srgb_to_linear(tup(color_rgb))
     set_input(bsdf, "Base Color", (c[0], c[1], c[2], 1.0))
-    set_input(bsdf, "Metallic", 0.95)
-    set_input(bsdf, "Roughness", 0.12)
+    set_input(bsdf, "Metallic", 0.35)
+    set_input(bsdf, "Roughness", roughness)
+    set_input(bsdf, "IOR", 1.45)
+    set_input(bsdf, ("Transmission Weight", "Transmission"), transmission)
+    set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.3)
+    set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.05)
+
+    tex = _load_texture_node(nodes, texture_path)
+    if tex is not None:
+        if texture_kind:
+            _apply_clothing_uv(nodes, links, tex, texture_kind)
+        mix_color = nodes.new("ShaderNodeMixRGB")
+        mix_color.blend_type = "MIX"
+        mix_color.location = (-380, 240)
+        mix_color.inputs["Color1"].default_value = (c[0], c[1], c[2], 1.0)
+        links.new(tex.outputs["Color"], mix_color.inputs["Color2"])
+        alpha = tex.outputs["Alpha"]
+        strength = nodes.new("ShaderNodeMath")
+        strength.operation = "MULTIPLY"
+        strength.location = (-680, 60)
+        strength.inputs[1].default_value = max(0.0, min(1.0, texture_strength))
+        links.new(alpha, strength.inputs[0])
+        links.new(strength.outputs["Value"], mix_color.inputs["Fac"])
+        links.new(mix_color.outputs["Color"], bsdf.inputs["Base Color"])
+        # Raue Stellen der Textur bleiben matt -> Konturen bleiben lesbar
+        ramp = _texture_detail_nodes(nodes, links, tex, low=roughness * 0.6,
+                                     high=min(1.0, roughness * 2.0))
+        links.new(ramp.outputs["Color"], bsdf.inputs["Roughness"])
+        set_input(bsdf, "Metallic", 0.15)
+        return mat
+
+    # Ohne Textur bleibt ein sauberer, leicht metallischer Akzent
+    set_input(bsdf, "Metallic", 0.85)
+    set_input(bsdf, "Roughness", min(0.5, roughness))
     return mat
 
 
@@ -229,15 +489,45 @@ def add_bevel(obj, width: float, segments: int = 2) -> None:
         mod.use_clamp_overlap = True
 
 
-def setup_world(color_hex: str, strength: float = 1.3) -> None:
+def setup_world(color_hex: str, strength: float = 1.3,
+                env_hex: str = "", env_strength: float = 0.55) -> None:
+    """Welt mit getrennter Hintergrund- und Beleuchtungsfarbe.
+
+    Ein rein helles Umgebungslicht (Strength 1.3, fast weiss) hat das
+    Glas von innen ausgeleuchtet: alles wurde milchig-grau und die
+    Texturen verschwanden. Deshalb:
+      * Kamera-Strahlen sehen den hellen Hintergrund (`color_hex`)
+      * alle anderen Strahlen sehen ein gedaempftes, leicht blaues
+        Umgebungslicht (`env_hex`, `env_strength`) - das gibt dem Glas
+        dunkle Reflexe und damit Kontrast ("Glas-Look").
+    """
     world = bpy.data.worlds.new("World")
     bpy.context.scene.world = world
     world.use_nodes = True
-    bg = world.node_tree.nodes.get("Background")
-    c = srgb_to_linear(hex_to_rgb(color_hex))
+    tree = world.node_tree
+    nodes, links = tree.nodes, tree.links
+    bg = nodes.get("Background")
+    output = nodes.get("World Output") or nodes.new("ShaderNodeOutputWorld")
+    backdrop = srgb_to_linear(hex_to_rgb(color_hex))
     if bg:
-        bg.inputs["Color"].default_value = (c[0], c[1], c[2], 1.0)
+        bg.inputs["Color"].default_value = (backdrop[0], backdrop[1], backdrop[2], 1.0)
         bg.inputs["Strength"].default_value = strength
+    if not env_hex:
+        return
+    env = srgb_to_linear(hex_to_rgb(env_hex))
+    light_path = nodes.new("ShaderNodeLightPath")
+    light_path.location = (-620, 320)
+    mixn = nodes.new("ShaderNodeMixRGB")
+    mixn.blend_type = "MIX"
+    mixn.location = (-360, 240)
+    mixn.inputs["Color1"].default_value = (env[0], env[1], env[2], 1.0)
+    mixn.inputs["Color2"].default_value = (backdrop[0], backdrop[1], backdrop[2], 1.0)
+    links.new(light_path.outputs["Is Camera Ray"], mixn.inputs["Fac"])
+    env_bg = nodes.new("ShaderNodeBackground")
+    env_bg.location = (-80, 240)
+    env_bg.inputs["Strength"].default_value = env_strength
+    links.new(mixn.outputs["Color"], env_bg.inputs["Color"])
+    links.new(env_bg.outputs["Background"], output.inputs["Surface"])
 
 
 def add_area_light(name: str, location, energy: float, size: float, color=(1, 1, 1)):
@@ -375,7 +665,8 @@ def main() -> int:
 
     reset_scene()
     scene = bpy.context.scene
-    setup_world(args.background)
+    setup_world(args.background, env_hex=args.env_color,
+                env_strength=args.env_strength)
     setup_render(scene, res_x, res_y, args.samples, args.max_bounces, args.denoise)
 
     glass_tint = srgb_to_linear(hex_to_rgb(args.glass_tint))
@@ -383,6 +674,9 @@ def main() -> int:
 
     log(f"Manifest: {args.manifest} ({len(manifest.get('parts', []))} Teile), "
         f"{res_x}x{res_y}, {args.samples} Samples, Cycles CPU")
+    log(f"Material: Transmission {args.transmission:.2f}, Roughness "
+        f"{args.roughness:.2f}, IOR {args.ior:.2f}, Tint {args.tint_strength:.2f}, "
+        f"Textur {args.texture_strength:.2f}")
 
     imported = []
     material_cache = {}
@@ -414,17 +708,34 @@ def main() -> int:
             texture = candidate if os.path.exists(candidate) else ""
 
         if part.get("kind") == "accessory" and not args.mono_glass:
-            key = ("metal", part.get("name"))
+            # Accessoires glaenzen, sind aber nicht mehr pures Weiss-Metall:
+            # mit Textur zeigt der Hut sein Motiv, ohne Textur bleibt ein
+            # heller, leicht metallischer Akzent.
+            texture_kind = part.get("texture_kind") or ""
+            key = ("accent", texture, tuple(round(c, 3) for c in color),
+                   texture_kind)
             mat = material_cache.get(key)
             if mat is None:
-                mat = make_metal_material(f"Metall {part.get('name')}", metal_tint)
+                mat = make_accent_material(
+                    f"Akzent {part.get('name')}",
+                    color if texture else metal_tint,
+                    texture, roughness=args.roughness + 0.08,
+                    texture_strength=args.texture_strength,
+                    texture_kind=texture_kind)
                 material_cache[key] = mat
         else:
-            key = ("glass", tuple(round(c, 3) for c in color), texture, args.mono_glass)
+            texture_kind = part.get("texture_kind") or ""
+            key = ("glass", tuple(round(c, 3) for c in color), texture,
+                   args.mono_glass, args.transmission, args.roughness,
+                   args.tint_strength, args.texture_strength, texture_kind)
             mat = material_cache.get(key)
             if mat is None:
-                mat = make_glass_material(f"Glas {part.get('name')}", color, glass_tint,
-                                          texture, args.mono_glass)
+                mat = make_glass_material(
+                    f"Glas {part.get('name')}", color, glass_tint, texture,
+                    args.mono_glass, transmission=args.transmission,
+                    roughness=args.roughness, tint_strength=args.tint_strength,
+                    texture_strength=args.texture_strength, ior=args.ior,
+                    texture_kind=texture_kind, decal=not args.mono_glass)
                 material_cache[key] = mat
 
         obj.data.materials.clear()

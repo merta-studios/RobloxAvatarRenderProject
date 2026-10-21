@@ -187,6 +187,148 @@ def build_body(body_colors: Dict[str, Any], scales: Dict[str, Any]) -> Tuple[Lis
     return parts, metrics
 
 
+LEG_PARTS = ("rechts_bein", "links_bein")
+ARM_PARTS = ("rechts_arm", "links_arm")
+
+
+def relayout_body(default_parts: List[Part], metrics: BodyMetrics,
+                  mesh_sizes: Dict[str, Tuple[float, float, float]],
+                  scales: Dict[str, Any],
+                  head_size: Optional[Tuple[float, float, float]] = None
+                  ) -> Tuple[List[Part], BodyMetrics]:
+    """Baut den Rig aus den **echten** Mesh-Groessen neu zusammen.
+
+    Warum: Die Standard-Boxen von :func:`build_body` (Arm, Bein, Torso alle
+    nach Schema F) passen nicht zu den Meshes, die Roblox fuer ein Bundle
+    liefert. Beim Einpressen der Meshes in diese Boxen wurde jedes Teil
+    achsweise gestreckt (Korblox-Arm, Rthro-Torso, schlanke Beine) - genau
+    das "gedehnt / falsch skaliert / zu gross" aus dem Bug-Report.
+
+    Hier werden Groesse und Position aus den gestapelten Bundle-Segmenten
+    abgeleitet: Beine stehen auf dem Boden, der Torso sitzt darauf, die
+    Arme haengen an der Schulter, der Kopf sitzt auf dem Hals. Alles
+    bleibt unverzerrt (nur die Avatar-Skalen width/height/depth werden
+    angewandt, so wie Roblox sie auch anwendet).
+
+    ``mesh_sizes``: natuerliche Groessen (Studs) der Mesh-Teile, z. B.
+    ``{"torso": (2.0, 2.1, 1.0), "rechts_arm": (1.0, 1.9, 1.0)}``.
+
+    Rueckgabe: (parts, metrics) mit den neuen Boxen.
+    """
+    w = _clamp(scales.get("width"), 0.75, 1.30)
+    h = _clamp(scales.get("height"), 0.75, 1.30)
+    d = _clamp(scales.get("depth"), 0.75, 1.30)
+    hs = _clamp(scales.get("head"), 0.75, 1.40)
+    gap = 0.012
+
+    def fallback_size(name: str) -> Tuple[float, float, float]:
+        part = next((p for p in default_parts if p.name == name), None)
+        return part.mesh.size() if part is not None else (1.0, 1.0, 1.0)
+
+    def size_of(name: str) -> Tuple[float, float, float]:
+        fb = fallback_size(name)
+        natural = mesh_sizes.get(name)
+        if not natural or min(natural) <= 1e-6:
+            return fb
+        # Mesh-Masse sind in Studs - Avatar-Skalen wirken genauso wie in
+        # Roblox (Breite, Hoehe, Tiefe). Zusaetzlich pro Achse eine
+        # Plausibilitaetsgrenze (0,5x .. 2x der Standard-Box): manche
+        # Bundles liefern Mesh-Einheiten, die nicht Studs sind - ohne
+        # Grenze wuerde daraus ein 100-Studs-Arm.
+        scaled = (natural[0] * w, natural[1] * h, natural[2] * d)
+        return tuple(max(0.5 * fb[i], min(2.0 * fb[i], scaled[i]))
+                     for i in range(3))  # type: ignore[return-value]
+
+    sizes = {name: size_of(name) for name in
+             ("torso", "rechts_arm", "links_arm", "rechts_bein", "links_bein")}
+    # Linker/rechter Arm bzw. linkes/rechtes Bein sind beim Rig gespiegelt:
+    # haben BEIDE Seiten ein echtes Mesh, wird die Breite/Tiefe angeglichen
+    # (symmetrischer Avatar). Fehlt eine Seite, bleibt die Fallback-Box
+    # unangetastet - sonst wuerde ein einzelner Mesh-Arm die Breite der
+    # Gegenseite erben.
+    def mirror(index: int, names) -> None:
+        present = [n for n in names if n in mesh_sizes]
+        if len(present) < 2:
+            return
+        widest = max(sizes[n][index] for n in present)
+        for name in present:
+            size = list(sizes[name])
+            size[index] = widest
+            sizes[name] = tuple(size)  # type: ignore[assignment]
+
+    mirror(0, ARM_PARTS)
+    mirror(2, ARM_PARTS)
+    mirror(0, LEG_PARTS)
+    mirror(2, LEG_PARTS)
+
+    leg_w = max(sizes["rechts_bein"][0], sizes["links_bein"][0])
+    arm_w = max(sizes["rechts_arm"][0], sizes["links_arm"][0])
+
+    torso_w, torso_h, torso_d = sizes["torso"]
+    leg_h = max(sizes["rechts_bein"][1], sizes["links_bein"][1])
+    torso_bottom = leg_h + gap
+    torso_top = torso_bottom + torso_h
+
+    head_r_default = 0.68 * hs * h
+    if head_size and min(head_size) > 1e-6:
+        head_r = 0.5 * max(head_size) * hs
+        body_h = torso_top  # ohne Kopf
+        head_r = max(0.10 * body_h, min(0.17 * body_h, head_r))
+    else:
+        head_r = head_r_default
+    neck_h = min(0.40 * h, 0.55 * head_r)
+    head_center_y = torso_top + neck_h + head_r * 0.94
+
+    colors = {p.name: p.color for p in default_parts}
+
+    def color(name: str) -> str:
+        return colors.get(name, "#c7ac78")
+
+    parts: List[Part] = []
+    # Beine (untere Kante auf y = 0)
+    for name, sign in (("rechts_bein", 1.0), ("links_bein", -1.0)):
+        sx, sy, sz = sizes[name]
+        parts.append(Part(name, make_box(sx, sy, sz,
+                                        (sign * (leg_w / 2 + gap * 0.5), sy / 2, 0.0)),
+                          color(name), "body"))
+    # Torso
+    parts.append(Part("torso", make_box(torso_w, torso_h, torso_d,
+                                       (0.0, torso_bottom + torso_h / 2, 0.0)),
+                      color("torso"), "body"))
+    # Arme: Oberkante auf Schulterhoehe (Torso-Oberkante)
+    arm_offset = torso_w / 2 + arm_w / 2 + gap
+    for name, sign in (("rechts_arm", 1.0), ("links_arm", -1.0)):
+        sx, sy, sz = sizes[name]
+        center_y = torso_top - sy / 2
+        parts.append(Part(name, make_box(sx, sy, sz, (sign * arm_offset, center_y, 0.0)),
+                          color(name), "body"))
+    # Hals (verbindet Torso und Kopf, steckt in beiden)
+    neck_bottom = torso_top - 0.06
+    neck_top = head_center_y - head_r * 0.55
+    neck_h_eff = max(0.08, neck_top - neck_bottom)
+    parts.append(Part("hals", make_box(min(torso_w * 0.45, 0.7 * w), neck_h_eff,
+                                       min(torso_d * 0.7, 0.7 * d),
+                                       (0.0, neck_bottom + neck_h_eff / 2, 0.0)),
+                      color("hals") if "hals" in colors else color("torso"), "body"))
+    # Kopf: Kugel (wird in build_avatar durch das echte Kopf-Mesh ersetzt)
+    parts.append(Part("kopf", make_sphere(head_r, 32, 22,
+                                          (0.0, head_center_y, -0.02 * d)),
+                      color("kopf") if "kopf" in colors else color("torso"), "body"))
+
+    new_metrics = BodyMetrics(
+        height=head_center_y + head_r,
+        torso_width=torso_w,
+        torso_depth=torso_d,
+        shoulder_y=torso_top,
+        head_center_y=head_center_y,
+        head_radius=head_r,
+        hand_y=torso_top - sizes["rechts_arm"][1] + 0.15,
+        hand_x=arm_offset,
+        waist_y=torso_bottom + torso_h * 0.25,
+    )
+    return parts, new_metrics
+
+
 def accessory_target_size(asset_type_id: int, metrics: BodyMetrics) -> float:
     """Heuristische Zielgroesse (max. Achse in Studs) fuer ein Accessoire.
 
@@ -200,19 +342,41 @@ def accessory_target_size(asset_type_id: int, metrics: BodyMetrics) -> float:
     return base * max(0.55, min(1.6, head_scale))
 
 
-def fit_mesh_to_part(mesh: MeshData, target_lo, target_hi) -> MeshData:
-    """Skaliert ein Mesh achsweise in eine Ziel-Box und zentriert es darin.
+def fit_mesh_to_part(mesh: MeshData, target_lo, target_hi,
+                     uniform: bool = True, max_overflow: float = 1.06) -> MeshData:
+    """Skaliert ein Mesh in eine Ziel-Box und zentriert es darin.
 
-    Funktioniert wie das MeshPart-Verhalten in Roblox selbst: Die
-    Bounding-Box des FileMesh wird auf die Part-Groesse gestreckt. Damit
-    ersetzen echte Koerperteil-Meshes (aus RBXM) die Rig-Quader lueckenlos.
+    ``uniform=True`` (Default): **gleichmaessig** skalieren, bis das Mesh in
+    die Box passt. Vorher wurde jede Achse einzeln auf die Box gestreckt -
+    ein Korblox-Arm (schmal, mit Klaue) oder ein Rthro-Torso wurde dadurch
+    sichtbar in die Laenge/ Breite gezogen ("gedehnt", "falsch skaliert").
+
+    ``uniform=False``: achsweise auf die Box strecken (altes Verhalten, nur
+    noch fuer einfache Quader sinnvoll).
+
+    ``max_overflow`` erlaubt eine minimale Ueberschreitung (Standard 6 %),
+    damit ein flaches Mesh (z. B. ein Schild) den Koerper nicht winzig
+    schrumpft: skaliert wird mit dem groessten Faktor, der die Box noch
+    (fast) einhaelt.
     """
     size = mesh.size()
     target = tuple(float(target_hi[i]) - float(target_lo[i]) for i in range(3))
-    factors = []
-    for i in range(3):
-        factors.append(target[i] / size[i] if size[i] > 1e-9 else 1.0)
-    scaled = mesh.transform(tuple(factors))
+    if not uniform:
+        factors = [target[i] / size[i] if size[i] > 1e-9 else 1.0 for i in range(3)]
+        scaled = mesh.transform(tuple(factors))
+    else:
+        ratios = [target[i] / size[i] for i in range(3) if size[i] > 1e-9]
+        if not ratios:
+            scaled = mesh.transform(1.0)
+        else:
+            # Kleinster Faktor = passt garantiert; bei sehr duennen Meshes
+            # (eine Achse fast 0) wuerde er das Teil winzig machen -> dann
+            # den zweitkleinsten Faktor mit begrenzter Ueberschreitung nutzen.
+            ratios.sort()
+            factor = ratios[0]
+            if len(ratios) > 1 and ratios[1] / ratios[0] < 0.5:
+                factor = ratios[1] / max(1.0, max_overflow)
+            scaled = mesh.transform(factor)
     center = scaled.center()
     target_center = tuple((float(target_lo[i]) + float(target_hi[i])) / 2.0 for i in range(3))
     return scaled.transform(1.0, tuple(target_center[i] - center[i] for i in range(3)))
@@ -259,18 +423,34 @@ def place_accessory(mesh: MeshData, asset_type_id: int,
 
     size = mesh.size()
     max_dim = max(size) or 1.0
+    # Die Part-Groesse aus dem RBXM ist nur brauchbar, wenn sie zur
+    # Accessoire-Art passt. Bundles liefern oft Size 1x1x1 als Platzhalter,
+    # waehrend das Mesh selbst 3 Studs breit ist - das wurde bisher auf
+    # 1 Stud geschrumpft (Hut verschwindet im Kopf) oder umgekehrt
+    # riesig skaliert. Plausibel ist alles im Faktor 0,6..1,8 um die
+    # Zielgroesse; sonst gilt die Zielgroesse der Accessoire-Art.
+    hint_size = None
     if size_hint is not None and len(size_hint) == 3 and all(v > 0 for v in size_hint):
+        candidate = max(size_hint)
+        if 0.6 * target <= candidate <= 1.8 * target:
+            hint_size = candidate
+
+    if hint_size is not None:
         # Form erhalten: gleichmaessig auf die groesste RBXM-Achse
-        # skalieren. Pro-Achsen-Skalierung auf die Part-Size wuerde z. B.
-        # eine flache Krone (im RBXM oft Size 1x1x1) zur Kugel verzerren.
-        scale = max(size_hint) / max_dim
+        # skalieren. Pro-Achsen-Skalierung wuerde z. B. eine flache Krone
+        # (im RBXM oft Size 1x1x1) zur Kugel verzerren.
+        scale = hint_size / max_dim
         placed = mesh.transform(scale)
         scale_note = (("RBXM-Groesse " + "x".join(_de(v, 2) for v in size_hint)
                        + " Studs, form-erhaltend skaliert"))
     else:
         scale = target / max_dim
         placed = mesh.transform(scale)
-        scale_note = f"skaliert x{scale:.2f}"
+        scale_note = f"auf Zielgroesse {_de(target, 2)} Studs skaliert"
+        if size_hint is not None:
+            scale_note += (" (RBXM-Groesse "
+                           + "x".join(_de(float(v), 2) for v in size_hint)
+                           + " unplausibel, ignoriert)")
     if not _rotation_is_identity(rotation):
         # Uniforme Skalierung kommutiert mit der Drehung - Reihenfolge egal,
         # hier vor dem Zentrieren, damit um den Part-Ursprung gedreht wird.
@@ -286,9 +466,11 @@ def place_accessory(mesh: MeshData, asset_type_id: int,
 
     # Accessoire *auf* den Anker setzen statt mittig durch ihn hindurch
     if anchor == "head_top":
-        # Bottom des Accessoires liegt knapp IN der Kopfsphaere -> sitzt auf
-        bottom = metrics.head_center_y + metrics.head_radius * 0.30
-        center_y = bottom + hy * 0.88
+        # Unterkante des Accessoires liegt auf der Kopfsphaere. Vorher
+        # steckte der Hut zu 70 % im Kopf (bottom = Mitte + 0,3 r) -
+        # sichtbar waren nur noch Ränder, der Rest war "im Kopf".
+        bottom = metrics.head_center_y + metrics.head_radius * 0.82
+        center_y = bottom + hy * 0.92
         offset = (0.0, center_y - ao[1], 0.0)
     elif anchor == "head_center":
         offset = (0.0, 0.0, 0.0)

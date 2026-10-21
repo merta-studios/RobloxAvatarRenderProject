@@ -15,6 +15,7 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import re
 import struct
 import sys
 
@@ -238,16 +239,16 @@ def test_hoehe_deutsche_schreibweise(merta_avatar, monkeypatch, tmp_path):
     manifest = build_avatar.build("MertaStudios", str(tmp_path), verbose=False)
 
     summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
-    # Scales alle 1.0 -> Rig-Hoehe 5,3976 Studs -> deutsch "5,40 Studs".
-    # Entscheidend ist die Schreibweise: Komma statt Punkt (sonst liest
-    # man "5.398" als fuenftausend...). fmt_de(5.496) == "5,50" prueft
-    # test_fmt_de zusaetzlich direkt am Beispielwert aus dem Bug-Report.
-    assert "5,40 Studs" in summary
+    # Entscheidend ist die Schreibweise: Komma statt Punkt (sonst liest man
+    # "5.398" als fuenftausend...). Die Hoehe selbst kommt jetzt aus den
+    # echten Mesh-Groessen (hier ohne Kopf, der Avatar ist headless).
+    # fmt_de(5.496) == "5,50" prueft test_fmt_de direkt am Beispielwert
+    # aus dem Bug-Report.
+    assert re.search(r"Höhe: \d+,\d\d Studs", summary), summary
     assert "(typisch 5–6)" in summary
-    assert "5.398" not in summary
-    assert "5.496" not in summary
-    assert manifest["metrics"]["height_de"] == "5,40"
-    assert manifest["metrics"]["height"] == pytest.approx(5.398)
+    assert not re.search(r"\d\.\d\d Studs", summary)
+    assert manifest["metrics"]["height_de"].count(",") == 1
+    assert 4.0 <= manifest["metrics"]["height"] <= 6.0
 
 
 @pytest.mark.parametrize("wert,nd,erwartet", [
@@ -292,9 +293,11 @@ def test_riesiges_mesh_wird_neu_skaliert(monkeypatch, tmp_path):
 
     hut = next(p for p in manifest["parts"] if p["kind"] == "accessory")
     assert _obj_max_axis(tmp_path / hut["obj"]) <= 12.0
-    assert any("Sanity-Check" in w for w in manifest["warnings"])
+    # Die 200-Studs-Angabe aus dem RBXM wird als unplausibel verworfen
+    # (statt das Mesh nachtraeglich per Sanity-Check zu stauchen).
+    assert any("unplausibel" in w for w in manifest["warnings"])
     summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
-    assert "Sanity-Check" in summary
+    assert "unplausibel" in summary
 
 
 def test_rbxm_textur_wird_ans_teil_gehaengt(monkeypatch, tmp_path):

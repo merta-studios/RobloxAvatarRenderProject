@@ -220,7 +220,8 @@ def _obj_points(path):
 
 def test_koerpersegmente_werden_gestapelt(monkeypatch, tmp_path):
     """Zwei Segmente mit Bind-Pose-Positionen (diagonal) muessen am Ende
-    als gerader Stapel in der Rig-Box landen - nicht als Diagonalstufen."""
+    als gerader, unverzerrter Stapel an der Schulter landen - nicht als
+    Diagonalstufen und nicht in eine Schema-F-Box gestreckt."""
     avatar = {
         "playerAvatarType": "R15",
         "scales": dict(roblox_api.DEFAULT_SCALES),
@@ -266,13 +267,16 @@ def test_koerpersegmente_werden_gestapelt(monkeypatch, tmp_path):
         for i in range(3):
             lo[i] = min(lo[i], p[i])
             hi[i] = max(hi[i], p[i])
-    # Exakt in der senkrechten Rig-Box gelandet (Position + Groesse korrekt):
-    # Beine 2 hoch + 2x gap (0.012) -> Arm-Box y 2.024..4.024
-    assert lo[1] == pytest.approx(2.024, abs=0.01)   # Unterkante Arm-Box
-    assert hi[1] == pytest.approx(4.024, abs=0.01)   # Oberkante Arm-Box
-    # Kein Diagonalversatz: obere und untere Haelfte sind beide mittig in
-    # der Arm-Box - Zentrum x = arm_x = 1 + 0.5 + gap = 1.512. Vorher
-    # driftete die Hand nach innen (Diagonale der Bind-Pose).
+    # Schulter = Torso-Oberkante: Beine 2 hoch + gap (0.012) + Torso 2
+    # -> 4.012. Die Arm-Oberkante liegt jetzt exakt dort (vorher wurde der
+    # Arm in die 2 Studs hohe Box gestreckt).
+    assert hi[1] == pytest.approx(4.012, abs=0.01)   # Oberkante = Schulter
+    # Kein Strecken: die Hoehe ist die Summe der Mesh-Hoehen (1.0 + gap +
+    # 0.6 = 1.612) und nicht die 2 Studs der Standard-Box.
+    assert hi[1] - lo[1] == pytest.approx(1.612, abs=0.02)
+    # Kein Diagonalversatz: obere und untere Haelfte sind beide mittig
+    # (Zentrum x = Torso 1 + Armhälfte 0.5 + gap = 1.512). Vorher driftete
+    # die Hand nach innen (Diagonale der Bind-Pose).
     upper = [p for p in _obj_points(tmp_path / arm["obj"]) if p[1] > 3.0]
     lower = [p for p in _obj_points(tmp_path / arm["obj"]) if p[1] < 3.0]
     for band in (upper, lower):
@@ -305,3 +309,50 @@ def test_sort_segments_top_down_dedupliziert_varianten():
     ys = [m["rbxm_position"][1] for m in out]
     assert ys == sorted(ys, reverse=True)
     assert len({m["mesh_asset_id"] for m in out}) == 3
+
+
+# ---------------------------------------------------------------------------
+# Kein Strecken: Rig-Boxen kommen aus den Mesh-Groessen
+# ---------------------------------------------------------------------------
+
+def test_relayout_body_uebernimmt_mesh_proportionen():
+    """Ein schlanker Arm (1,0 x 1,6 x 0,7) darf nicht auf die 1x2x1-Box
+    gestreckt werden - Groesse und Anschluss kommen aus dem Mesh."""
+    parts, metrics = avatar_rig.build_body(roblox_api.DEFAULT_BODY_COLORS,
+                                           dict(roblox_api.DEFAULT_SCALES))
+    neu_parts, neu_metrics = avatar_rig.relayout_body(
+        parts, metrics, {"rechts_arm": (1.0, 1.6, 0.7)},
+        dict(roblox_api.DEFAULT_SCALES))
+    arm = next(p for p in neu_parts if p.name == "rechts_arm")
+    assert arm.mesh.size() == pytest.approx((1.0, 1.6, 0.7), abs=1e-6)
+    # Oberkante des Arms sitzt an der Schulter (Torso-Oberkante)
+    assert arm.mesh.center()[1] + 0.8 == pytest.approx(neu_metrics.shoulder_y, abs=1e-6)
+
+
+def test_relayout_body_begrenzt_ausreisser_groessen():
+    """Mesh-Einheiten sind nicht immer Studs: ein 100-Studs-Arm darf die
+    Szene nicht sprengen (Grenze: 2x Standard-Box)."""
+    parts, metrics = avatar_rig.build_body(roblox_api.DEFAULT_BODY_COLORS,
+                                           dict(roblox_api.DEFAULT_SCALES))
+    neu_parts, _ = avatar_rig.relayout_body(
+        parts, metrics, {"links_arm": (10.0, 60.0, 10.0)},
+        dict(roblox_api.DEFAULT_SCALES))
+    arm = next(p for p in neu_parts if p.name == "links_arm")
+    assert max(arm.mesh.size()) <= 4.0  # 2x Standard-Box (1x2x1)
+
+
+def test_relayout_body_kopf_sitzt_auf_dem_hals():
+    parts, metrics = avatar_rig.build_body(roblox_api.DEFAULT_BODY_COLORS,
+                                           dict(roblox_api.DEFAULT_SCALES))
+    neu_parts, neu_metrics = avatar_rig.relayout_body(
+        parts, metrics, {"torso": (2.0, 2.2, 1.0)}, dict(roblox_api.DEFAULT_SCALES),
+        head_size=(1.2, 1.2, 1.2))
+    kopf = next(p for p in neu_parts if p.name == "kopf")
+    hals = next(p for p in neu_parts if p.name == "hals")
+    torso = next(p for p in neu_parts if p.name == "torso")
+    lo, hi = torso.mesh.bbox()
+    hlo, hhi = hals.mesh.bbox()
+    klo, khi = kopf.mesh.bbox()
+    assert hlo[1] <= hi[1] + 1e-6        # Hals beginnt im Torso
+    assert hhi[1] >= klo[1] - 1e-6       # Hals reicht in den Kopf
+    assert khi[1] == pytest.approx(neu_metrics.height, abs=1e-6)
