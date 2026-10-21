@@ -899,14 +899,21 @@ def assemble_r15_rig(
 
     head_world: Optional[MeshData] = None
     head_r = 0.60 * shead
-    if head_mp is not None and not headless:
+    if head_mp is not None:
         hm_loc, ha_loc, _htr = _scale_part_local(head_mp, s_head)
         h_neck = ha_loc.get("NeckRigAttachment", ((0.0, -0.5 * shead, 0.0), IDENTITY_MAT3))[0]
         h_orig = (neck_w[0] - h_neck[0], neck_w[1] - h_neck[1], neck_w[2] - h_neck[2])
         register_segment("Head", hm_loc, ha_loc, h_orig, IDENTITY_MAT3, True)
-        head_world = placed_seg_mesh["Head"]
-        head_center = head_world.center()
-        head_r = max(head_world.size()) / 2.0
+        if not headless:
+            head_world = placed_seg_mesh["Head"]
+            head_center = head_world.center()
+            head_r = max(head_world.size()) / 2.0
+        else:
+            # Headless DynamicHead/Head besitzt echte Attachments im RBXM, aber
+            # keine sichtbare Kopf-Geometrie: Kronen/Hoerner schweben exakt auf
+            # echter Kopfhoehe ueber dem offenen Kragen wie im Spiel.
+            head_center = h_orig
+            head_r = 0.60 * shead
         world_atts.setdefault("HatAttachment", ((head_center[0], head_center[1] + 0.6 * shead, head_center[2]), IDENTITY_MAT3))
         world_atts.setdefault("HairAttachment", world_atts["HatAttachment"])
         world_atts.setdefault("FaceCenterAttachment", (head_center, IDENTITY_MAT3))
@@ -920,20 +927,21 @@ def assemble_r15_rig(
         world_atts["FaceCenterAttachment"] = (head_center, IDENTITY_MAT3)
         world_atts["FaceFrontAttachment"] = ((head_center[0], head_center[1], head_center[2] - head_r), IDENTITY_MAT3)
     else:
-        # Headless: unsichtbarer Kopftraeger fuer Kronen/Hoerner dicht ueber dem Kragen
-        head_center = (neck_w[0], neck_w[1] + 0.12 * sh, neck_w[2])
-        world_atts["HatAttachment"] = ((neck_w[0], neck_w[1] + 0.62 * shead, neck_w[2]), IDENTITY_MAT3)
+        head_center = (neck_w[0], neck_w[1] + 0.5 * shead, neck_w[2])
+        world_atts["HatAttachment"] = ((head_center[0], head_center[1] + 0.6 * shead, head_center[2]), IDENTITY_MAT3)
         world_atts["HairAttachment"] = world_atts["HatAttachment"]
         world_atts["FaceCenterAttachment"] = (head_center, IDENTITY_MAT3)
-        world_atts["FaceFrontAttachment"] = ((head_center[0], head_center[1], head_center[2] - 0.5 * shead), IDENTITY_MAT3)
+        world_atts["FaceFrontAttachment"] = ((head_center[0], head_center[1], head_center[2] - head_r), IDENTITY_MAT3)
 
-    neck_h = 0.14 * sh if headless else 0.24 * sh
-    body_meshes["hals"] = make_box(
-        min(0.45 * sw, torso_mesh.size()[0] * 0.32),
-        neck_h,
-        min(0.45 * sd, torso_mesh.size()[2] * 0.42),
-        (neck_w[0], neck_w[1] + (0.02 * sh if headless else 0.05 * sh), neck_w[2]),
-    )
+    # Echte R15-UpperTorsos enthalten bereits den modellierten Hals und Headless-
+    # Avatare duerfen niemals einen kuenstlichen Quader-Hals am Kragen zeigen.
+    if not headless and not segments_by_part.get("torso"):
+        body_meshes["hals"] = make_box(
+            min(0.45 * sw, torso_mesh.size()[0] * 0.32),
+            0.24 * sh,
+            min(0.45 * sd, torso_mesh.size()[2] * 0.42),
+            (neck_w[0], neck_w[1] + 0.05 * sh, neck_w[2]),
+        )
 
     # 5) Gesamtes Rig gemeinsam auf y = 0 stellen
     min_y = min(
@@ -951,8 +959,12 @@ def assemble_r15_rig(
         joint_pos[k] = (p[0], p[1] + shift_y, p[2])
 
     t_lo, t_hi = body_meshes["torso"].bbox()
-    h_center_y = head_world.center()[1] if head_world is not None else (t_hi[1] + 0.15 * sh)
-    top_y = head_world.bbox()[1][1] if head_world is not None else body_meshes["hals"].bbox()[1][1]
+    h_center_y = head_world.center()[1] if head_world is not None else head_center[1] + shift_y
+    top_y = (
+        head_world.bbox()[1][1]
+        if head_world is not None
+        else (body_meshes["hals"].bbox()[1][1] if "hals" in body_meshes else t_hi[1])
+    )
     r_grip = world_atts.get("RightGripAttachment", ((t_hi[0] + 0.4, t_lo[1], 0.0), IDENTITY_MAT3))[0]
     waist_c = world_atts.get("WaistCenterAttachment", ((0.0, t_lo[1] + 0.2, 0.0), IDENTITY_MAT3))[0]
 
