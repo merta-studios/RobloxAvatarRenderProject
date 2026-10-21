@@ -42,6 +42,26 @@ class MeshParseError(Exception):
 
 
 @dataclass
+class SkinBone:
+    """Ein Bone aus der FileMesh-Skinning-Tabelle (Bind-Pose in Mesh-Raum)."""
+
+    name: str
+    parent: int
+    position: Vec3
+    rotation: Tuple[Vec3, Vec3, Vec3]
+
+
+@dataclass
+class SkinningData:
+    """Aufgeloeste Linear-Blend-Skinning-Gewichte pro Vertex."""
+
+    bones: List[SkinBone] = field(default_factory=list)
+    influences: List[Tuple[Tuple[int, int, int, int], Tuple[float, float, float, float]]] = field(
+        default_factory=list
+    )
+
+
+@dataclass
 class MeshData:
     """Einfache Dreiecks-Geometrie in Roblox-Koordinaten (Y-up)."""
 
@@ -51,6 +71,7 @@ class MeshData:
     faces: List[Tuple[int, int, int]] = field(default_factory=list)
     colors: Optional[List[Tuple[int, int, int, int]]] = None
     source_version: str = ""
+    skinning: Optional[SkinningData] = None
 
     # -- Basis-Operationen ---------------------------------------------------
 
@@ -138,6 +159,7 @@ class MeshData:
             faces=list(self.faces),
             colors=list(self.colors) if self.colors else None,
             source_version=self.source_version,
+            skinning=self.skinning,
         )
 
     def write_obj(self, path) -> None:
@@ -414,51 +436,157 @@ def _parse_v3(data: bytes, version: str) -> MeshData:
     return MeshData(positions, normals, uvs, faces, colors, version)
 
 
-def _parse_v4(data: bytes, version: str) -> MeshData:
-    """Gilt fuer v4.00 und v4.01 (v6/v7 siehe _parse_chunked)."""
+def _parse_skinning_tables(
+    skin_bytes: bytes,
+    num_verts: int,
+    bones_bytes: bytes,
+    num_bones: int,
+    name_table: bytes,
+    subsets_bytes: bytes,
+    num_subsets: int,
+) -> Optional[SkinningData]:
+    """Loest Bone-Tabelle und Subset-Paletten in globale Vertex-Gewichte auf."""
+    if num_bones <= 0 or num_verts <= 0:
+        return None
+    if len(skin_bytes) < num_verts * 8 or len(bones_bytes) < num_bones * 60:
+        return None
+
+    bones: List[SkinBone] = []
+    for i in range(num_bones):
+        base = i * 60
+        name_off, parent, _lod_parent, _cull = struct.unpack_from("<Ihhf", bones_bytes, base)
+        rot_flat = struct.unpack_from("<9f", bones_bytes, base + 12)
+        px, py, pz = struct.unpack_from("<3f", bones_bytes, base + 48)
+        end = name_table.find(b"\x00", name_off)
+        raw_name = name_table[name_off:end] if end >= 0 else name_table[name_off:]
+        bname = raw_name.decode("utf-8", errors="replace")
+        rot = (
+            (rot_flat[0], rot_flat[1], rot_flat[2]),
+            (rot_flat[3], rot_flat[4], rot_flat[5]),
+            (rot_flat[6], rot_flat[7], rot_flat[8]),
+        )
+        bones.append(SkinBone(name=bname, parent=int(parent), position=(px, py, pz), rotation=rot))
+
+    # Standard-Palette (identisch), falls ein Vertex keinem Subset angehoert
+    default_palette = tuple(min(k, num_bones - 1) for k in range(26))
+    vert_palette: List[Tuple[int, ...]] = [default_palette] * num_verts
+    if num_subsets > 0 and len(subsets_bytes) >= num_subsets * 72:
+        for s in range(num_subsets):
+            sbase = s * 72
+            _fb, _fl, vb, vl, nb = struct.unpack_from("<5I", subsets_bytes, sbase)
+            palette = struct.unpack_from("<26H", subsets_bytes, sbase + 20)
+            pal = tuple(int(idx) if idx < num_bones else 0 for idx in palette)
+            end_v = min(num_verts, vb + vl)
+            for vi in range(min(num_verts, vb), end_v):
+                vert_palette[vi] = pal
+            _ = nb
+
+    influences: List[Tuple[Tuple[int, int, int, int], Tuple[float, float, float, float]]] = []
+    for vi in range(num_verts):
+        off = vi * 8
+        si0, si1, si2, si3, w0, w1, w2, w3 = struct.unpack_from("<8B", skin_bytes, off)
+        pal = vert_palette[vi]
+        bi = (
+            pal[si0] if si0 < 26 else 0,
+            pal[si1] if si1 < 26 else 0,
+            pal[si2] if si2 < 26 else 0,
+            pal[si3] if si3 < 26 else 0,
+        )
+        wsum = float(w0 + w1 + w2 + w3)
+        if wsum > 1e-6:
+            wf = (w0 / wsum, w1 / wsum, w2 / wsum, w3 / wsum)
+        else:
+            wf = (1.0, 0.0, 0.0, 0.0)
+        influences.append((bi, wf))
+
+    return SkinningData(bones=bones, influences=influences)
+
+
+def _parse_v4_or_v5(data: bytes, version: str) -> MeshData:
     off = 13
     hdr_size = struct.unpack_from("<H", data, off)[0]
     if hdr_size < 24:
         raise MeshParseError(f"version {version}: Header-Groesse {hdr_size} zu klein")
     (_hdr, _lod_type, num_verts, num_faces, num_lods, num_bones,
-     _size_bone_names, _num_subsets, _hq, _pad) = struct.unpack_from("<HHIIHHIHBB", data, off)
+     size_bone_names, num_subsets, _hq, _pad) = struct.unpack_from("<HHIIHHIHBB", data, off)
     off += hdr_size
 
-    # Skinned Meshes haben 40-Byte-Vertices (inkl. Farben), statische oft 36.
     stride = _guess_stride(data, off, num_verts, num_faces, num_lods, num_bones)
     positions, normals, uvs, colors = _unpack_vertices(data, off, num_verts, stride)
     off += num_verts * stride
+
+    skin_bytes = b""
     if num_bones > 0:
-        off += num_verts * 8  # 4x subsetIndex + 4x boneWeight
+        skin_bytes = data[off:off + num_verts * 8]
+        off += num_verts * 8
+
     faces = _read_faces(data, off, num_faces, num_verts)
     off += num_faces * 12
     lods = _read_lods(data, off, num_lods)
+    off += max(num_lods, 0) * 4
+
+    skinning: Optional[SkinningData] = None
+    if num_bones > 0:
+        bones_end = off + num_bones * 60
+        names_end = bones_end + size_bone_names
+        subsets_end = names_end + num_subsets * 72
+        if subsets_end <= len(data):
+            skinning = _parse_skinning_tables(
+                skin_bytes,
+                num_verts,
+                data[off:bones_end],
+                num_bones,
+                data[bones_end:names_end],
+                data[names_end:subsets_end],
+                num_subsets,
+            )
+
     main = _main_lod_face_count(lods)
     if main:
         faces = faces[:main]
-    return MeshData(positions, normals, uvs, faces, colors, version)
+    return MeshData(positions, normals, uvs, faces, colors, version, skinning=skinning)
+
+
+def _parse_v4(data: bytes, version: str) -> MeshData:
+    """Gilt fuer v4.00 und v4.01 (v6/v7 siehe _parse_chunked)."""
+    return _parse_v4_or_v5(data, version)
 
 
 def _parse_v5(data: bytes, version: str) -> MeshData:
-    off = 13
-    hdr_size = struct.unpack_from("<H", data, off)[0]
-    if hdr_size < 24:
-        raise MeshParseError(f"version 5.00: Header-Groesse {hdr_size} zu klein")
-    (_hdr, _lod_type, num_verts, num_faces, num_lods, num_bones,
-     _size_bone_names, _num_subsets, _hq, _pad) = struct.unpack_from("<HHIIHHIHBB", data, off)
-    off += hdr_size
-    stride = _guess_stride(data, off, num_verts, num_faces, num_lods, num_bones)
-    positions, normals, uvs, colors = _unpack_vertices(data, off, num_verts, stride)
-    off += num_verts * stride
-    if num_bones > 0:
-        off += num_verts * 8
-    faces = _read_faces(data, off, num_faces, num_verts)
-    off += num_faces * 12
-    lods = _read_lods(data, off, num_lods)
-    main = _main_lod_face_count(lods)
-    if main:
-        faces = faces[:main]
-    return MeshData(positions, normals, uvs, faces, colors, version)
+    return _parse_v4_or_v5(data, version)
+
+
+def _parse_skinning_chunk(payload: bytes) -> Optional[SkinningData]:
+    """SKINNING v1 (FileMesh 6.00/7.00) parsen."""
+    pos = 0
+    if len(payload) < 4:
+        return None
+    num_verts = struct.unpack_from("<I", payload, pos)[0]
+    pos += 4
+    if pos + num_verts * 8 + 4 > len(payload):
+        return None
+    skin_bytes = payload[pos:pos + num_verts * 8]
+    pos += num_verts * 8
+    num_bones = struct.unpack_from("<I", payload, pos)[0]
+    pos += 4
+    if pos + num_bones * 60 + 4 > len(payload):
+        return None
+    bones_bytes = payload[pos:pos + num_bones * 60]
+    pos += num_bones * 60
+    name_size = struct.unpack_from("<I", payload, pos)[0]
+    pos += 4
+    if pos + name_size + 4 > len(payload):
+        return None
+    name_table = payload[pos:pos + name_size]
+    pos += name_size
+    num_subsets = struct.unpack_from("<I", payload, pos)[0]
+    pos += 4
+    if pos + num_subsets * 72 > len(payload):
+        return None
+    subsets_bytes = payload[pos:pos + num_subsets * 72]
+    return _parse_skinning_tables(
+        skin_bytes, num_verts, bones_bytes, num_bones, name_table, subsets_bytes, num_subsets
+    )
 
 
 def _parse_chunked(data: bytes, version: str) -> MeshData:
@@ -467,13 +595,14 @@ def _parse_chunked(data: bytes, version: str) -> MeshData:
     Nach der Versionszeile folgen Chunks
     ``char name[8] | uint32 chunkVersion | uint32 size | byte data[size]``
     bis zum Dateiende (Spec: devforum "Roblox FileMesh Format
-    Specification", Revision 3/30/2025). Nur "COREMESH" (Geometrie) und
-    "LODS" (Face-Bereiche) werden ausgewertet.
+    Specification", Revision 3/30/2025). "COREMESH" (Geometrie), "LODS"
+    (Face-Bereiche) und "SKINNING" (Linear Blend Skinning) werden ausgewertet.
     """
     off = 13  # "version 6.00\n" / "version 7.00\n"
     coremesh = None
     coremesh_version = 0
     lod_offsets: List[int] = []
+    skinning_payload: Optional[bytes] = None
     while off + 16 <= len(data):
         raw_name = data[off:off + 8]
         name = raw_name.rstrip(b"\x00 ").decode("ascii", "replace")
@@ -488,6 +617,8 @@ def _parse_chunked(data: bytes, version: str) -> MeshData:
             coremesh, coremesh_version = payload, chunk_version
         elif name == "LODS":
             lod_offsets = _parse_lods_chunk(payload)
+        elif name == "SKINNING":
+            skinning_payload = payload
     if coremesh is None:
         raise MeshParseError(f"version {version}: kein COREMESH-Chunk")
 
@@ -495,6 +626,10 @@ def _parse_chunked(data: bytes, version: str) -> MeshData:
         mesh = _parse_coremesh_draco(coremesh, version)
     else:
         mesh = _parse_coremesh_v1(coremesh, version)
+    if skinning_payload is not None:
+        skin = _parse_skinning_chunk(skinning_payload)
+        if skin is not None and len(skin.influences) == len(mesh.positions):
+            mesh.skinning = skin
     main = _main_lod_face_count(lod_offsets)
     if main:
         mesh.faces = mesh.faces[:main]
@@ -730,9 +865,186 @@ def _guess_stride(data: bytes, off: int, num_verts: int, num_faces: int,
     return 36 if stride < 38 else 40
 
 
-# ---------------------------------------------------------------------------
-# CLI zum Testen:  python3 tools/roblox_mesh.py input.mesh out.obj
-# ---------------------------------------------------------------------------
+_PRIMARY_CHILD_BONE = {
+    "LowerTorso": "UpperTorso",
+    "UpperTorso": "Head",
+    "RightUpperArm": "RightLowerArm",
+    "RightLowerArm": "RightHand",
+    "LeftUpperArm": "LeftLowerArm",
+    "LeftLowerArm": "LeftHand",
+    "RightUpperLeg": "RightLowerLeg",
+    "RightLowerLeg": "RightFoot",
+    "LeftUpperLeg": "LeftLowerLeg",
+    "LeftLowerLeg": "LeftFoot",
+}
+
+
+def rotation_between(vec_from: Vec3, vec_to: Vec3) -> Tuple[Vec3, Vec3, Vec3]:
+    """Kuerzester-Bogen-Rotationsmatrix R in SO(3) mit R * norm(vec_from) = norm(vec_to)."""
+    ax, ay, az = vec_from
+    bx, by, bz = vec_to
+    la = math.sqrt(ax * ax + ay * ay + az * az)
+    lb = math.sqrt(bx * bx + by * by + bz * bz)
+    if la < 1e-9 or lb < 1e-9:
+        return ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    ax, ay, az = ax / la, ay / la, az / la
+    bx, by, bz = bx / lb, by / lb, bz / lb
+    dot = max(-1.0, min(1.0, ax * bx + ay * by + az * bz))
+    if dot > 1.0 - 1e-8:
+        return ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    if dot < -1.0 + 1e-8:
+        ux, uy, uz = (-ay, ax, 0.0) if (abs(ax) > 0.5 or abs(ay) > 0.5) else (0.0, -az, ay)
+        ul = math.sqrt(ux * ux + uy * uy + uz * uz) or 1.0
+        ux, uy, uz = ux / ul, uy / ul, uz / ul
+        return (
+            (2 * ux * ux - 1, 2 * ux * uy, 2 * ux * uz),
+            (2 * uy * ux, 2 * uy * uy - 1, 2 * uy * uz),
+            (2 * uz * ux, 2 * uz * uy, 2 * uz * uz - 1),
+        )
+    # Rodrigues: v = a x b, R = I + [v]_x + [v]_x^2 / (1 + dot)
+    vx = ay * bz - az * by
+    vy = az * bx - ax * bz
+    vz = ax * by - ay * bx
+    k = 1.0 / (1.0 + dot)
+    return (
+        (1.0 - (vy * vy + vz * vz) * k, -vz + vx * vy * k, vy + vx * vz * k),
+        (vz + vx * vy * k, 1.0 - (vx * vx + vz * vz) * k, -vx + vy * vz * k),
+        (-vy + vx * vz * k, vx + vy * vz * k, 1.0 - (vx * vx + vy * vy) * k),
+    )
+
+
+def _mat3_vec(mat: Tuple[Vec3, Vec3, Vec3], v: Vec3) -> Vec3:
+    return (
+        mat[0][0] * v[0] + mat[0][1] * v[1] + mat[0][2] * v[2],
+        mat[1][0] * v[0] + mat[1][1] * v[1] + mat[1][2] * v[2],
+        mat[2][0] * v[0] + mat[2][1] * v[1] + mat[2][2] * v[2],
+    )
+
+
+def skin_mesh_to_rig(
+    mesh: MeshData,
+    rig_joints: dict[str, Vec3],
+    normal_offset: float = 0.008,
+) -> Optional[MeshData]:
+    """Verformt ein geskinntes Layered-Clothing-Mesh per Linear Blend Skinning auf das Ziel-Rig.
+
+    ``rig_joints``: Welt-Positionen der R15-Gelenke (z. B. ``RightUpperArm`` -> Schultergelenk,
+    ``RightLowerArm`` -> Ellbogengelenk, ``RightHand`` -> Handgelenk, ``LowerTorso``, ``UpperTorso``,
+    ``Head`` usw.). Gibt ``None`` zurueck, wenn das Mesh keine nutzbaren Skinning-Gewichte besitzt.
+    """
+    skin = mesh.skinning
+    if skin is None or not skin.bones or len(skin.influences) != len(mesh.positions):
+        return None
+
+    bind_by_name = {b.name: b for b in skin.bones}
+    matched_r15 = [b.name for b in skin.bones if b.name in rig_joints]
+    if not matched_r15:
+        return None
+
+    identity: Tuple[Vec3, Vec3, Vec3] = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    bone_rot: List[Optional[Tuple[Vec3, Vec3, Vec3]]] = [None] * len(skin.bones)
+    bone_scale: List[float] = [1.0] * len(skin.bones)
+    bone_world: List[Optional[Vec3]] = [None] * len(skin.bones)
+
+    def resolve_bone(idx: int, depth: int = 0) -> None:
+        if bone_world[idx] is not None or depth > 32:
+            return
+        b = skin.bones[idx]
+        p_idx = b.parent if 0 <= b.parent < len(skin.bones) and b.parent != idx else -1
+        if p_idx >= 0:
+            resolve_bone(p_idx, depth + 1)
+
+        if b.name in rig_joints:
+            pw = rig_joints[b.name]
+            child_name = _PRIMARY_CHILD_BONE.get(b.name)
+            if child_name and child_name in bind_by_name and child_name in rig_joints:
+                cb = bind_by_name[child_name].position
+                cw = rig_joints[child_name]
+                db = (cb[0] - b.position[0], cb[1] - b.position[1], cb[2] - b.position[2])
+                dw = (cw[0] - pw[0], cw[1] - pw[1], cw[2] - pw[2])
+                lb = math.sqrt(db[0] ** 2 + db[1] ** 2 + db[2] ** 2)
+                lw = math.sqrt(dw[0] ** 2 + dw[1] ** 2 + dw[2] ** 2)
+                if lb > 1e-4 and lw > 1e-4:
+                    bone_rot[idx] = rotation_between(db, dw)
+                    bone_scale[idx] = max(0.4, min(2.5, lw / lb))
+            if bone_rot[idx] is None:
+                if p_idx >= 0 and bone_rot[p_idx] is not None:
+                    bone_rot[idx] = bone_rot[p_idx]
+                    bone_scale[idx] = bone_scale[p_idx]
+                else:
+                    bone_rot[idx] = identity
+                    bone_scale[idx] = 1.0
+            bone_world[idx] = pw
+        elif p_idx >= 0 and bone_world[p_idx] is not None and bone_rot[p_idx] is not None:
+            pr = bone_rot[p_idx]
+            ps = bone_scale[p_idx]
+            pp = skin.bones[p_idx].position
+            pw_parent = bone_world[p_idx]
+            assert pr is not None and pw_parent is not None
+            rel = (b.position[0] - pp[0], b.position[1] - pp[1], b.position[2] - pp[2])
+            rrel = _mat3_vec(pr, rel)
+            bone_rot[idx] = pr
+            bone_scale[idx] = ps
+            bone_world[idx] = (
+                pw_parent[0] + ps * rrel[0],
+                pw_parent[1] + ps * rrel[1],
+                pw_parent[2] + ps * rrel[2],
+            )
+        else:
+            bone_rot[idx] = identity
+            bone_scale[idx] = 1.0
+            bone_world[idx] = b.position
+
+    for i in range(len(skin.bones)):
+        resolve_bone(i)
+
+    out_pos: List[Vec3] = []
+    out_nrm: List[Vec3] = []
+    has_normals = len(mesh.normals) == len(mesh.positions)
+
+    for vi, pos in enumerate(mesh.positions):
+        bi, wf = skin.influences[vi]
+        px = py = pz = 0.0
+        nx = ny = nz = 0.0
+        nrm = mesh.normals[vi] if has_normals else (0.0, 1.0, 0.0)
+        for k in range(4):
+            w = wf[k]
+            if w <= 1e-6:
+                continue
+            b_i = bi[k]
+            bp = skin.bones[b_i].position
+            rot = bone_rot[b_i] or identity
+            sc = bone_scale[b_i]
+            bw = bone_world[b_i] or bp
+            rel = (pos[0] - bp[0], pos[1] - bp[1], pos[2] - bp[2])
+            rrel = _mat3_vec(rot, rel)
+            px += w * (bw[0] + sc * rrel[0])
+            py += w * (bw[1] + sc * rrel[1])
+            pz += w * (bw[2] + sc * rrel[2])
+            if has_normals:
+                rn = _mat3_vec(rot, nrm)
+                nx += w * rn[0]
+                ny += w * rn[1]
+                nz += w * rn[2]
+        if has_normals:
+            nl = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
+            nx, ny, nz = nx / nl, ny / nl, nz / nl
+            if normal_offset:
+                px += normal_offset * nx
+                py += normal_offset * ny
+                pz += normal_offset * nz
+            out_nrm.append((nx, ny, nz))
+        out_pos.append((px, py, pz))
+
+    return MeshData(
+        positions=out_pos,
+        normals=out_nrm if has_normals else [],
+        uvs=list(mesh.uvs),
+        faces=list(mesh.faces),
+        colors=list(mesh.colors) if mesh.colors else None,
+        source_version=mesh.source_version,
+        skinning=None,
+    )
 
 if __name__ == "__main__":  # pragma: no cover
     import sys

@@ -17,10 +17,11 @@ Details siehe ANLEITUNG.md, Abschnitt "Einschraenkungen".
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from roblox_mesh import MeshData, make_box, make_sphere
+from avatar_uv import apply_limb_box_uvs, apply_torso_box_uvs
+from roblox_mesh import MeshData, make_box, make_sphere, rotation_between
 from roblox_api import brick_color_hex, hex_to_rgb
 
 # AssetTypeId -> Layout fuer Accessoires
@@ -146,25 +147,28 @@ def build_body(body_colors: Dict[str, Any], scales: Dict[str, Any]) -> Tuple[Lis
 
     # Beine (stehen auf y=0)
     leg_x = leg_w / 2 + gap * 0.5
-    parts.append(Part("rechts_bein", make_box(leg_w, leg_h, leg_d,
-                                              (leg_x, leg_h / 2, 0.0)),
-                      colors["right_leg"], "body"))
-    parts.append(Part("links_bein", make_box(leg_w, leg_h, leg_d,
-                                             (-leg_x, leg_h / 2, 0.0)),
-                      colors["left_leg"], "body"))
+    parts.append(Part("rechts_bein", apply_limb_box_uvs(
+        make_box(leg_w, leg_h, leg_d, (leg_x, leg_h / 2, 0.0))),
+        colors["right_leg"], "body"))
+    parts.append(Part("links_bein", apply_limb_box_uvs(
+        make_box(leg_w, leg_h, leg_d, (-leg_x, leg_h / 2, 0.0))),
+        colors["left_leg"], "body"))
 
     # Torso (mit minimalem Abstand zu den Beinen - sonst dunkle Naht im Glas)
     torso_y = leg_h + gap * 2 + torso_h / 2
-    parts.append(Part("torso", make_box(torso_w, torso_h, torso_d, (0.0, torso_y, 0.0)),
-                      colors["torso"], "body"))
+    parts.append(Part("torso", apply_torso_box_uvs(
+        make_box(torso_w, torso_h, torso_d, (0.0, torso_y, 0.0))),
+        colors["torso"], "body"))
 
     # Arme (haengen seitlich herab)
     arm_x = torso_w / 2 + arm_w / 2 + gap
     arm_y = torso_y
-    parts.append(Part("rechts_arm", make_box(arm_w, arm_h, arm_d, (arm_x, arm_y, 0.0)),
-                      colors["right_arm"], "body"))
-    parts.append(Part("links_arm", make_box(arm_w, arm_h, arm_d, (-arm_x, arm_y, 0.0)),
-                      colors["left_arm"], "body"))
+    parts.append(Part("rechts_arm", apply_limb_box_uvs(
+        make_box(arm_w, arm_h, arm_d, (arm_x, arm_y, 0.0))),
+        colors["right_arm"], "body"))
+    parts.append(Part("links_arm", apply_limb_box_uvs(
+        make_box(arm_w, arm_h, arm_d, (-arm_x, arm_y, 0.0))),
+        colors["left_arm"], "body"))
 
     # Hals (klein, versinkt im Torso/Kopf)
     shoulder_y = leg_h + gap * 2 + torso_h
@@ -248,31 +252,8 @@ def relayout_body(default_parts: List[Part], metrics: BodyMetrics,
 
     sizes = {name: size_of(name) for name in
              ("torso", "rechts_arm", "links_arm", "rechts_bein", "links_bein")}
-    # Linker/rechter Arm bzw. linkes/rechtes Bein sind beim Rig gespiegelt:
-    # haben BEIDE Seiten ein echtes Mesh, wird die Breite/Tiefe angeglichen
-    # (symmetrischer Avatar). Fehlt eine Seite, bleibt die Fallback-Box
-    # unangetastet - sonst wuerde ein einzelner Mesh-Arm die Breite der
-    # Gegenseite erben.
-    def mirror(index: int, names) -> None:
-        present = [n for n in names if n in mesh_sizes]
-        if len(present) < 2:
-            return
-        widest = max(sizes[n][index] for n in present)
-        for name in present:
-            size = list(sizes[name])
-            size[index] = widest
-            sizes[name] = tuple(size)  # type: ignore[assignment]
-
-    # Alle drei Achsen spiegeln: die linken und rechten Teile kommen oft aus
-    # unterschiedlichen Bundles (z. B. Korblox-Arm rechts, Standard-Arm links).
-    # Ohne Angleichung war ein Arm 4,0 Studs lang und der andere 3,0 - die
-    # ueberzaehligen Segmente hingen sichtbar in der Luft.
-    for index in (0, 1, 2):
-        mirror(index, ARM_PARTS)
-        mirror(index, LEG_PARTS)
 
     leg_w = max(sizes["rechts_bein"][0], sizes["links_bein"][0])
-    arm_w = max(sizes["rechts_arm"][0], sizes["links_arm"][0])
 
     torso_w, torso_h, torso_d = sizes["torso"]
     leg_h = max(sizes["rechts_bein"][1], sizes["links_bein"][1])
@@ -305,23 +286,27 @@ def relayout_body(default_parts: List[Part], metrics: BodyMetrics,
         return colors.get(name, "#c7ac78")
 
     parts: List[Part] = []
-    # Beine (untere Kante auf y = 0)
+    # Beine: an der Hueftlinie aufgehaengt; das laengere Bein steht auf y = 0,
+    # kuerzere Stumpf-Beine (z. B. Korblox) schweben originalgetreu an der Huefte.
     for name, sign in (("rechts_bein", 1.0), ("links_bein", -1.0)):
         sx, sy, sz = sizes[name]
-        parts.append(Part(name, make_box(sx, sy, sz,
-                                        (sign * (leg_w / 2 + gap * 0.5), sy / 2, 0.0)),
-                          color(name), "body"))
+        cy = leg_h - sy / 2.0
+        parts.append(Part(name, apply_limb_box_uvs(
+            make_box(sx, sy, sz, (sign * (leg_w / 2 + gap * 0.5), cy, 0.0))),
+            color(name), "body"))
     # Torso
-    parts.append(Part("torso", make_box(torso_w, torso_h, torso_d,
-                                       (0.0, torso_bottom + torso_h / 2, 0.0)),
-                      color("torso"), "body"))
-    # Arme: Oberkante auf Schulterhoehe (Torso-Oberkante)
-    arm_offset = torso_w / 2 + arm_w / 2 + gap
+    parts.append(Part("torso", apply_torso_box_uvs(
+        make_box(torso_w, torso_h, torso_d, (0.0, torso_bottom + torso_h / 2, 0.0))),
+        color("torso"), "body"))
+    # Arme: Oberkante je Arm an der Schulterhoehe, seitlich buendig am Torso
+    right_arm_offset = torso_w / 2 + sizes["rechts_arm"][0] / 2 + gap
     for name, sign in (("rechts_arm", 1.0), ("links_arm", -1.0)):
         sx, sy, sz = sizes[name]
+        arm_offset = torso_w / 2 + sx / 2 + gap
         center_y = torso_top - sy / 2
-        parts.append(Part(name, make_box(sx, sy, sz, (sign * arm_offset, center_y, 0.0)),
-                          color(name), "body"))
+        parts.append(Part(name, apply_limb_box_uvs(
+            make_box(sx, sy, sz, (sign * arm_offset, center_y, 0.0))),
+            color(name), "body"))
     # Hals (verbindet Torso und Kopf, steckt in beiden)
     neck_bottom = torso_top - 0.06
     neck_top = head_center_y - head_r * 0.55
@@ -344,7 +329,7 @@ def relayout_body(default_parts: List[Part], metrics: BodyMetrics,
         head_center_y=head_center_y,
         head_radius=head_r,
         hand_y=torso_top - sizes["rechts_arm"][1] + 0.15,
-        hand_x=arm_offset,
+        hand_x=right_arm_offset,
         waist_y=torso_bottom + torso_h * 0.25,
         hat_base_y=hat_base_y,
     )
@@ -536,3 +521,501 @@ def body_part_colors(body_colors: Dict[str, Any]) -> Dict[str, str]:
 
 def rgb01(hex_color: str) -> Tuple[float, float, float]:
     return hex_to_rgb(hex_color)
+
+
+# ---------------------------------------------------------------------------
+# Exakter R15-Gelenk-Rig + Accessoire-Weld (aus echten RBXM-Attachments)
+# ---------------------------------------------------------------------------
+
+Matrix3 = Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[float, float, float]]
+IDENTITY_MAT3: Matrix3 = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+
+HEAD_ATTACHMENT_NAMES = {
+    "HatAttachment",
+    "HairAttachment",
+    "FaceFrontAttachment",
+    "FaceCenterAttachment",
+    "NeckRigAttachment",
+}
+
+
+def _mat3_mul(a: Matrix3, b: Matrix3) -> Matrix3:
+    return tuple(  # type: ignore[return-value]
+        tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3))
+        for i in range(3)
+    )
+
+
+def _mat3_transpose(m: Matrix3) -> Matrix3:
+    return (
+        (m[0][0], m[1][0], m[2][0]),
+        (m[0][1], m[1][1], m[2][1]),
+        (m[0][2], m[1][2], m[2][2]),
+    )
+
+
+def _mat3_vec(m: Matrix3, v: Tuple[float, float, float]) -> Tuple[float, float, float]:
+    return (
+        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+    )
+
+
+def _as_mat3(raw: Any) -> Matrix3:
+    if raw is None:
+        return IDENTITY_MAT3
+    try:
+        rows = tuple(tuple(float(v) for v in row) for row in raw)
+        if len(rows) == 3 and all(len(r) == 3 for r in rows):
+            return rows  # type: ignore[return-value]
+    except (TypeError, ValueError):
+        pass
+    return IDENTITY_MAT3
+
+
+def _merge_world_meshes(meshes: List[MeshData], source_version: str = "r15-rigged") -> MeshData:
+    positions: List[Tuple[float, float, float]] = []
+    normals: List[Tuple[float, float, float]] = []
+    uvs: List[Tuple[float, float]] = []
+    faces: List[Tuple[int, int, int]] = []
+    colors: List[Tuple[int, int, int, int]] = []
+    all_colors = True
+    for m in meshes:
+        if m.is_empty:
+            continue
+        base = len(positions)
+        positions.extend(m.positions)
+        normals.extend(m.normals if len(m.normals) == len(m.positions) else [(0.0, 1.0, 0.0)] * len(m.positions))
+        uvs.extend(m.uvs if len(m.uvs) == len(m.positions) else [(0.0, 0.0)] * len(m.positions))
+        faces.extend((a + base, b + base, c + base) for a, b, c in m.faces)
+        if m.colors and len(m.colors) == len(m.positions):
+            colors.extend(m.colors)
+        else:
+            all_colors = False
+    return MeshData(
+        positions=positions,
+        normals=normals,
+        uvs=uvs,
+        faces=faces,
+        colors=colors if all_colors and colors else None,
+        source_version=source_version,
+    )
+
+
+@dataclass
+class RiggedAvatar:
+    """Welt-Raum-Ergebnis des Attachment-basierten R15-Rigs."""
+
+    body_meshes: Dict[str, MeshData] = field(default_factory=dict)
+    head_mesh: Optional[MeshData] = None
+    world_attachments: Dict[str, Tuple[Tuple[float, float, float], Matrix3]] = field(default_factory=dict)
+    joint_positions: Dict[str, Tuple[float, float, float]] = field(default_factory=dict)
+    metrics: BodyMetrics = field(default_factory=BodyMetrics)
+    scales_body: Tuple[float, float, float] = (1.0, 1.0, 1.0)
+    scales_head: Tuple[float, float, float] = (1.0, 1.0, 1.0)
+
+
+def _scale_part_local(
+    mp: Dict[str, Any],
+    scale_vec: Tuple[float, float, float],
+) -> Tuple[MeshData, Dict[str, Tuple[Tuple[float, float, float], Matrix3]], bool]:
+    """Bringt ein einzelnes RBXM-Segment samt Attachments in skalierten lokalen Stud-Raum."""
+    mesh: MeshData = mp["mesh"]
+    sx_s, sy_s, sz_s = scale_vec
+    transparent = float(mp.get("transparency") or 0.0) >= 0.99
+
+    if mp.get("rbxm_class") == "SpecialMesh":
+        ms = mp.get("mesh_scale") or (1.0, 1.0, 1.0)
+        mo = mp.get("mesh_offset") or (0.0, 0.0, 0.0)
+        fx, fy, fz = float(ms[0]) * sx_s, float(ms[1]) * sy_s, float(ms[2]) * sz_s
+        ox, oy, oz = float(mo[0]) * sx_s, float(mo[1]) * sy_s, float(mo[2]) * sz_s
+        local_mesh = mesh.transform((fx, fy, fz), (ox, oy, oz))
+    else:
+        msize = mesh.size()
+        rsize = mp.get("rbxm_size")
+        if (
+            rsize is not None
+            and len(rsize) == 3
+            and min(float(v) for v in rsize) > 1e-4
+            and min(msize) > 1e-4
+        ):
+            bx = float(rsize[0]) / msize[0]
+            by = float(rsize[1]) / msize[1]
+            bz = float(rsize[2]) / msize[2]
+        else:
+            bx = by = bz = 1.0
+        local_mesh = mesh.transform((bx * sx_s, by * sy_s, bz * sz_s))
+
+    local_atts: Dict[str, Tuple[Tuple[float, float, float], Matrix3]] = {}
+    for aname, ainfo in (mp.get("attachments") or {}).items():
+        pos = ainfo.get("position")
+        if pos is None:
+            continue
+        spos = (float(pos[0]) * sx_s, float(pos[1]) * sy_s, float(pos[2]) * sz_s)
+        local_atts[aname] = (spos, _as_mat3(ainfo.get("rotation")))
+
+    return local_mesh, local_atts, transparent
+
+
+def has_rig_attachments(segments_by_part: Dict[str, List[Dict[str, Any]]], head_mp: Optional[Dict[str, Any]] = None) -> bool:
+    """True, sobald mindestens ein Koerperteil oder Kopf echte RigAttachments besitzt."""
+    for segs in segments_by_part.values():
+        for mp in segs:
+            if any(k.endswith("RigAttachment") for k in (mp.get("attachments") or {})):
+                return True
+    if head_mp and any(k.endswith("Attachment") for k in (head_mp.get("attachments") or {})):
+        return True
+    return False
+
+
+def assemble_r15_rig(
+    segments_by_part: Dict[str, List[Dict[str, Any]]],
+    head_mp: Optional[Dict[str, Any]],
+    body_colors: Dict[str, Any],
+    scales: Dict[str, Any],
+    headless: bool = False,
+) -> RiggedAvatar:
+    """Setzt einen kompletten R15-Avatar ueber exakte `*RigAttachment`-Gelenke zusammen."""
+    sw = _clamp(scales.get("width"), 0.55, 1.60)
+    sh = _clamp(scales.get("height"), 0.55, 1.60)
+    sd = _clamp(scales.get("depth"), 0.55, 1.60)
+    shead = _clamp(scales.get("head"), 0.55, 1.60)
+    s_body = (sw, sh, sd)
+    s_head = (shead, shead, shead)
+
+    seg_lookup: Dict[str, Tuple[MeshData, Dict[str, Tuple[Tuple[float, float, float], Matrix3]], bool]] = {}
+    for segs in segments_by_part.values():
+        for mp in segs:
+            lname = (mp.get("label") or "").strip()
+            if lname and lname not in seg_lookup:
+                seg_lookup[lname] = _scale_part_local(mp, s_body)
+
+    world_atts: Dict[str, Tuple[Tuple[float, float, float], Matrix3]] = {}
+    joint_pos: Dict[str, Tuple[float, float, float]] = {}
+    placed_seg_mesh: Dict[str, MeshData] = {}
+    placed_seg_vis: Dict[str, bool] = {}
+
+    def register_segment(
+        seg_name: str,
+        local_mesh: MeshData,
+        local_atts: Dict[str, Tuple[Tuple[float, float, float], Matrix3]],
+        origin: Tuple[float, float, float],
+        rot: Matrix3 = IDENTITY_MAT3,
+        visible: bool = True,
+    ) -> None:
+        placed = local_mesh.rotate(rot).transform(1.0, origin)
+        placed_seg_mesh[seg_name] = placed
+        placed_seg_vis[seg_name] = visible
+        for aname, (apos, arot) in local_atts.items():
+            ra = _mat3_vec(rot, apos)
+            wpos = (origin[0] + ra[0], origin[1] + ra[1], origin[2] + ra[2])
+            world_atts[aname] = (wpos, _mat3_mul(rot, arot))
+
+    # 1) Torso (LowerTorso -> WaistRigAttachment -> UpperTorso)
+    if "LowerTorso" in seg_lookup and "UpperTorso" in seg_lookup:
+        lt_m, lt_a, lt_tr = seg_lookup["LowerTorso"]
+        ut_m, ut_a, ut_tr = seg_lookup["UpperTorso"]
+        register_segment("LowerTorso", lt_m, lt_a, (0.0, 0.0, 0.0), IDENTITY_MAT3, not lt_tr)
+        joint_pos["LowerTorso"] = world_atts.get("RootRigAttachment", ((0.0, 0.0, 0.0), IDENTITY_MAT3))[0]
+        waist_world = world_atts.get("WaistRigAttachment", ((0.0, 0.2 * sh, 0.0), IDENTITY_MAT3))[0]
+        ut_waist = ut_a.get("WaistRigAttachment", ((0.0, -0.8 * sh, 0.0), IDENTITY_MAT3))[0]
+        ut_origin = (waist_world[0] - ut_waist[0], waist_world[1] - ut_waist[1], waist_world[2] - ut_waist[2])
+        register_segment("UpperTorso", ut_m, ut_a, ut_origin, IDENTITY_MAT3, not ut_tr)
+        joint_pos["UpperTorso"] = waist_world
+        torso_mesh = _merge_world_meshes(
+            [m for n, m in (("UpperTorso", placed_seg_mesh["UpperTorso"]), ("LowerTorso", placed_seg_mesh["LowerTorso"])) if placed_seg_vis[n]]
+        )
+    else:
+        # Standard-Blocky-Torso mit exakten R15-Attachments
+        tw, th, td = 2.0 * sw, 2.0 * sh, 1.0 * sd
+        torso_origin = (0.0, 0.8 * sh, 0.0)
+        torso_box = apply_torso_box_uvs(make_box(tw, th, td, torso_origin))
+        default_torso_atts: Dict[str, Tuple[Tuple[float, float, float], Matrix3]] = {
+            "RootRigAttachment": ((0.0, 0.0, 0.0), IDENTITY_MAT3),
+            "WaistRigAttachment": ((0.0, 0.2 * sh, 0.0), IDENTITY_MAT3),
+            "LeftHipRigAttachment": ((-0.5 * sw, -0.2 * sh, 0.0), IDENTITY_MAT3),
+            "RightHipRigAttachment": ((0.5 * sw, -0.2 * sh, 0.0), IDENTITY_MAT3),
+            "NeckRigAttachment": ((0.0, 1.8 * sh, 0.0), IDENTITY_MAT3),
+            "NeckAttachment": ((0.0, 1.8 * sh, 0.0), IDENTITY_MAT3),
+            "LeftShoulderRigAttachment": ((-1.0 * sw, 1.4 * sh, 0.0), IDENTITY_MAT3),
+            "RightShoulderRigAttachment": ((1.0 * sw, 1.4 * sh, 0.0), IDENTITY_MAT3),
+            "LeftCollarAttachment": ((-1.0 * sw, 1.8 * sh, 0.0), IDENTITY_MAT3),
+            "RightCollarAttachment": ((1.0 * sw, 1.8 * sh, 0.0), IDENTITY_MAT3),
+            "BodyFrontAttachment": ((0.0, 1.0 * sh, -0.5 * sd), IDENTITY_MAT3),
+            "BodyBackAttachment": ((0.0, 1.0 * sh, 0.5 * sd), IDENTITY_MAT3),
+            "WaistCenterAttachment": ((0.0, 0.0, 0.0), IDENTITY_MAT3),
+            "WaistFrontAttachment": ((0.0, 0.0, -0.5 * sd), IDENTITY_MAT3),
+            "WaistBackAttachment": ((0.0, 0.0, 0.5 * sd), IDENTITY_MAT3),
+        }
+        world_atts.update(default_torso_atts)
+        joint_pos["LowerTorso"] = (0.0, 0.0, 0.0)
+        joint_pos["UpperTorso"] = (0.0, 0.2 * sh, 0.0)
+        torso_mesh = torso_box
+
+    body_meshes: Dict[str, MeshData] = {"torso": torso_mesh}
+
+    # 2) Arme (Shoulder -> Elbow -> Wrist; A-Pose wird auf natuerliches Herabhaengen rotiert)
+    for part_name, side, sign in (("rechts_arm", "Right", 1.0), ("links_arm", "Left", -1.0)):
+        u_name, l_name, h_name = f"{side}UpperArm", f"{side}LowerArm", f"{side}Hand"
+        sh_att_name = f"{side}ShoulderRigAttachment"
+        el_att_name = f"{side}ElbowRigAttachment"
+        wr_att_name = f"{side}WristRigAttachment"
+        shoulder_w = world_atts.get(sh_att_name, ((sign * 1.0 * sw, 1.4 * sh, 0.0), IDENTITY_MAT3))[0]
+        joint_pos[u_name] = shoulder_w
+
+        if u_name in seg_lookup and l_name in seg_lookup and h_name in seg_lookup:
+            um, ua, utr = seg_lookup[u_name]
+            lm, la, ltr = seg_lookup[l_name]
+            hm, ha, htr = seg_lookup[h_name]
+
+            d_upper_target = (sign * 0.3420, -0.9397, 0.0)
+            d_lower_target = (sign * 0.2588, -0.9650, -0.04)
+
+            rot_u = IDENTITY_MAT3
+            if sh_att_name in ua and el_att_name in ua:
+                du = (
+                    ua[el_att_name][0][0] - ua[sh_att_name][0][0],
+                    ua[el_att_name][0][1] - ua[sh_att_name][0][1],
+                    ua[el_att_name][0][2] - ua[sh_att_name][0][2],
+                )
+                len_u = (du[0] ** 2 + du[1] ** 2 + du[2] ** 2) ** 0.5
+                horiz_u = (du[0] ** 2 + du[2] ** 2) ** 0.5
+                if len_u > 0.15 and horiz_u > 0.28 * len_u:
+                    rot_u = rotation_between(du, d_upper_target)
+
+            u_sh_r = _mat3_vec(rot_u, ua.get(sh_att_name, ((0.0, 0.3 * sh, 0.0), IDENTITY_MAT3))[0])
+            u_orig = (shoulder_w[0] - u_sh_r[0], shoulder_w[1] - u_sh_r[1], shoulder_w[2] - u_sh_r[2])
+            register_segment(u_name, um, ua, u_orig, rot_u, not utr)
+
+            elbow_w = world_atts.get(el_att_name, (shoulder_w[0], shoulder_w[1] - 0.6 * sh, shoulder_w[2]))[0]
+            joint_pos[l_name] = elbow_w
+
+            rot_l = rot_u
+            if el_att_name in la and wr_att_name in la:
+                dl = (
+                    la[wr_att_name][0][0] - la[el_att_name][0][0],
+                    la[wr_att_name][0][1] - la[el_att_name][0][1],
+                    la[wr_att_name][0][2] - la[el_att_name][0][2],
+                )
+                len_l = (dl[0] ** 2 + dl[1] ** 2 + dl[2] ** 2) ** 0.5
+                horiz_l = (dl[0] ** 2 + dl[2] ** 2) ** 0.5
+                if len_l > 0.15 and horiz_l > 0.28 * len_l:
+                    rot_l = rotation_between(dl, d_lower_target)
+
+            l_el_r = _mat3_vec(rot_l, la.get(el_att_name, ((0.0, 0.35 * sh, 0.0), IDENTITY_MAT3))[0])
+            l_orig = (elbow_w[0] - l_el_r[0], elbow_w[1] - l_el_r[1], elbow_w[2] - l_el_r[2])
+            register_segment(l_name, lm, la, l_orig, rot_l, not ltr)
+
+            wrist_w = world_atts.get(wr_att_name, (elbow_w[0], elbow_w[1] - 0.7 * sh, elbow_w[2]))[0]
+            joint_pos[h_name] = wrist_w
+
+            h_wr_r = _mat3_vec(rot_l, ha.get(wr_att_name, ((0.0, 0.15 * sh, 0.0), IDENTITY_MAT3))[0])
+            h_orig = (wrist_w[0] - h_wr_r[0], wrist_w[1] - h_wr_r[1], wrist_w[2] - h_wr_r[2])
+            register_segment(h_name, hm, ha, h_orig, rot_l, not htr)
+
+            vis_arm = [placed_seg_mesh[n] for n in (u_name, l_name, h_name) if placed_seg_vis[n]]
+            body_meshes[part_name] = _merge_world_meshes(vis_arm)
+        else:
+            aw, ah, ad = 1.0 * sw, 2.0 * sh, 1.0 * sd
+            torso_half_w = torso_mesh.size()[0] / 2.0
+            cx = sign * (max(abs(shoulder_w[0]), torso_half_w) + aw / 2.0 + 0.012)
+            cy = shoulder_w[1] + 0.4 * sh - ah / 2.0
+            cz = shoulder_w[2]
+            body_meshes[part_name] = apply_limb_box_uvs(make_box(aw, ah, ad, (cx, cy, cz)))
+            joint_pos[u_name] = (cx, cy + 0.6 * sh, cz)
+            joint_pos[l_name] = (cx, cy - 0.1 * sh, cz)
+            joint_pos[h_name] = (cx, cy - 0.75 * sh, cz)
+            world_atts.setdefault(f"{side}ShoulderAttachment", ((cx, cy + ah / 2.0, cz), IDENTITY_MAT3))
+            world_atts.setdefault(f"{side}GripAttachment", ((cx, cy - ah / 2.0 + 0.1 * sh, cz), IDENTITY_MAT3))
+
+    # 3) Beine (Hip -> Knee -> Ankle)
+    for part_name, side, sign in (("rechts_bein", "Right", 1.0), ("links_bein", "Left", -1.0)):
+        u_name, l_name, f_name = f"{side}UpperLeg", f"{side}LowerLeg", f"{side}Foot"
+        hip_att_name = f"{side}HipRigAttachment"
+        knee_att_name = f"{side}KneeRigAttachment"
+        ankle_att_name = f"{side}AnkleRigAttachment"
+        hip_w = world_atts.get(hip_att_name, ((sign * 0.5 * sw, -0.2 * sh, 0.0), IDENTITY_MAT3))[0]
+        joint_pos[u_name] = hip_w
+
+        if u_name in seg_lookup and l_name in seg_lookup and f_name in seg_lookup:
+            um, ua, utr = seg_lookup[u_name]
+            lm, la, ltr = seg_lookup[l_name]
+            fm, fa, ftr = seg_lookup[f_name]
+
+            rot_u = IDENTITY_MAT3
+            if hip_att_name in ua and knee_att_name in ua:
+                du = (
+                    ua[knee_att_name][0][0] - ua[hip_att_name][0][0],
+                    ua[knee_att_name][0][1] - ua[hip_att_name][0][1],
+                    ua[knee_att_name][0][2] - ua[hip_att_name][0][2],
+                )
+                if du[1] < -0.2 and (du[0] ** 2 + du[2] ** 2) > 0.05 * (du[1] ** 2):
+                    rot_u = rotation_between(du, (0.0, -1.0, 0.0))
+
+            u_hip_r = _mat3_vec(rot_u, ua.get(hip_att_name, ((0.0, 0.4 * sh, 0.0), IDENTITY_MAT3))[0])
+            u_orig = (hip_w[0] - u_hip_r[0], hip_w[1] - u_hip_r[1], hip_w[2] - u_hip_r[2])
+            register_segment(u_name, um, ua, u_orig, rot_u, not utr)
+
+            knee_w = world_atts.get(knee_att_name, (hip_w[0], hip_w[1] - 0.8 * sh, hip_w[2]))[0]
+            joint_pos[l_name] = knee_w
+
+            rot_l = IDENTITY_MAT3
+            if knee_att_name in la and ankle_att_name in la:
+                dl = (
+                    la[ankle_att_name][0][0] - la[knee_att_name][0][0],
+                    la[ankle_att_name][0][1] - la[knee_att_name][0][1],
+                    la[ankle_att_name][0][2] - la[knee_att_name][0][2],
+                )
+                if dl[1] < -0.2 and (dl[0] ** 2 + dl[2] ** 2) > 0.05 * (dl[1] ** 2):
+                    rot_l = rotation_between(dl, (0.0, -1.0, 0.0))
+
+            l_kn_r = _mat3_vec(rot_l, la.get(knee_att_name, ((0.0, 0.4 * sh, 0.0), IDENTITY_MAT3))[0])
+            l_orig = (knee_w[0] - l_kn_r[0], knee_w[1] - l_kn_r[1], knee_w[2] - l_kn_r[2])
+            register_segment(l_name, lm, la, l_orig, rot_l, not ltr)
+
+            ankle_w = world_atts.get(ankle_att_name, (knee_w[0], knee_w[1] - 0.8 * sh, knee_w[2]))[0]
+            joint_pos[f_name] = ankle_w
+
+            f_an_r = fa.get(ankle_att_name, ((0.0, 0.1 * sh, 0.0), IDENTITY_MAT3))[0]
+            f_orig = (ankle_w[0] - f_an_r[0], ankle_w[1] - f_an_r[1], ankle_w[2] - f_an_r[2])
+            register_segment(f_name, fm, fa, f_orig, IDENTITY_MAT3, not ftr)
+
+            vis_leg = [placed_seg_mesh[n] for n in (u_name, l_name, f_name) if placed_seg_vis[n]]
+            body_meshes[part_name] = _merge_world_meshes(vis_leg)
+        else:
+            lw, lh, ld = 1.0 * sw, 2.0 * sh, 1.0 * sd
+            cx = sign * max(abs(hip_w[0]), lw / 2.0 + 0.006)
+            cy = hip_w[1] - lh / 2.0
+            cz = hip_w[2]
+            body_meshes[part_name] = apply_limb_box_uvs(make_box(lw, lh, ld, (cx, cy, cz)))
+            joint_pos[u_name] = (cx, hip_w[1], cz)
+            joint_pos[l_name] = (cx, hip_w[1] - 0.85 * sh, cz)
+            joint_pos[f_name] = (cx, hip_w[1] - 1.75 * sh, cz)
+
+    # 4) Kopf (NeckRigAttachment) + dezenter Halskern
+    neck_w = world_atts.get("NeckRigAttachment", ((0.0, torso_mesh.bbox()[1][1], 0.0), IDENTITY_MAT3))[0]
+    joint_pos["Head"] = neck_w
+
+    head_world: Optional[MeshData] = None
+    head_r = 0.60 * shead
+    if head_mp is not None and not headless:
+        hm_loc, ha_loc, _htr = _scale_part_local(head_mp, s_head)
+        h_neck = ha_loc.get("NeckRigAttachment", ((0.0, -0.5 * shead, 0.0), IDENTITY_MAT3))[0]
+        h_orig = (neck_w[0] - h_neck[0], neck_w[1] - h_neck[1], neck_w[2] - h_neck[2])
+        register_segment("Head", hm_loc, ha_loc, h_orig, IDENTITY_MAT3, True)
+        head_world = placed_seg_mesh["Head"]
+        head_center = head_world.center()
+        head_r = max(head_world.size()) / 2.0
+        world_atts.setdefault("HatAttachment", ((head_center[0], head_center[1] + 0.6 * shead, head_center[2]), IDENTITY_MAT3))
+        world_atts.setdefault("HairAttachment", world_atts["HatAttachment"])
+        world_atts.setdefault("FaceCenterAttachment", (head_center, IDENTITY_MAT3))
+        world_atts.setdefault("FaceFrontAttachment", ((head_center[0], head_center[1], head_center[2] - head_r), IDENTITY_MAT3))
+    elif not headless:
+        head_r = 0.60 * shead
+        head_center = (neck_w[0], neck_w[1] + 0.5 * shead, neck_w[2])
+        head_world = make_sphere(head_r, 32, 22, head_center)
+        world_atts["HatAttachment"] = ((head_center[0], head_center[1] + 0.6 * shead, head_center[2]), IDENTITY_MAT3)
+        world_atts["HairAttachment"] = world_atts["HatAttachment"]
+        world_atts["FaceCenterAttachment"] = (head_center, IDENTITY_MAT3)
+        world_atts["FaceFrontAttachment"] = ((head_center[0], head_center[1], head_center[2] - head_r), IDENTITY_MAT3)
+    else:
+        # Headless: unsichtbarer Kopftraeger fuer Kronen/Hoerner dicht ueber dem Kragen
+        head_center = (neck_w[0], neck_w[1] + 0.12 * sh, neck_w[2])
+        world_atts["HatAttachment"] = ((neck_w[0], neck_w[1] + 0.62 * shead, neck_w[2]), IDENTITY_MAT3)
+        world_atts["HairAttachment"] = world_atts["HatAttachment"]
+        world_atts["FaceCenterAttachment"] = (head_center, IDENTITY_MAT3)
+        world_atts["FaceFrontAttachment"] = ((head_center[0], head_center[1], head_center[2] - 0.5 * shead), IDENTITY_MAT3)
+
+    neck_h = 0.14 * sh if headless else 0.24 * sh
+    body_meshes["hals"] = make_box(
+        min(0.45 * sw, torso_mesh.size()[0] * 0.32),
+        neck_h,
+        min(0.45 * sd, torso_mesh.size()[2] * 0.42),
+        (neck_w[0], neck_w[1] + (0.02 * sh if headless else 0.05 * sh), neck_w[2]),
+    )
+
+    # 5) Gesamtes Rig gemeinsam auf y = 0 stellen
+    min_y = min(
+        (m.bbox()[0][1] for m in body_meshes.values() if not m.is_empty),
+        default=0.0,
+    )
+    shift_y = -min_y
+    for k, m in list(body_meshes.items()):
+        body_meshes[k] = m.transform(1.0, (0.0, shift_y, 0.0))
+    if head_world is not None:
+        head_world = head_world.transform(1.0, (0.0, shift_y, 0.0))
+    for k, (p, r) in list(world_atts.items()):
+        world_atts[k] = ((p[0], p[1] + shift_y, p[2]), r)
+    for k, p in list(joint_pos.items()):
+        joint_pos[k] = (p[0], p[1] + shift_y, p[2])
+
+    t_lo, t_hi = body_meshes["torso"].bbox()
+    h_center_y = head_world.center()[1] if head_world is not None else (t_hi[1] + 0.15 * sh)
+    top_y = head_world.bbox()[1][1] if head_world is not None else body_meshes["hals"].bbox()[1][1]
+    r_grip = world_atts.get("RightGripAttachment", ((t_hi[0] + 0.4, t_lo[1], 0.0), IDENTITY_MAT3))[0]
+    waist_c = world_atts.get("WaistCenterAttachment", ((0.0, t_lo[1] + 0.2, 0.0), IDENTITY_MAT3))[0]
+
+    rig_metrics = BodyMetrics(
+        height=top_y,
+        torso_width=t_hi[0] - t_lo[0],
+        torso_depth=t_hi[2] - t_lo[2],
+        shoulder_y=t_hi[1],
+        head_center_y=h_center_y,
+        head_radius=head_r,
+        hand_y=r_grip[1],
+        hand_x=r_grip[0],
+        waist_y=waist_c[1],
+        hat_base_y=(t_hi[1] + 0.08 * sh) if headless else None,
+    )
+
+    return RiggedAvatar(
+        body_meshes=body_meshes,
+        head_mesh=head_world,
+        world_attachments=world_atts,
+        joint_positions=joint_pos,
+        metrics=rig_metrics,
+        scales_body=s_body,
+        scales_head=s_head,
+    )
+
+
+def weld_accessory(
+    mp: Dict[str, Any],
+    rig: RiggedAvatar,
+) -> Optional[Tuple[MeshData, str]]:
+    """Verschweisst ein Accessoire ueber sein RBXM-Attachment exakt mit dem Koerper-Rig."""
+    acc_atts = mp.get("attachments") or {}
+    matched_name: Optional[str] = None
+    for cand in acc_atts:
+        if cand in rig.world_attachments:
+            matched_name = cand
+            break
+    if matched_name is None:
+        return None
+
+    if matched_name in HEAD_ATTACHMENT_NAMES:
+        scale_vec = rig.scales_head
+    else:
+        sh = rig.scales_body[1]
+        scale_vec = (sh, sh, sh)
+    local_mesh, local_atts, _ = _scale_part_local(mp, scale_vec)
+    p_acc, r_acc = local_atts[matched_name]
+    p_body, r_body = rig.world_attachments[matched_name]
+
+    r_handle = _mat3_mul(r_body, _mat3_transpose(r_acc))
+    rot_p_acc = _mat3_vec(r_handle, p_acc)
+    p_handle = (
+        p_body[0] - rot_p_acc[0],
+        p_body[1] - rot_p_acc[1],
+        p_body[2] - rot_p_acc[2],
+    )
+    placed = local_mesh.rotate(r_handle).transform(1.0, p_handle)
+    layout = ACCESSORY_LAYOUT.get(int(mp.get("type_id") or 0), {"label": "Accessoire"})
+    sz = placed.size()
+    note = (
+        f"{layout['label']}: exakt per '{matched_name}' verschweisst "
+        f"({_de(sz[0], 2)}x{_de(sz[1], 2)}x{_de(sz[2], 2)} Studs)"
+    )
+    return placed, note
+

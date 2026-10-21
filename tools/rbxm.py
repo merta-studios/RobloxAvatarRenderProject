@@ -57,6 +57,8 @@ _ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
 # PROP-Datentyp-IDs (nur die, die wir dekodieren)
 _T_STRING = 0x01
+_T_BOOL = 0x02
+_T_FLOAT32 = 0x04
 _T_VECTOR3 = 0x0E
 _T_CFRAME = 0x10
 _T_SHARED_STRING = 0x1C
@@ -348,16 +350,30 @@ def _decompress_chunk(raw: bytes, expected_len: int) -> bytes:
 # Klassische Kleidung (Shirt/Pants/TShirt) wird ebenfalls als RBXM
 # ausgeliefert; die Bild-ID steht dort in ShirtTemplate/PantsTemplate/Graphic.
 _TEXTURE_PROPS = {"textureid", "texture", "colormap", "basetextureid",
-                  "shirtTemplate", "pantstemplate", "graphic"}
+                  "shirttemplate", "pantstemplate", "graphic"}
 _TEXTURE_OVERLAY_PROPS = {"overlaytextureid"}
+_CAGE_MESH_PROPS = {"cagemeshid", "referencemeshid"}
 
 
 def _new_record(cls: str) -> Dict[str, Any]:
     return {
         "class": cls, "name": "", "mesh_url": "", "texture_url": "",
-        "overlay_url": "", "size": None, "position": None, "rotation": None,
-        "scale": None, "offset": None, "Parent": None,
+        "overlay_url": "", "cage_mesh_url": "", "reference_mesh_url": "",
+        "size": None, "position": None, "rotation": None,
+        "attachment_point": None, "import_origin": None, "reference_origin": None,
+        "scale": None, "offset": None, "transparency": None, "puffiness": None,
+        "value_str": None, "value_vec3": None,
+        "Parent": None, "children": [],
     }
+
+
+def _unpack_cframe(value: Any) -> Tuple[Optional[Vec3], Optional[Matrix3]]:
+    if (isinstance(value, tuple) and len(value) == 2
+            and isinstance(value[0], tuple) and len(value[0]) == 3):
+        return value[0], value[1]
+    if isinstance(value, tuple) and len(value) == 3:
+        return value, None  # type: ignore[return-value]
+    return None, None
 
 
 def _apply_property(record: Dict[str, Any], prop_name: str, value: Any) -> None:
@@ -366,25 +382,45 @@ def _apply_property(record: Dict[str, Any], prop_name: str, value: Any) -> None:
         record["name"] = value
     elif key == "meshid" and isinstance(value, str):
         record["mesh_url"] = value
+    elif key == "cagemeshid" and isinstance(value, str):
+        record["cage_mesh_url"] = value
+    elif key == "referencemeshid" and isinstance(value, str):
+        record["reference_mesh_url"] = value
     elif key in _TEXTURE_PROPS and isinstance(value, str):
         if value and not record["texture_url"]:
             record["texture_url"] = value
     elif key in _TEXTURE_OVERLAY_PROPS and isinstance(value, str):
         if value and not record["overlay_url"]:
             record["overlay_url"] = value
+    elif key == "value":
+        if isinstance(value, str):
+            record["value_str"] = value
+        elif isinstance(value, tuple) and len(value) == 3:
+            record["value_vec3"] = value
     elif key == "size":
         record["size"] = value
     elif key == "cframe":
-        # (Position, Rotation) vom Binary-Parser; XML liefert dasselbe.
-        if (isinstance(value, tuple) and len(value) == 2
-                and isinstance(value[0], tuple) and len(value[0]) == 3):
-            record["position"], record["rotation"] = value
-        else:  # nur Position (alte Aufrufer/Fallback)
-            record["position"] = value
+        record["position"], record["rotation"] = _unpack_cframe(value)
+    elif key == "attachmentpoint":
+        pos, rot = _unpack_cframe(value)
+        if pos is not None:
+            record["attachment_point"] = {"position": pos, "rotation": rot}
+    elif key == "importorigin":
+        pos, rot = _unpack_cframe(value)
+        if pos is not None:
+            record["import_origin"] = {"position": pos, "rotation": rot}
+    elif key == "referenceorigin":
+        pos, rot = _unpack_cframe(value)
+        if pos is not None:
+            record["reference_origin"] = {"position": pos, "rotation": rot}
     elif key == "scale":
         record["scale"] = value
-    elif key == "offset":
+    elif key in ("offset", "vertex"):
         record["offset"] = value
+    elif key == "transparency" and isinstance(value, (int, float)):
+        record["transparency"] = float(value)
+    elif key == "puffiness" and isinstance(value, (int, float)):
+        record["puffiness"] = float(value)
 
 
 def _assemble(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -393,8 +429,96 @@ def _assemble(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     SpecialMeshes erben Groesse/Position vom Parent-Part (skaliert mit der
     SpecialMesh-Scale), SurfaceAppearance-/Decal-Texturen werden dem
     Parent-Eintrag zugeordnet, wenn dieser selbst eine Mesh-ID hat.
+    Zusaetzlich werden R15-Ordner, Attachments, OriginalSize, Transparenz
+    und WrapLayer-/WrapTarget-Metadaten an den Eintrag gehaengt.
     """
+    for rec in records:
+        rec["children"] = []
+    for rec in records:
+        parent = rec.get("Parent")
+        if parent is not None:
+            parent["children"].append(rec)
+
     by_record: Dict[int, Dict[str, Any]] = {}
+
+    def enclosing_folder(rec: Dict[str, Any]) -> Optional[str]:
+        cur = rec.get("Parent")
+        while cur is not None:
+            if cur.get("class") == "Folder" and cur.get("name"):
+                return cur["name"]
+            cur = cur.get("Parent")
+        return None
+
+    def enclosing_attachment_point(rec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        cur = rec
+        while cur is not None:
+            if cur.get("attachment_point") is not None:
+                return cur["attachment_point"]
+            cur = cur.get("Parent")
+        return None
+
+    def collect_part_metadata(rec: Dict[str, Any]) -> Dict[str, Any]:
+        """Attachments, OriginalSize, ScaleType und Wrap-Daten sammeln."""
+        sources = [rec]
+        parent = rec.get("Parent")
+        if parent is not None and rec["class"] in ("SpecialMesh", "BlockMesh", "CylinderMesh", "FileMesh"):
+            sources.insert(0, parent)
+
+        attachments: Dict[str, Dict[str, Any]] = {}
+        original_size: Optional[Vec3] = None
+        scale_type: Optional[str] = None
+        wrap_layer: Optional[Dict[str, Any]] = None
+        wrap_target: Optional[Dict[str, Any]] = None
+
+        for src in sources:
+            for ch in src.get("children", ()):
+                ccls = ch.get("class")
+                cname = ch.get("name") or ""
+                if ccls == "Attachment" and cname and ch.get("position") is not None:
+                    attachments[cname] = {
+                        "position": ch["position"],
+                        "rotation": ch.get("rotation"),
+                    }
+                elif ccls == "Vector3Value":
+                    if cname == "OriginalSize" and ch.get("value_vec3") is not None:
+                        original_size = ch["value_vec3"]
+                    elif cname.endswith("Attachment") and ch.get("value_vec3") is not None:
+                        attachments.setdefault(cname, {
+                            "position": ch["value_vec3"],
+                            "rotation": None,
+                        })
+                elif ccls == "StringValue" and cname == "AvatarPartScaleType":
+                    if ch.get("value_str"):
+                        scale_type = ch["value_str"]
+                elif ccls == "WrapLayer":
+                    wrap_layer = {
+                        "import_origin": ch.get("import_origin"),
+                        "reference_origin": ch.get("reference_origin"),
+                        "cage_mesh_id": parse_asset_id(ch.get("cage_mesh_url")),
+                        "reference_mesh_id": parse_asset_id(ch.get("reference_mesh_url")),
+                        "puffiness": ch.get("puffiness"),
+                    }
+                elif ccls == "WrapTarget":
+                    wrap_target = {
+                        "cage_mesh_id": parse_asset_id(ch.get("cage_mesh_url")),
+                    }
+
+        transparency = rec.get("transparency")
+        if transparency is None and parent is not None:
+            transparency = parent.get("transparency")
+
+        return {
+            "folder": enclosing_folder(rec),
+            "transparency": float(transparency) if transparency is not None else 0.0,
+            "mesh_scale": rec.get("scale"),
+            "mesh_offset": rec.get("offset"),
+            "original_size": original_size,
+            "scale_type": scale_type,
+            "attachments": attachments,
+            "accessory_attachment_point": enclosing_attachment_point(rec),
+            "wrap_layer": wrap_layer,
+            "wrap_target": wrap_target,
+        }
 
     def effective_size(rec: Dict[str, Any]) -> Optional[Vec3]:
         Parent = rec.get("Parent")
@@ -458,6 +582,7 @@ def _assemble(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "position": effective_position(rec),
             "rotation": effective_rotation(rec),
         }
+        entry.update(collect_part_metadata(rec))
         by_record[id(rec)] = entry
 
     # Texture-Kinder, deren Parent erst nach ihnen verarbeitet wurde,
@@ -481,8 +606,12 @@ def _assemble(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # Binaer-Parser (RBXM)
 # ---------------------------------------------------------------------------
 
-_STRING_PROPS = ({"name", "meshid"} | _TEXTURE_PROPS | _TEXTURE_OVERLAY_PROPS)
-_VECTOR3_PROPS = {"size", "scale", "offset"}
+_STRING_PROPS = ({"name", "meshid", "value"} | _TEXTURE_PROPS
+                 | _TEXTURE_OVERLAY_PROPS | _CAGE_MESH_PROPS)
+_VECTOR3_PROPS = {"size", "scale", "offset", "vertex", "value"}
+_CFRAME_PROPS = {"cframe", "attachmentpoint", "importorigin", "referenceorigin"}
+_FLOAT_PROPS = {"transparency", "puffiness"}
+_BOOL_PROPS = {"archivable"}
 
 
 def _parse_binary(data: bytes) -> List[Dict[str, Any]]:
@@ -542,7 +671,7 @@ def _parse_binary(data: bytes) -> List[Dict[str, Any]]:
             recs = cls["records"]
             key = prop_name.lower()
             values: Optional[List[Any]] = None
-            if key in _STRING_PROPS:
+            if key in _STRING_PROPS and type_id in (_T_STRING, _T_SHARED_STRING, _T_CONTENT):
                 if type_id == _T_STRING:
                     values = [reader.string() for _ in recs]
                 elif type_id == _T_SHARED_STRING:
@@ -554,8 +683,12 @@ def _parse_binary(data: bytes) -> List[Dict[str, Any]]:
                     values = _read_content_array(reader, len(recs))
             elif key in _VECTOR3_PROPS and type_id == _T_VECTOR3:
                 values = _read_vector3_array(reader, len(recs))  # type: ignore[assignment]
-            elif key == "cframe" and type_id == _T_CFRAME:
+            elif key in _CFRAME_PROPS and type_id == _T_CFRAME:
                 values = _read_cframe_array(reader, len(recs))  # type: ignore[assignment]
+            elif key in _FLOAT_PROPS and type_id == _T_FLOAT32:
+                values = _read_f32_array(reader, len(recs))
+            elif key in _BOOL_PROPS and type_id == _T_BOOL:
+                values = [bool(b) for b in reader.read(len(recs))]
             if values is not None:
                 for rec, value in zip(recs, values):
                     _apply_property(rec, prop_name, value)
@@ -664,6 +797,10 @@ def _parse_xml(data: bytes) -> List[Dict[str, Any]]:
                     value = prop.text or ""
                 elif prop.tag == "SharedString":
                     value = shared.get((prop.text or "").strip(), "")
+                elif prop.tag in ("float", "double"):
+                    value = _xml_float(prop.text)
+                elif prop.tag == "bool":
+                    value = (prop.text or "").strip().lower() in ("true", "1")
                 elif prop.tag == "Vector3":
                     value = tuple(_xml_float(prop.findtext(axis)) for axis in ("X", "Y", "Z"))
                 elif prop.tag == "CoordinateFrame":

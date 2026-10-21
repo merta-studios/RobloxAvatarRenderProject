@@ -217,10 +217,12 @@ def _find_opaque_panel(img, kind: str):
 def _apply_clothing_uv(nodes, links, tex, kind: str):
     """Skaliert die UVs der Box auf das passende Vorlagen-Feld.
 
-    Ohne das liegt die komplette Shirt-Vorlage (Aermel, Rueckseite,
-    transparente Luecken) auf jeder Wuerfelflaeche - das Motiv ist dann
-    winzig und von Transparenz durchsetzt ("Textur nicht zu erkennen").
+    Nur fuer unkomponierte Roh-Vorlagen ('shirt'/'pants') aktiv; bereits per
+    `avatar_uv` komponierte R15-Texturen ('composited') und Bundle-Oberflaechen
+    ('mesh_surface') besitzen exakte 1:1-UV-Koordinaten.
     """
+    if kind not in ("shirt", "pants"):
+        return False
     region = _find_opaque_panel(tex.image, kind)
     if region is None:
         return False
@@ -246,10 +248,12 @@ def _load_texture_node(nodes, texture_path: str):
     except Exception as exc:  # pragma: no cover
         log(f"  ! Textur {texture_path} konnte nicht geladen werden: {exc}")
         return None
+    if hasattr(img, "alpha_mode"):
+        img.alpha_mode = "CHANNEL_PACKED"
     tex = nodes.new("ShaderNodeTexImage")
     tex.image = img
     tex.projection = "FLAT"
-    tex.extension = "EXTEND"
+    tex.extension = "REPEAT"
     tex.location = (-900, 240)
     tex.label = os.path.basename(texture_path)
     return tex
@@ -342,13 +346,16 @@ def make_glass_material(name: str, base_rgb, tint_rgb, texture_path: str = "",
     set_input(surface, ("Specular IOR Level", "Specular"), 0.35)
     set_input(surface, ("Coat Weight", "Clearcoat"), 0.1)
 
-    mix_color = nodes.new("ShaderNodeMixRGB")
-    mix_color.blend_type = "MIX"
-    mix_color.location = (-420, -60)
-    mix_color.inputs["Color1"].default_value = (color[0], color[1], color[2], 1.0)
-    links.new(tex.outputs["Color"], mix_color.inputs["Color2"])
-    links.new(tex.outputs["Alpha"], mix_color.inputs["Fac"])
-    links.new(mix_color.outputs["Color"], surface.inputs["Base Color"])
+    if texture_kind in ("composited", "mesh_surface"):
+        links.new(tex.outputs["Color"], surface.inputs["Base Color"])
+    else:
+        mix_color = nodes.new("ShaderNodeMixRGB")
+        mix_color.blend_type = "MIX"
+        mix_color.location = (-420, -60)
+        mix_color.inputs["Color1"].default_value = (color[0], color[1], color[2], 1.0)
+        links.new(tex.outputs["Color"], mix_color.inputs["Color2"])
+        links.new(tex.outputs["Alpha"], mix_color.inputs["Fac"])
+        links.new(mix_color.outputs["Color"], surface.inputs["Base Color"])
     set_input(surface, ("Emission Color", "Emission"), (0.0, 0.0, 0.0, 1.0))
 
     # Deckkraft der Textur: Alpha * texture_strength
@@ -422,11 +429,16 @@ def make_accent_material(name: str, color_rgb, texture_path: str = "",
         links.new(alpha, strength.inputs[0])
         links.new(strength.outputs["Value"], mix_color.inputs["Fac"])
         links.new(mix_color.outputs["Color"], bsdf.inputs["Base Color"])
-        # Raue Stellen der Textur bleiben matt -> Konturen bleiben lesbar
-        ramp = _texture_detail_nodes(nodes, links, tex, low=roughness * 0.6,
-                                     high=min(1.0, roughness * 2.0))
+        # Texturierte Accessoires (Stoff, Haare, Rosen, Krone, Abzeichen):
+        # seidiger statt spiegelnder Glanz, damit dunkle Motive nicht unter
+        # weissen Clearcoat-Spiegelstreifen verschwinden.
+        ramp = _texture_detail_nodes(nodes, links, tex,
+                                     low=max(0.32, roughness + 0.25),
+                                     high=min(0.85, roughness + 0.55))
         links.new(ramp.outputs["Color"], bsdf.inputs["Roughness"])
-        set_input(bsdf, "Metallic", 0.15)
+        set_input(bsdf, "Metallic", 0.05)
+        set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.04)
+        set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.25)
         return mat
 
     # Ohne Textur bleibt ein sauberer, leicht metallischer Akzent
@@ -530,7 +542,8 @@ def setup_world(color_hex: str, strength: float = 1.3,
     links.new(env_bg.outputs["Background"], output.inputs["Surface"])
 
 
-def add_area_light(name: str, location, energy: float, size: float, color=(1, 1, 1)):
+def add_area_light(name: str, location, energy: float, size: float, color=(1, 1, 1),
+                   target=None):
     data = bpy.data.lights.new(name, type="AREA")
     data.energy = energy
     data.size = size
@@ -538,20 +551,22 @@ def add_area_light(name: str, location, energy: float, size: float, color=(1, 1,
     obj = bpy.data.objects.new(name, data)
     obj.location = location
     bpy.context.scene.collection.objects.link(obj)
-    # In Richtung Modellmitte ausrichten
-    direction = Vector((0, 0, 0)) - Vector(location)
+    aim = target if target is not None else Vector((0, 0, 0))
+    direction = aim - Vector(location)
     obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
     return obj
 
 
 def add_floor(radius: float, z: float = 0.0):
-    bpy.ops.mesh.primitive_plane_add(size=max(radius * 8, 20), location=(0, 0, z - 0.002))
+    bpy.ops.mesh.primitive_plane_add(size=max(radius * 40, 120), location=(0, 0, z - 0.002))
     floor = bpy.context.active_object
     floor.name = "Boden"
+    if hasattr(floor, "is_shadow_catcher"):
+        floor.is_shadow_catcher = True
     mat = bpy.data.materials.new("Boden-Material")
     mat.use_nodes = True
     bsdf = mat.node_tree.nodes.get("Principled BSDF")
-    set_input(bsdf, "Base Color", (0.86, 0.89, 0.93, 1.0))
+    set_input(bsdf, "Base Color", (0.88, 0.90, 0.94, 1.0))
     set_input(bsdf, "Roughness", 0.35)
     set_input(bsdf, "Metallic", 0.0)
     floor.data.materials.append(mat)
@@ -584,8 +599,9 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int):
     bpy.context.scene.collection.objects.link(cam)
     bpy.context.scene.camera = cam
 
-    # Klassische 3/4-Ansicht, leicht von oben
-    direction = Vector((0.62, -1.0, 0.28)).normalized()
+    # Klassische 3/4-Vorderansicht: `obj_import(..., forward_axis='NEGATIVE_Z', up_axis='Y')`
+    # dreht Roblox -Z (Vorne) auf Blender +Y!
+    direction = Vector((-0.52, 1.0, 0.24)).normalized()
 
     # Abstand so waehlen, dass das Modell das Bild gut fuellt
     h_fov = cam_data.angle
@@ -740,14 +756,23 @@ def main() -> int:
 
         obj.data.materials.clear()
         obj.data.materials.append(mat)
-        if part.get("kind") != "accessory":
+        is_generated_box = (
+            part.get("mesh_source") == "generated-box"
+            or (
+                part.get("mesh_source") is None
+                and part.get("kind") != "accessory"
+                and not part.get("asset_id")
+                and part.get("name") not in ("kopf", "kopf_mesh")
+            )
+        )
+        if is_generated_box:
             recalc_normals(obj)
         if part.get("smooth"):
             shade_smooth(obj)
         else:
             for poly in obj.data.polygons:
                 poly.use_smooth = False
-        bevel_width = 0.0 if part.get("kind") == "accessory" else 0.045 * (height_hint / 5.5)
+        bevel_width = 0.045 * (height_hint / 5.5) if is_generated_box else 0.0
         add_bevel(obj, width=bevel_width, segments=2)
         imported.append(obj)
 
@@ -759,14 +784,14 @@ def main() -> int:
     height = max(hi.z - lo.z, 0.5)
     cam, center, radius = setup_camera(lo, hi, res_x, res_y)
 
-    # Lichter relativ zur Modellgroesse
+    # Studio-Dreipunktlicht passend zur Vorderansicht (+Y)
     s = height / 5.5
-    key = add_area_light("Key", (center.x + 5.5 * s, center.y - 6.5 * s, center.z + 7.0 * s),
-                         energy=900 * s * s, size=5.0 * s, color=(1.0, 0.97, 0.94))
-    fill = add_area_light("Fill", (center.x - 6.5 * s, center.y - 4.0 * s, center.z + 2.5 * s),
-                          energy=320 * s * s, size=6.0 * s, color=(0.85, 0.92, 1.0))
-    rim = add_area_light("Rim", (center.x - 2.0 * s, center.y + 7.5 * s, center.z + 6.0 * s),
-                         energy=700 * s * s, size=4.0 * s, color=(0.92, 0.96, 1.0))
+    key = add_area_light("Key", (center.x - 5.5 * s, center.y + 6.5 * s, center.z + 7.0 * s),
+                         energy=900 * s * s, size=5.0 * s, color=(1.0, 0.97, 0.94), target=center)
+    fill = add_area_light("Fill", (center.x + 6.5 * s, center.y + 5.0 * s, center.z + 3.0 * s),
+                          energy=420 * s * s, size=6.0 * s, color=(0.88, 0.94, 1.0), target=center)
+    rim = add_area_light("Rim", (center.x + 2.0 * s, center.y - 7.5 * s, center.z + 6.0 * s),
+                         energy=700 * s * s, size=4.0 * s, color=(0.92, 0.96, 1.0), target=center)
 
     if not args.no_floor:
         add_floor(radius, z=lo.z)

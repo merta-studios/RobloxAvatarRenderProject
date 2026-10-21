@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import avatar_rig  # noqa: E402
+import avatar_uv  # noqa: E402
 import rbxm  # noqa: E402
 import roblox_api as api  # noqa: E402
 import roblox_mesh  # noqa: E402
@@ -206,14 +207,18 @@ def _sort_segments_top_down(group: list) -> list:
 def _pick_r15_segments(group: list, expected_names: list) -> list:
     """Aus einer Mesh-Gruppe die R15-Segmente per Instanzname auswaehlen.
 
-    Je erwartetem Segmentnamen wird der erste passende Eintrag
-    genommen (Namensgleichheit nach Normalisierung, z. B.
-    'LeftUpperArm' ~ 'leftupperarm'). Liefert [] wenn nichts passt.
+    Bevorzugt `R15ArtistIntent` vor `R15Fixed`, damit nicht versehentlich
+    Segmente aus unterschiedlichen Bundle-Unterordnern gemischt werden.
     """
+    folder_rank = {"r15artistintent": 0, "r15fixed": 1, "": 2}
+    ordered = sorted(
+        group,
+        key=lambda mp: folder_rank.get((mp.get("folder") or "").lower(), 3),
+    )
     picked: list = []
     for expected in expected_names:
         wanted = _normalize_name(expected)
-        for mesh_part in group:
+        for mesh_part in ordered:
             if _normalize_name(mesh_part.get("label") or "") == wanted:
                 picked.append(mesh_part)
                 break
@@ -345,6 +350,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     ignored: List[Dict[str, Any]] = []
     avatar_raw: Dict[str, Any] = {}
     mesh_parts: List[Dict[str, Any]] = []
+    texture_bytes_by_rel: Dict[str, bytes] = {}
     headless = {"active": False, "label": "", "reason": "", "info": ""}
 
     def set_headless(label: str, reason: str = "", info: str = "") -> None:
@@ -419,6 +425,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             with open(os.path.join(textures_dir, fname), "wb") as fh:
                 fh.write(data)
             rel = f"textures/{fname}"
+            texture_bytes_by_rel[rel] = data
             textures.append({"asset_id": asset_id, "name": label,
                              "asset_type": type_name, "file": rel,
                              "type_id": type_id})
@@ -440,7 +447,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                      type_id: int, type_name: str, label: str,
                      rbxm_size: Optional[Any], texture_file: Optional[str],
                      rbxm_position: Optional[Any] = None,
-                     rbxm_rotation: Optional[Any] = None) -> None:
+                     rbxm_rotation: Optional[Any] = None,
+                     rbxm_meta: Optional[Dict[str, Any]] = None) -> None:
             """Parst ein FileMesh und reiht es in mesh_parts ein."""
             try:
                 mesh = roblox_mesh.parse(raw)
@@ -449,6 +457,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                                 "asset_type": type_name,
                                 "reason": f"Mesh nicht lesbar: {exc}"})
                 return
+            meta = rbxm_meta or {}
             head_info = ""
             if type_id == DYNAMIC_HEAD_TYPE:
                 is_headless, reason, head_info = head_geometry_info(
@@ -469,6 +478,13 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 "type_name": type_name,
                 "label": label,
                 "mesh": mesh,
+                "rbxm_class": meta.get("class"),
+                "folder": meta.get("folder"),
+                "transparency": meta.get("transparency", 0.0),
+                "mesh_scale": meta.get("mesh_scale"),
+                "mesh_offset": meta.get("mesh_offset"),
+                "attachments": meta.get("attachments") or {},
+                "wrap_layer": meta.get("wrap_layer"),
                 "rbxm_size": rbxm_size,
                 "rbxm_position": rbxm_position,
                 "rbxm_rotation": rbxm_rotation,
@@ -534,7 +550,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                     f"{', mit Textur' if texture_file else ''})")
                 add_mesh(raw, parent_asset_id, mesh_id, type_id, type_name,
                          entry_label, entry.get("size"), texture_file,
-                         entry.get("position"), entry.get("rotation"))
+                         entry.get("position"), entry.get("rotation"),
+                         rbxm_meta=entry)
 
             if (len(mesh_parts) == parts_before and len(skipped) == skips_before
                     and len(textures) == textures_before
@@ -598,8 +615,10 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 fname = texture_filename(aid, dl.data)
                 with open(os.path.join(textures_dir, fname), "wb") as fh:
                     fh.write(dl.data)
+                rel = f"textures/{fname}"
+                texture_bytes_by_rel[rel] = dl.data
                 textures.append({"asset_id": aid, "name": label, "asset_type": type_name,
-                                 "file": f"textures/{fname}", "type_id": type_id})
+                                 "file": rel, "type_id": type_id})
             elif kind == "rbxm":
                 # Accessoires und Koerperteile kommen als Modell - die
                 # eigentlichen Mesh-/Textur-IDs stecken darin.
@@ -613,73 +632,153 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     scales = effective_scales(avatar_raw.get("scales"))
     body_colors = effective_body_colors(avatar_raw.get("bodyColors"))
     body_parts, metrics = avatar_rig.build_body(body_colors, scales)
+    color_hex_by_part = {p.name: p.color for p in body_parts}
 
-    # Texturen den Kleidungs-Parts zuordnen. Zusaetzlich wird vermerkt,
-    # ob es klassische Kleidung ist: deren Bilder sind Vorlagen mit
-    # getrennten Feldern fuer Vorder-/ Rueckseite und Aermel. Der Renderer
-    # schneidet daraus das passende Feld heraus, sonst liegt die komplette
-    # Vorlage (mit Aermeln und transparenten Luecken) auf jeder Flaeche.
+    def save_baked_texture(stem: str, png_bytes: Optional[bytes]) -> Optional[str]:
+        if not png_bytes:
+            return None
+        fname = f"_comp_{stem}.png"
+        with open(os.path.join(textures_dir, fname), "wb") as fh:
+            fh.write(png_bytes)
+        return f"textures/{fname}"
+
+    # Roh-Texturen klassischer Kleidung / Gesichter sammeln + Fallback-Map pflegen
     texture_for_part: Dict[str, str] = {}
     clothing_kind_by_file: Dict[str, str] = {}
+    shirt_raw: Optional[bytes] = None
+    pants_raw: Optional[bytes] = None
+    tshirt_raw: Optional[bytes] = None
+    face_raw: Optional[bytes] = None
+
     for tex in textures:
         type_id = int(tex["type_id"])
+        rel = tex["file"]
+        raw = texture_bytes_by_rel.get(rel)
         kind = CLOTHING_TEXTURE_KINDS.get(type_id)
         if kind:
-            clothing_kind_by_file[tex["file"]] = kind
+            clothing_kind_by_file[rel] = kind
+        if type_id == 11 and shirt_raw is None:
+            shirt_raw = raw
+        elif type_id == 12 and pants_raw is None:
+            pants_raw = raw
+        elif type_id == 2 and tshirt_raw is None:
+            tshirt_raw = raw
+        elif type_id == 18 and face_raw is None:
+            face_raw = raw
         for target in CLOTHING_TARGETS.get(type_id, []):
-            texture_for_part.setdefault(target, tex["file"])
+            texture_for_part.setdefault(target, rel)
 
-    # Echte Koerperteil-Meshes (Typ 27-31) den Rig-Teilen zuordnen.
-    # R15-Bundles liefern pro Asset mehrere Segmente (z. B. LeftArm =
-    # UpperArm + LowerArm + Hand, teils in mehreren Varianten). Die
-    # R15-Segmente werden anhand ihrer Instanznamen ausgewaehlt und
-    # **senkrecht gestapelt** (Stand-Pose). Die RBXM-Positionen
-    # beschreiben dagegen die Bind-Pose des Pakets (A-Pose, Arme schraeg
-    # nach aussen) - deren Uebernahme war die Ursache fuer falsche
-    # Position und Rotation der Rig-Teile beim Pressen in die senkrechte
-    # Rig-Box.
+    # Offizieller R15-Humanoid-Kompositor fuer echte 585x559-Kleidungsvorlagen:
+    # Torso (388x272) aus Pants -> Shirt -> TShirt, Arme (264x284) aus Shirt,
+    # Beine (264x284) aus Pants. Synthetische 1x1-Testtexturen bleiben unberuehrt.
+    torso_comp = avatar_uv.composite_torso_texture(
+        avatar_rig.rgb01(color_hex_by_part.get("torso", "#c7ac78")),
+        pants_bytes=pants_raw,
+        shirt_bytes=shirt_raw,
+        tshirt_bytes=tshirt_raw,
+    )
+    if torso_comp is not None:
+        rel_comp = save_baked_texture("torso", torso_comp)
+        if rel_comp:
+            texture_for_part["torso"] = rel_comp
+            clothing_kind_by_file[rel_comp] = "composited"
+
+    for arm_name, side in (("rechts_arm", "right"), ("links_arm", "left")):
+        arm_comp = avatar_uv.composite_limb_texture(
+            avatar_rig.rgb01(color_hex_by_part.get(arm_name, "#c7ac78")),
+            shirt_raw,
+            side=side,
+        )
+        if arm_comp is not None:
+            rel_comp = save_baked_texture(arm_name, arm_comp)
+            if rel_comp:
+                texture_for_part[arm_name] = rel_comp
+                clothing_kind_by_file[rel_comp] = "composited"
+
+    for leg_name, side in (("rechts_bein", "right"), ("links_bein", "left")):
+        leg_comp = avatar_uv.composite_limb_texture(
+            avatar_rig.rgb01(color_hex_by_part.get(leg_name, "#c7ac78")),
+            pants_raw,
+            side=side,
+        )
+        if leg_comp is not None:
+            rel_comp = save_baked_texture(leg_name, leg_comp)
+            if rel_comp:
+                texture_for_part[leg_name] = rel_comp
+                clothing_kind_by_file[rel_comp] = "composited"
+
+    # Echte Koerperteil-Meshes (Typ 27-31) den Rig-Teilen zuordnen
     body_groups: Dict[str, list] = {}
     for mesh_part in mesh_parts:
         rig_name = BODY_PART_TYPES.get(int(mesh_part["type_id"]))
         if rig_name is not None:
             body_groups.setdefault(rig_name, []).append(mesh_part)
 
+    r15_segments_by_part: Dict[str, List[Dict[str, Any]]] = {}
     body_replacements: Dict[str, Dict[str, Any]] = {}
     for rig_name, group in body_groups.items():
         if len(group) == 1:
-            body_replacements[rig_name] = group[0]
+            mp0 = group[0]
+            r15_segments_by_part[rig_name] = [mp0]
+            body_replacements[rig_name] = mp0
             continue
         segments = _pick_r15_segments(group, R15_SEGMENT_NAMES.get(rig_name, []))
         mergeable = segments if len(segments) >= 2 else _sort_segments_top_down(group)
         mergeable = [mp for mp in mergeable
                      if mp.get("mesh") is not None and not mp["mesh"].is_empty]
         if 2 <= len(mergeable) <= 6:
-            # Segmente leicht ueberlappen lassen: die Bundle-Meshes (z. B.
-            # Korblox-Felsstuecke) fuellen ihre Bounding-Box nicht aus, mit
-            # exakt aneinanderliegenden Boxen entstehen sichtbare Luftspalte
-            # ("schwebende Koerperteile"). Roblox verbindet die Segmente an
-            # den Gelenken - die Ueberlappung bildet das nach.
-            seg_heights = [max(0.05, float(mp.get("rbxm_size")[1])
-                               if mp.get("rbxm_size") else mp["mesh"].size()[1])
-                           for mp in mergeable]
-            overlap = -0.15 * (sum(seg_heights) / len(seg_heights))
+            # Falls die Segmente unterschiedliche eigene Texturen tragen,
+            # in einen gemeinsamen Atlas packen, damit kein Segment seine Textur verliert.
+            remapped_meshes, multi_atlas = avatar_uv.build_multi_segment_atlas(
+                [(mp["mesh"], texture_bytes_by_rel.get(mp.get("texture_file") or ""))
+                 for mp in mergeable]
+            )
+            seg_entries: List[Dict[str, Any]] = []
+            for mp_orig, m_remap in zip(mergeable, remapped_meshes):
+                mp_copy = dict(mp_orig)
+                mp_copy["mesh"] = m_remap
+                seg_entries.append(mp_copy)
+            r15_segments_by_part[rig_name] = seg_entries
+
             stacked = roblox_mesh.stack_segments(
                 [(mp["mesh"], mp.get("rbxm_size") or mp["mesh"].size())
-                 for mp in mergeable],
-                source_version="stacked-rbxm", gap=overlap)
-            pseudo = dict(mergeable[0])
+                 for mp in seg_entries
+                 if float(mp.get("transparency") or 0.0) < 0.99]
+                or [(mp["mesh"], mp.get("rbxm_size") or mp["mesh"].size()) for mp in seg_entries],
+                source_version="stacked-rbxm",
+            )
+            custom_tex = next(
+                (mp["texture_file"] for mp in seg_entries if mp.get("texture_file")),
+                None,
+            )
+            if multi_atlas is not None and len({mp.get("texture_file") for mp in seg_entries if mp.get("texture_file")}) > 1:
+                atlas_rel = save_baked_texture(f"atlas_{rig_name}", avatar_uv.prepare_opaque_mesh_texture(multi_atlas))
+                if atlas_rel:
+                    custom_tex = atlas_rel
+                    clothing_kind_by_file[atlas_rel] = "mesh_surface"
+            elif custom_tex and custom_tex in texture_bytes_by_rel:
+                prepped = avatar_uv.prepare_opaque_mesh_texture(texture_bytes_by_rel[custom_tex])
+                if prepped and prepped != texture_bytes_by_rel[custom_tex]:
+                    prepped_rel = save_baked_texture(f"mesh_{rig_name}", prepped)
+                    if prepped_rel:
+                        custom_tex = prepped_rel
+                        clothing_kind_by_file[prepped_rel] = "mesh_surface"
+                else:
+                    clothing_kind_by_file.setdefault(custom_tex, "mesh_surface")
+
+            pseudo = dict(seg_entries[0])
             pseudo["mesh"] = stacked
-            pseudo["texture_file"] = next(
-                (mp["texture_file"] for mp in mergeable
-                 if mp.get("texture_file")), None)
-            names = ", ".join(mp.get("label") or "?" for mp in mergeable)
+            pseudo["texture_file"] = custom_tex
+            names = ", ".join(mp.get("label") or "?" for mp in seg_entries)
             pseudo["note_suffix"] = (
-                f", {len(mergeable)} R15-Segmente senkrecht gestapelt "
-                f"(Stand-Pose statt Bind-Pose: {names})")
-            pseudo["stacked_size"] = stacked_part_size(mergeable)
+                f", {len(seg_entries)} R15-Segmente senkrecht gestapelt "
+                f"(Stand-Pose statt Bind-Pose: {names})"
+            )
+            pseudo["stacked_size"] = stacked_part_size(seg_entries)
             body_replacements[rig_name] = pseudo
         else:
             largest = max(group, key=lambda mp: max(mp["mesh"].size()))
+            r15_segments_by_part[rig_name] = [largest]
             body_replacements[rig_name] = largest
             warnings.append(
                 f"Koerperteil '{rig_name}': {len(group)} Meshes gefunden, "
@@ -687,9 +786,20 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 f"nur das groesste Segment verwendet "
                 f"(Asset {largest['asset_id']}).")
 
-    # Kopf: echtes Head-/DynamicHead-Mesh suchen (DynamicHead hat Vorrang).
-    # Degenerierte DynamicHead-Meshes (< HEADLESS_MAX_FACES) sind bereits
-    # in add_mesh() als Headless aussortiert und stehen nicht in mesh_parts.
+    # Einzel-Mesh-Koerperteile mit eigener Bundle-Textur ebenfalls aufbereiten
+    for rig_name, rep in body_replacements.items():
+        ctex = rep.get("texture_file")
+        if ctex and ctex in texture_bytes_by_rel:
+            prepped = avatar_uv.prepare_opaque_mesh_texture(texture_bytes_by_rel[ctex])
+            if prepped and prepped != texture_bytes_by_rel[ctex]:
+                prepped_rel = save_baked_texture(f"mesh_{rig_name}", prepped)
+                if prepped_rel:
+                    rep["texture_file"] = prepped_rel
+                    clothing_kind_by_file[prepped_rel] = "mesh_surface"
+            else:
+                clothing_kind_by_file.setdefault(ctex, "mesh_surface")
+
+    # Kopf: echtes Head-/DynamicHead-Mesh suchen (DynamicHead hat Vorrang)
     head_mesh: Optional[Dict[str, Any]] = None
     for wanted_type in (DYNAMIC_HEAD_TYPE, HEAD_ASSET_TYPE):
         for mesh_part in mesh_parts:
@@ -699,49 +809,105 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         if head_mesh is not None:
             break
 
-    # Rig-Boxen an die echten Mesh-Groessen anpassen: Vorher wurden die
-    # Bundle-Meshes achsweise in Schema-F-Boxen gepresst (Arme/Beine/Torso
-    # "gedehnt", "zu gross"). Jetzt liefert das Mesh die Proportionen, die
-    # Boxen werden daraus neu zusammengesetzt (Beine auf dem Boden, Torso
-    # darauf, Arme an der Schulter, Kopf auf dem Hals).
-    mesh_sizes: Dict[str, tuple] = {}
-    for rig_name, replacement in body_replacements.items():
-        size = replacement.get("stacked_size")
-        if not size:
-            size = replacement.get("rbxm_size") or replacement["mesh"].size()
-        if max(size) > 1e-6:
-            mesh_sizes[rig_name] = tuple(float(v) for v in size)
-    head_natural = None
-    if head_mesh is not None and not headless["active"]:
-        head_size = head_mesh.get("rbxm_size") or head_mesh["mesh"].size()
-        if max(head_size) > 1e-6:
-            head_natural = tuple(float(v) for v in head_size)
-    if mesh_sizes:
-        body_parts, metrics = avatar_rig.relayout_body(
-            body_parts, metrics, mesh_sizes, scales, head_natural,
-            headless=headless["active"])
-        if head_natural is not None:
+    # Gesichts-Textur auf Kopf-Hautfarbe vorbacken (Augen/Mund scharf, Rest Haut-Glas)
+    head_tex_src = (
+        (head_mesh.get("texture_file") if head_mesh else None)
+        or texture_for_part.get("kopf_mesh")
+        or texture_for_part.get("kopf")
+    )
+    if head_tex_src and head_tex_src in texture_bytes_by_rel:
+        head_comp = avatar_uv.composite_face_texture(
+            avatar_rig.rgb01(color_hex_by_part.get("kopf", "#c7ac78")),
+            texture_bytes_by_rel[head_tex_src],
+        )
+        if head_comp is not None:
+            rel_head = save_baked_texture("head", head_comp)
+            if rel_head:
+                if head_mesh and head_mesh.get("texture_file") == head_tex_src:
+                    head_mesh["texture_file"] = rel_head
+                texture_for_part["kopf_mesh"] = rel_head
+                texture_for_part["kopf"] = rel_head
+                clothing_kind_by_file[rel_head] = "composited"
+
+    # Exakten R15-Gelenk-Rig berechnen (liefert Welt-Attachments + Skinning-Gelenke
+    # sowie bei echten RBXM-RigAttachments die 1:1-Gelenkgeometrie aller Koerperteile)
+    use_r15_rig = avatar_rig.has_rig_attachments(r15_segments_by_part, head_mesh)
+    rig_avatar = avatar_rig.assemble_r15_rig(
+        r15_segments_by_part,
+        head_mesh,
+        body_colors,
+        scales,
+        headless=headless["active"],
+    )
+
+    if use_r15_rig:
+        metrics = rig_avatar.metrics
+        body_parts = [
+            avatar_rig.Part(
+                name=pname,
+                mesh=rig_avatar.body_meshes[pname],
+                color=color_hex_by_part.get(pname, color_hex_by_part.get("torso", "#c7ac78")),
+                kind="body",
+            )
+            for pname in ("rechts_bein", "links_bein", "torso", "rechts_arm", "links_arm", "hals")
+            if pname in rig_avatar.body_meshes
+        ]
+        if not headless["active"] and rig_avatar.head_mesh is not None:
+            body_parts.append(
+                avatar_rig.Part(
+                    name="kopf",
+                    mesh=rig_avatar.head_mesh,
+                    color=color_hex_by_part.get("kopf", "#c7ac78"),
+                    kind="body",
+                )
+            )
+        if head_mesh is not None and not headless["active"]:
             warnings.append(
                 "Rig aus den echten Mesh-Groessen neu aufgebaut "
                 f"(Kopf {fmt_de(metrics.head_radius * 2)} Studs, "
                 f"Torso {fmt_de(metrics.torso_width)} breit) - "
-                "keine achsweise Streckung der Koerperteile mehr.")
+                "keine achsweise Streckung der Koerperteile mehr."
+            )
+    else:
+        mesh_sizes: Dict[str, tuple] = {}
+        for rig_name, replacement in body_replacements.items():
+            size = replacement.get("stacked_size")
+            if not size:
+                size = replacement.get("rbxm_size") or replacement["mesh"].size()
+            if max(size) > 1e-6:
+                mesh_sizes[rig_name] = tuple(float(v) for v in size)
+        head_natural = None
+        if head_mesh is not None and not headless["active"]:
+            head_size = head_mesh.get("rbxm_size") or head_mesh["mesh"].size()
+            if max(head_size) > 1e-6:
+                head_natural = tuple(float(v) for v in head_size)
+        if mesh_sizes:
+            body_parts, metrics = avatar_rig.relayout_body(
+                body_parts, metrics, mesh_sizes, scales, head_natural,
+                headless=headless["active"])
+            if head_natural is not None:
+                warnings.append(
+                    "Rig aus den echten Mesh-Groessen neu aufgebaut "
+                    f"(Kopf {fmt_de(metrics.head_radius * 2)} Studs, "
+                    f"Torso {fmt_de(metrics.torso_width)} breit) - "
+                    "keine achsweise Streckung der Koerperteile mehr.")
 
     body_parts_from_mesh = 0
     for part in body_parts:
         if part.name == "kopf":
             if headless["active"]:
-                continue  # Headless-Avatar: gar kein Kopf
+                continue
             if head_mesh is not None:
-                size = head_mesh["mesh"].size()
-                max_dim = max(size) or 1.0
-                # Kopf-Mesh gleichmaessig auf den Kopfdurchmesser bringen
-                # (vorher 2,15x Radius -> Kopf zu gross).
-                target = metrics.head_radius * 2.0
-                placed = head_mesh["mesh"].transform(target / max_dim)
-                c = placed.center()
-                placed = placed.transform(1.0, (-c[0], metrics.head_center_y - c[1], -c[2]))
-                placed = sanity_check(placed, target, "Kopf", warnings)
+                if use_r15_rig and rig_avatar.head_mesh is not None:
+                    placed = sanity_check(rig_avatar.head_mesh, metrics.head_radius * 2.0, "Kopf", warnings)
+                else:
+                    size = head_mesh["mesh"].size()
+                    max_dim = max(size) or 1.0
+                    target = metrics.head_radius * 2.0
+                    placed = head_mesh["mesh"].transform(target / max_dim)
+                    c = placed.center()
+                    placed = placed.transform(1.0, (-c[0], metrics.head_center_y - c[1], -c[2]))
+                    placed = sanity_check(placed, target, "Kopf", warnings)
                 fname = "kopf_mesh.obj"
                 placed.write_obj(os.path.join(parts_dir, fname))
                 head_texture = (head_mesh.get("texture_file")
@@ -751,6 +917,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                     "obj": f"parts/{fname}",
                     "color": part.color,
                     "kind": "body",
+                    "mesh_source": "mesh-asset",
                     "smooth": True,
                     "texture": head_texture,
                     "texture_kind": clothing_kind_by_file.get(head_texture or ""),
@@ -764,14 +931,19 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
 
         replacement = body_replacements.get(part.name)
         if replacement is not None:
-            lo, hi = part.mesh.bbox()
-            # Box stammt jetzt aus dem Mesh selbst -> achsweise ist hier
-            # nur noch die Avatar-Skalierung (width/height/depth), keine
-            # Verzerrung mehr.
-            placed = avatar_rig.fit_mesh_to_part(replacement["mesh"], lo, hi,
-                                                 uniform=False)
-            placed = sanity_check(placed, max(hi[i] - lo[i] for i in range(3)),
-                                  part.name, warnings)
+            if use_r15_rig and part.name in rig_avatar.body_meshes:
+                placed = sanity_check(
+                    rig_avatar.body_meshes[part.name],
+                    max(part.mesh.size()),
+                    part.name,
+                    warnings,
+                )
+            else:
+                lo, hi = part.mesh.bbox()
+                placed = avatar_rig.fit_mesh_to_part(replacement["mesh"], lo, hi,
+                                                     uniform=False)
+                placed = sanity_check(placed, max(hi[i] - lo[i] for i in range(3)),
+                                      part.name, warnings)
             fname = f"{part.name}.obj"
             placed.write_obj(os.path.join(parts_dir, fname))
             body_texture = (replacement.get("texture_file")
@@ -781,6 +953,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 "obj": f"parts/{fname}",
                 "color": part.color,
                 "kind": "body",
+                "mesh_source": "mesh-asset",
                 "smooth": True,
                 "texture": body_texture,
                 "texture_kind": clothing_kind_by_file.get(body_texture or ""),
@@ -799,6 +972,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             "obj": f"parts/{fname}",
             "color": part.color,
             "kind": "body",
+            "mesh_source": "generated-sphere" if part.name == "kopf" else "generated-box",
             "smooth": part.name in SMOOTH_BODY_PARTS,
             "texture": texture_for_part.get(part.name),
             "texture_kind": clothing_kind_by_file.get(
@@ -817,10 +991,16 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             f"der Rig-Kopf wird nicht gerendert.{detail}"
         )
 
-    # Accessoires platzieren
-    consumed = {id(mp) for mp in body_replacements.values()}
+    # Accessoires & Layered Clothing platzieren
+    consumed = set()
+    for seg_list in r15_segments_by_part.values():
+        for mp_c in seg_list:
+            consumed.add(id(mp_c))
+    for mp_c in body_replacements.values():
+        consumed.add(id(mp_c))
     if head_mesh is not None:
         consumed.add(id(head_mesh))
+
     used_filenames = set()
     accessory_assets = 0
     for mesh_part in mesh_parts:
@@ -830,21 +1010,60 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             continue  # Duplikat (Warnung steht oben)
         if int(mesh_part["type_id"]) == HEAD_ASSET_TYPE:
             continue  # nur ein Kopf wird verwendet
-        placed, note = avatar_rig.place_accessory(
-            mesh_part["mesh"], int(mesh_part["type_id"]), metrics,
-            size_hint=mesh_part.get("rbxm_size"),
-            rotation=mesh_part.get("rbxm_rotation"))
-        if "unplausibel" in note:
-            # Diagnose: die Part-Groesse im RBXM passt nicht zur
-            # Accessoire-Art (z. B. Platzhalter 1x1x1 bei einem 3 Studs
-            # breiten Hut) - es gilt die Zielgroesse der Accessoire-Art.
-            warnings.append(
-                f"Accessoire '{mesh_part['label'] or mesh_part['type_name']}': "
-                "Groesse aus dem RBXM war unplausibel und wurde auf die "
-                "Zielgroesse der Accessoire-Art korrigiert.")
+
+        placed_acc: Optional[roblox_mesh.MeshData] = None
+        note = ""
+        if mesh_part["mesh"].skinning is not None:
+            skinned = roblox_mesh.skin_mesh_to_rig(
+                mesh_part["mesh"],
+                rig_avatar.joint_positions,
+            )
+            if skinned is not None and not skinned.is_empty:
+                placed_acc = skinned
+                sz = placed_acc.size()
+                note = (
+                    f"{mesh_part['type_name']}: per Linear-Blend-Skinning "
+                    f"an R15-Gelenke angepasst "
+                    f"({fmt_de(sz[0])}x{fmt_de(sz[1])}x{fmt_de(sz[2])} Studs)"
+                )
+
+        if placed_acc is None:
+            welded = avatar_rig.weld_accessory(mesh_part, rig_avatar)
+            if welded is not None:
+                placed_acc, note = welded
+
+        if placed_acc is None:
+            placed_acc, note = avatar_rig.place_accessory(
+                mesh_part["mesh"], int(mesh_part["type_id"]), metrics,
+                size_hint=mesh_part.get("rbxm_size"),
+                rotation=mesh_part.get("rbxm_rotation"))
+            if "unplausibel" in note:
+                warnings.append(
+                    f"Accessoire '{mesh_part['label'] or mesh_part['type_name']}': "
+                    "Groesse aus dem RBXM war unplausibel und wurde auf die "
+                    "Zielgroesse der Accessoire-Art korrigiert.")
         placed = sanity_check(
-            placed, avatar_rig.accessory_target_size(int(mesh_part["type_id"]), metrics),
-            mesh_part["label"] or mesh_part["type_name"], warnings)
+            placed_acc,
+            avatar_rig.accessory_target_size(int(mesh_part["type_id"]), metrics),
+            mesh_part["label"] or mesh_part["type_name"],
+            warnings,
+        )
+
+        acc_tex = mesh_part.get("texture_file")
+        acc_tex_kind = None
+        if acc_tex and acc_tex in texture_bytes_by_rel:
+            prepped = avatar_uv.prepare_opaque_mesh_texture(texture_bytes_by_rel[acc_tex])
+            if prepped and prepped != texture_bytes_by_rel[acc_tex]:
+                prepped_rel = save_baked_texture(
+                    f"acc_{mesh_part.get('mesh_asset_id') or mesh_part['asset_id']}",
+                    prepped,
+                )
+                if prepped_rel:
+                    acc_tex = prepped_rel
+                    acc_tex_kind = "mesh_surface"
+            else:
+                acc_tex_kind = "mesh_surface"
+
         safe = "".join(ch if ch.isalnum() or ch in "-_" else "_"
                        for ch in (mesh_part["label"] or mesh_part["type_name"]))[:28]
         file_id = mesh_part.get("mesh_asset_id") or mesh_part["asset_id"]
@@ -860,11 +1079,13 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             "obj": f"parts/{fname}",
             "color": "#dff4ff",
             "kind": "accessory",
+            "mesh_source": "mesh-asset",
             "smooth": True,
             "asset_id": mesh_part["asset_id"],
             "asset_type": mesh_part["type_name"],
             "note": note,
-            "texture": mesh_part.get("texture_file"),
+            "texture": acc_tex,
+            "texture_kind": acc_tex_kind,
         })
         accessory_assets += 1
 
