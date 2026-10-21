@@ -263,10 +263,13 @@ def relayout_body(default_parts: List[Part], metrics: BodyMetrics,
             size[index] = widest
             sizes[name] = tuple(size)  # type: ignore[assignment]
 
-    mirror(0, ARM_PARTS)
-    mirror(2, ARM_PARTS)
-    mirror(0, LEG_PARTS)
-    mirror(2, LEG_PARTS)
+    # Alle drei Achsen spiegeln: die linken und rechten Teile kommen oft aus
+    # unterschiedlichen Bundles (z. B. Korblox-Arm rechts, Standard-Arm links).
+    # Ohne Angleichung war ein Arm 4,0 Studs lang und der andere 3,0 - die
+    # ueberzaehligen Segmente hingen sichtbar in der Luft.
+    for index in (0, 1, 2):
+        mirror(index, ARM_PARTS)
+        mirror(index, LEG_PARTS)
 
     leg_w = max(sizes["rechts_bein"][0], sizes["links_bein"][0])
     arm_w = max(sizes["rechts_arm"][0], sizes["links_arm"][0])
