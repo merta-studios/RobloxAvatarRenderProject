@@ -87,9 +87,15 @@ class BodyMetrics:
     hand_y: float = 2.15
     hand_x: float = 1.45
     waist_y: float = 2.5
+    # Unterkante fuer Kopfbedeckungen. None = aus Kopfmitte/-radius ableiten.
+    # Bei Headless-Avataren (kein Kopf im Mesh) wird sie auf den Kragen
+    # gesetzt, sonst schweben Huete meterweit ueber dem Koerper.
+    hat_base_y: Optional[float] = None
 
     def anchor(self, name: str) -> Tuple[float, float, float]:
         if name == "head_top":
+            if self.hat_base_y is not None:
+                return (0.0, self.hat_base_y, 0.0)
             return (0.0, self.head_center_y + self.head_radius * 0.95, 0.0)
         if name == "head_center":
             return (0.0, self.head_center_y, 0.0)
@@ -194,7 +200,8 @@ ARM_PARTS = ("rechts_arm", "links_arm")
 def relayout_body(default_parts: List[Part], metrics: BodyMetrics,
                   mesh_sizes: Dict[str, Tuple[float, float, float]],
                   scales: Dict[str, Any],
-                  head_size: Optional[Tuple[float, float, float]] = None
+                  head_size: Optional[Tuple[float, float, float]] = None,
+                  headless: bool = False
                   ) -> Tuple[List[Part], BodyMetrics]:
     """Baut den Rig aus den **echten** Mesh-Groessen neu zusammen.
 
@@ -270,14 +277,24 @@ def relayout_body(default_parts: List[Part], metrics: BodyMetrics,
     torso_top = torso_bottom + torso_h
 
     head_r_default = 0.68 * hs * h
-    if head_size and min(head_size) > 1e-6:
-        head_r = 0.5 * max(head_size) * hs
-        body_h = torso_top  # ohne Kopf
-        head_r = max(0.10 * body_h, min(0.17 * body_h, head_r))
+    hat_base_y: Optional[float] = None
+    if headless:
+        # Kein Kopf im Mesh (Headless Head): kurzer Kragen statt Hals, und
+        # Kopfbedeckungen sitzen knapp ueber dem Torso statt dort, wo der
+        # unsichtbare Kopf waere (sonst schweben sie weit ueber dem Koerper).
+        head_r = head_r_default * 0.75
+        neck_h = 0.16 * h
+        head_center_y = torso_top + neck_h + head_r * 0.25
+        hat_base_y = torso_top + neck_h * 0.8
     else:
-        head_r = head_r_default
-    neck_h = min(0.40 * h, 0.55 * head_r)
-    head_center_y = torso_top + neck_h + head_r * 0.94
+        if head_size and min(head_size) > 1e-6:
+            head_r = 0.5 * max(head_size) * hs
+            body_h = torso_top  # ohne Kopf
+            head_r = max(0.10 * body_h, min(0.17 * body_h, head_r))
+        else:
+            head_r = head_r_default
+        neck_h = min(0.40 * h, 0.55 * head_r)
+        head_center_y = torso_top + neck_h + head_r * 0.94
 
     colors = {p.name: p.color for p in default_parts}
 
@@ -311,9 +328,10 @@ def relayout_body(default_parts: List[Part], metrics: BodyMetrics,
                                        (0.0, neck_bottom + neck_h_eff / 2, 0.0)),
                       color("hals") if "hals" in colors else color("torso"), "body"))
     # Kopf: Kugel (wird in build_avatar durch das echte Kopf-Mesh ersetzt)
-    parts.append(Part("kopf", make_sphere(head_r, 32, 22,
-                                          (0.0, head_center_y, -0.02 * d)),
-                      color("kopf") if "kopf" in colors else color("torso"), "body"))
+    if not headless:
+        parts.append(Part("kopf", make_sphere(head_r, 32, 22,
+                                              (0.0, head_center_y, -0.02 * d)),
+                          color("kopf") if "kopf" in colors else color("torso"), "body"))
 
     new_metrics = BodyMetrics(
         height=head_center_y + head_r,
@@ -325,6 +343,7 @@ def relayout_body(default_parts: List[Part], metrics: BodyMetrics,
         hand_y=torso_top - sizes["rechts_arm"][1] + 0.15,
         hand_x=arm_offset,
         waist_y=torso_bottom + torso_h * 0.25,
+        hat_base_y=hat_base_y,
     )
     return parts, new_metrics
 
@@ -469,7 +488,10 @@ def place_accessory(mesh: MeshData, asset_type_id: int,
         # Unterkante des Accessoires liegt auf der Kopfsphaere. Vorher
         # steckte der Hut zu 70 % im Kopf (bottom = Mitte + 0,3 r) -
         # sichtbar waren nur noch Ränder, der Rest war "im Kopf".
-        bottom = metrics.head_center_y + metrics.head_radius * 0.82
+        if metrics.hat_base_y is not None:
+            bottom = metrics.hat_base_y      # Headless: direkt ueber dem Kragen
+        else:
+            bottom = metrics.head_center_y + metrics.head_radius * 0.82
         center_y = bottom + hy * 0.92
         offset = (0.0, center_y - ao[1], 0.0)
     elif anchor == "head_center":
