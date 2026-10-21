@@ -1,13 +1,13 @@
 name: Tests
 
 # Prüft die Pipeline-Logik (Mesh-Parser, Rig, Manifest, Workflows) ohne Netzwerk
-# und ohne Blender. Läuft bei Pull Requests und auf main.
+# und ohne Blender. Läuft bei jedem Push (außer `renders`) und bei Pull Requests -
+# so wird auch jeder Arena-/Agent-Branch geprüft, der per Auto-Merge nach main geht.
 on:
   pull_request:
   push:
-    branches:
-      - main
-      - agent-changes
+    branches-ignore:
+      - renders
   workflow_dispatch:
 
 permissions:

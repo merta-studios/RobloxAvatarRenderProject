@@ -483,7 +483,7 @@ def test_wichtige_dateien_existieren():
                 ".github/workflows/auto-merge.yml", "blender/render_glass.py",
                 "tools/build_avatar.py", "tools/roblox_api.py",
                 "tools/roblox_mesh.py", "tools/avatar_rig.py", "tools/diagnose.py",
-                ".github/workflows/diagnose.yml", "ANLEITUNG.md"):
+                ".github/workflows/diagnose.yml", "AGENTS.md", "ANLEITUNG.md"):
         assert (ROOT / rel).exists(), rel
 
 
@@ -507,11 +507,51 @@ def test_workflows_sind_gueltiges_yaml():
             assert "runs-on" in job and "steps" in job
 
 
-def test_auto_merge_workflow_reagiert_auf_agent_changes():
+def test_auto_merge_workflow_merged_jeden_branch_ohne_pull_request():
+    # Arena-Sessions pushen auf arena/<session-id>-...; frueher reagierte der
+    # Workflow nur auf agent-changes und hat im Fehlerfall einen PR erstellt.
     yaml = pytest.importorskip("yaml")
-    data = yaml.safe_load((ROOT / ".github/workflows/auto-merge.yml").read_text())
+    path = ROOT / ".github/workflows/auto-merge.yml"
+    text = path.read_text(encoding="utf-8")
+    data = yaml.safe_load(text)
     triggers = data.get("on", data.get(True))
-    assert "agent-changes" in triggers["push"]["branches"]
+
+    # Jeder Branch loest den Merge aus ...
+    assert "**" in triggers["push"]["branches"]
+    # ... ausser den Ziel-/Sonderbranches (kein Selbst-Merge, keine Schleife).
+    assert "!main" in triggers["push"]["branches"]
+    assert "!renders" in triggers["push"]["branches"]
+
+    # Kein Pull-Request-Trigger und keine PR-Kommandos mehr.
+    assert "pull_request" not in triggers
+    assert "gh pr create" not in text
+    assert "gh pr merge" not in text
+
+    # Quelle ist der tatsaechlich gepushte Branch, kein fest verdrahteter Name.
+    source = data["env"]["SOURCE_BRANCH"]
+    assert "github.ref_name" in source
+    assert "agent-changes" not in source
+
+    # Einziger Weg nach main: direkter Push.
+    assert "HEAD:${TARGET_BRANCH}" in text
+
+
+def test_agents_datei_verbietet_pull_requests():
+    text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    lowered = text.lower()
+    assert "pull request" in lowered
+    assert "nie" in lowered
+    assert "auto-merge.yml" in text
+
+
+def test_tests_workflow_laeuft_auf_jedem_arbeitsbranch():
+    yaml = pytest.importorskip("yaml")
+    data = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())
+    triggers = data.get("on", data.get(True))
+    push = triggers["push"]
+    # Alle Branches ausser dem Render-Ausgabebranch.
+    assert push.get("branches-ignore") == ["renders"]
+    assert "branches" not in push
 
 
 def test_render_workflow_hat_artifact_und_secret():
