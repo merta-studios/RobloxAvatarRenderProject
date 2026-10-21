@@ -36,29 +36,30 @@ TEMPLATE_SIZE = (585, 559)
 
 # Quell-Rechtecke (x0, y0, x1, y1) im offiziellen 585x559-Template -> Ziel (x, y) in 388x272
 _TORSO_PANELS = (
-    ((231, 8, 359, 72), (2, 2)),       # Top    (128x64)
-    ((231, 74, 359, 202), (2, 70)),    # Front  (128x128)
-    ((361, 74, 425, 202), (131, 70)),  # Left   (64x128)
-    ((427, 74, 555, 202), (197, 70)),  # Back   (128x128)
-    ((165, 74, 229, 202), (324, 70)),  # Right  (64x128)
-    ((231, 204, 359, 268), (2, 202)),  # Bottom (128x64)
+    ((231, 8, 359, 72), (2, 10)),     # Top    (128x64,  y=10..74)
+    ((231, 74, 359, 202), (2, 74)),   # Front  (128x128, x=2..130,   y=74..202)
+    ((361, 74, 425, 202), (130, 74)), # Left   (64x128,  x=130..194, y=74..202)
+    ((427, 74, 555, 202), (194, 74)), # Back   (128x128, x=194..322, y=74..202)
+    ((165, 74, 229, 202), (322, 74)), # Right  (64x128,  x=322..386, y=74..202)
+    ((231, 204, 359, 268), (2, 202)), # Bottom (128x64,  x=2..130,   y=202..266)
 )
 
-# Spalten im 264x284-Gliedmassen-Atlas: col0=+X, col1=-Z(Front), col2=-X, col3=+Z(Back)
+# Spalten im 264x284-Gliedmassen-Atlas: exakt x = 2 + 64*k (2, 66, 130, 194 -> 2..258)
+# col0=+X, col1=-Z(Front), col2=-X, col3=+Z(Back)
 _RIGHT_LIMB_COLS = (
     ((19, 355, 83, 483), 2),     # +X = aussen rechts
-    ((217, 355, 281, 483), 68),  # -Z = vorne rechts
-    ((151, 355, 215, 483), 134), # -X = innen rechts
-    ((85, 355, 149, 483), 198),  # +Z = hinten rechts
+    ((217, 355, 281, 483), 66),  # -Z = vorne rechts
+    ((151, 355, 215, 483), 130), # -X = innen rechts
+    ((85, 355, 149, 483), 194),  # +Z = hinten rechts
 )
 _RIGHT_LIMB_TOP = (217, 289, 281, 353)
 _RIGHT_LIMB_BOT = (217, 485, 281, 549)
 
 _LEFT_LIMB_COLS = (
     ((374, 355, 438, 483), 2),   # +X = innen links
-    ((308, 355, 372, 483), 68),  # -Z = vorne links
-    ((506, 355, 570, 483), 134), # -X = aussen links
-    ((440, 355, 504, 483), 198), # +Z = hinten links
+    ((308, 355, 372, 483), 66),  # -Z = vorne links
+    ((506, 355, 570, 483), 130), # -X = aussen links
+    ((440, 355, 504, 483), 194), # +Z = hinten links
 )
 _LEFT_LIMB_TOP = (308, 289, 372, 353)
 _LEFT_LIMB_BOT = (308, 485, 372, 549)
@@ -149,6 +150,23 @@ def _to_png_bytes(canvas_f32: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
+def _dilate_into_gutter(canvas: np.ndarray, used: np.ndarray, steps: int = 2) -> None:
+    """Weitet Panel-Raender nur in unbenutzte Gutter-Pixel (`~used`) aus."""
+    filled = used.copy()
+    for _ in range(steps):
+        empty = ~filled
+        if not empty.any():
+            break
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            s_fill = np.roll(np.roll(filled, dy, axis=0), dx, axis=1)
+            take = empty & s_fill
+            if take.any():
+                s_canvas = np.roll(np.roll(canvas, dy, axis=0), dx, axis=1)
+                canvas[take] = s_canvas[take]
+                filled[take] = True
+                empty = ~filled
+
+
 def composite_torso_texture(
     skin_rgb: ColorRGB,
     pants_bytes: Optional[bytes] = None,
@@ -168,18 +186,29 @@ def composite_torso_texture(
         return None
 
     canvas = np.asarray(_skin_canvas(TORSO_MAP_SIZE, skin_rgb), dtype=np.float32) / 255.0
+    used = np.zeros(canvas.shape[:2], dtype=bool)
+    for src_box, (dx, dy) in _TORSO_PANELS:
+        pw, ph = src_box[2] - src_box[0], src_box[3] - src_box[1]
+        used[dy:dy + ph, dx:dx + pw] = True
 
     for tmpl_img, active in ((pants_img, has_pants), (shirt_img, has_shirt)):
         if not active or tmpl_img is None:
             continue
         norm = _normalize_template(tmpl_img)
         for src_box, (dx, dy) in _TORSO_PANELS:
-            _alpha_paste_with_bleed(canvas, norm.crop(src_box), dx, dy, bleed=2)
+            _alpha_paste_with_bleed(canvas, norm.crop(src_box), dx, dy, bleed=0)
+        # Interne R15-Taillenkugel von UpperTorso (x=134..198, y=38..70) mit
+        # dem unteren Shirt-/Pants-Saum fuellen, damit keine Haut am Gelenk blitzt.
+        waist_cap = norm.crop((231, 164, 359, 202)).resize((66, 36), Image.Resampling.BILINEAR)
+        _alpha_paste_with_bleed(canvas, waist_cap, 132, 36, bleed=0)
+        used[36:72, 132:198] = True
 
     if has_tshirt and tshirt_img is not None:
         graphic = tshirt_img.resize((128, 128), Image.Resampling.LANCZOS)
-        _alpha_paste_with_bleed(canvas, graphic, 2, 70, bleed=1)
+        _alpha_paste_with_bleed(canvas, graphic, 2, 74, bleed=0)
+        used[74:202, 2:130] = True
 
+    _dilate_into_gutter(canvas, used, steps=2)
     return _to_png_bytes(canvas)
 
 
@@ -199,22 +228,33 @@ def composite_limb_texture(
     bot_box = _RIGHT_LIMB_BOT if side == "right" else _LEFT_LIMB_BOT
 
     canvas = np.asarray(_skin_canvas(LIMB_MAP_SIZE, skin_rgb), dtype=np.float32) / 255.0
+    used = np.zeros(canvas.shape[:2], dtype=bool)
 
-    # Schulter-/Hueft-Kappe oben links (64x64)
-    _alpha_paste_with_bleed(canvas, norm.crop(top_box), 2, 2, bleed=2)
+    top_patch = norm.crop(top_box)
+    _alpha_paste_with_bleed(canvas, top_patch, 2, 2, bleed=0)
+    used[2:66, 2:66] = True
 
-    # Ober- + Unterarm/Bein (obere 7/8 = Zeilen 0..112 auf y=68..214 gestreckt)
-    # sowie Hand/Fuss-Schaft (untere 1/8 = Zeilen 112..128 + Bodenkappe auf y=214..282)
-    bot_patch = norm.crop(bot_box)
+    # Interne R15-Ellenbogen-/Kniekugel von UpperArm/UpperLeg (x=68..130, y=28..68)
+    # mit der mittleren Vorderseiten-Zeile fuellen, damit gebeugte/rotierte Arme
+    # am Ellenbogengelenk keinen Hautstreifen zeigen.
+    front_patch = norm.crop(cols[1][0])
+    joint_cap = front_patch.crop((0, 44, 64, 80)).resize((64, 42), Image.Resampling.BILINEAR)
+    _alpha_paste_with_bleed(canvas, joint_cap, 66, 26, bleed=0)
+    used[26:68, 66:130] = True
+
     for src_box, dx in cols:
         col_patch = norm.crop(src_box)  # 64 x 128
         shaft = col_patch.crop((0, 0, 64, 112)).resize((64, 146), Image.Resampling.BILINEAR)
-        cuff = col_patch.crop((0, 112, 64, 128)).resize((64, 26), Image.Resampling.BILINEAR)
-        sole = bot_patch.resize((64, 42), Image.Resampling.BILINEAR)
-        _alpha_paste_with_bleed(canvas, shaft, dx, 68, bleed=2)
-        _alpha_paste_with_bleed(canvas, cuff, dx, 214, bleed=2)
-        _alpha_paste_with_bleed(canvas, sole, dx, 240, bleed=2)
+        cuff = col_patch.crop((0, 112, 64, 128)).resize((64, 24), Image.Resampling.BILINEAR)
+        _alpha_paste_with_bleed(canvas, shaft, dx, 68, bleed=0)
+        _alpha_paste_with_bleed(canvas, cuff, dx, 214, bleed=0)
+        used[68:238, dx:dx + 64] = True
 
+    sole = norm.crop(bot_box).resize((68, 42), Image.Resampling.BILINEAR)
+    _alpha_paste_with_bleed(canvas, sole, 88, 240, bleed=0)
+    used[240:282, 88:156] = True
+
+    _dilate_into_gutter(canvas, used, steps=2)
     return _to_png_bytes(canvas)
 
 
@@ -316,18 +356,18 @@ def apply_torso_box_uvs(box: MeshData, part_slice: str = "full") -> MeshData:
         return box
     w, h = float(TORSO_MAP_SIZE[0]), float(TORSO_MAP_SIZE[1])
     if part_slice == "upper":
-        y0, y1 = 70.0, 174.0
+        y0, y1 = 74.0, 178.0
     elif part_slice == "lower":
-        y0, y1 = 174.0, 198.0
+        y0, y1 = 178.0, 202.0
     else:
-        y0, y1 = 70.0, 198.0
+        y0, y1 = 74.0, 202.0
 
     uvs: List[Tuple[float, float]] = []
-    uvs.extend(_quad_uv_from_px(w, h, 197, y0, 325, y1))  # 0: +Z Back
+    uvs.extend(_quad_uv_from_px(w, h, 194, y0, 322, y1))  # 0: +Z Back
     uvs.extend(_quad_uv_from_px(w, h, 2, y0, 130, y1))    # 1: -Z Front
-    uvs.extend(_quad_uv_from_px(w, h, 324, y0, 388, y1))  # 2: +X Right
-    uvs.extend(_quad_uv_from_px(w, h, 131, y0, 195, y1))  # 3: -X Left
-    uvs.extend(_quad_uv_from_px(w, h, 2, 2, 130, 66))     # 4: +Y Top
+    uvs.extend(_quad_uv_from_px(w, h, 322, y0, 386, y1))  # 2: +X Right
+    uvs.extend(_quad_uv_from_px(w, h, 130, y0, 194, y1))  # 3: -X Left
+    uvs.extend(_quad_uv_from_px(w, h, 2, 10, 130, 74))    # 4: +Y Top
     uvs.extend(_quad_uv_from_px(w, h, 2, 202, 130, 266))  # 5: -Y Bottom
     return MeshData(
         positions=list(box.positions),
@@ -349,17 +389,17 @@ def apply_limb_box_uvs(box: MeshData, part_slice: str = "full") -> MeshData:
     elif part_slice == "lower":
         y0, y1 = 141.0, 214.0
     elif part_slice == "end":
-        y0, y1 = 214.0, 240.0
+        y0, y1 = 214.0, 238.0
     else:
-        y0, y1 = 68.0, 240.0
+        y0, y1 = 68.0, 238.0
 
     uvs: List[Tuple[float, float]] = []
-    uvs.extend(_quad_uv_from_px(w, h, 198, y0, 262, y1))  # 0: +Z Back
-    uvs.extend(_quad_uv_from_px(w, h, 68, y0, 132, y1))   # 1: -Z Front
+    uvs.extend(_quad_uv_from_px(w, h, 194, y0, 258, y1))  # 0: +Z Back
+    uvs.extend(_quad_uv_from_px(w, h, 66, y0, 130, y1))   # 1: -Z Front
     uvs.extend(_quad_uv_from_px(w, h, 2, y0, 66, y1))     # 2: +X
-    uvs.extend(_quad_uv_from_px(w, h, 134, y0, 198, y1))  # 3: -X
+    uvs.extend(_quad_uv_from_px(w, h, 130, y0, 194, y1))  # 3: -X
     uvs.extend(_quad_uv_from_px(w, h, 2, 2, 66, 66))      # 4: +Y Top
-    uvs.extend(_quad_uv_from_px(w, h, 68, 240, 132, 282)) # 5: -Y Bottom
+    uvs.extend(_quad_uv_from_px(w, h, 90, 240, 154, 282)) # 5: -Y Bottom
     return MeshData(
         positions=list(box.positions),
         normals=list(box.normals),

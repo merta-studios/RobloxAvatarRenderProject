@@ -187,6 +187,7 @@ def _make_classic_template_png(
     arr[:, :] = bg_rgba
     arr[74:202, 231:359] = torso_front_rgba
     arr[355:467, 217:281] = sleeve_rgba
+    arr[355:483, 151:215] = (0, 0, 0, 0)
     arr[467:483, 217:281] = hand_rgba
     arr[485:549, 217:281] = hand_rgba
     buf = io.BytesIO()
@@ -213,6 +214,35 @@ def test_humanoid_kompositor_ignoriert_template_wasserzeichen_und_laesst_haende_
     a_arr = np.asarray(Image.open(io.BytesIO(arm_png)))
     assert a_arr[120, 100, 2] > 190 and a_arr[120, 100, 3] == 255
     assert a_arr[265, 125, 3] == 0  # Hand unbedeckt -> Hautfarbe im Glas
+    # Spalte col2 (x=130..194) ist unbedeckt und darf keinen blauen Saum aus col1 (x=66..130) abbekommen
+    assert a_arr[120, 131, 3] == 0
+
+
+def test_headless_r15_erzeugt_keinen_hals_quader_und_nutzt_echte_kopfhoehe():
+    """Headless-Avatare (z. B. MertaStudios) duerfen keinen beigen Hals-Quader am
+    Kragen haben und Kronen/Hoerner schweben auf echter Headless-HatAttachment-Hoehe."""
+    headless_mp = {
+        "mesh": roblox_mesh.make_box(0.007, 0.007, 0.007),
+        "rbxm_size": (1.0, 1.0, 1.0),
+        "original_size": (1.0, 1.0, 1.0),
+        "scale_type": "Classic",
+        "attachments": {
+            "NeckRigAttachment": {"position": (0.0, -0.5, 0.0), "rotation": avatar_rig.IDENTITY_MAT3},
+            "HatAttachment": {"position": (0.0, 0.6, 0.0), "rotation": avatar_rig.IDENTITY_MAT3},
+        },
+    }
+    rig = avatar_rig.assemble_r15_rig(
+        {},
+        headless_mp,
+        roblox_api.DEFAULT_BODY_COLORS,
+        dict(roblox_api.DEFAULT_SCALES),
+        headless=True,
+    )
+    assert rig.head_mesh is None
+    assert "hals" not in rig.body_meshes
+    collar_top = rig.body_meshes["torso"].bbox()[1][1]
+    hat_y = rig.world_attachments["HatAttachment"][0][1]
+    assert hat_y - collar_top > 0.9
 
 
 def test_opaque_mesh_texture_entfernt_alpha_loecher_ohne_hautfarben_bleed():
