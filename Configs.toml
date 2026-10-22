@@ -68,11 +68,13 @@ pose = "None"
 #  Oben + unten müssen zusammen unter 95 bleiben, sonst wäre kein Platz
 #  für den Avatar im Bild.
 #
-#  Accessoires (Hut, Krone, schwebender Halo …) zählen beim Messen nicht mit.
-#  Ragen sie trotzdem über den Kopf hinaus, wird das Bild automatisch so weit
-#  aufgezogen, dass nichts abgeschnitten wird (der Kopf sitzt dann etwas
-#  tiefer als eingestellt – die genauen Werte stehen im Render-Log). Bei
-#  negativen Werten wird bewusst angeschnitten, dort wird nichts korrigiert.
+#  Accessoires (Hut, Krone, schwebender Halo …) zählen beim Messen nicht mit –
+#  der Wert gilt bis zur Kopfoberkante. Damit ein normaler Hut/eine Krone
+#  nicht angeschnitten wird, rückt die Kamera bei Bedarf etwas weiter weg
+#  (max. 25 %, der Kopf sitzt dann etwas tiefer als eingestellt; genaue Werte
+#  stehen im Render-Log). Weit schwebende Accessoires (Halo) werden dagegen
+#  bewusst nicht eingepasst – dafür freiraum_oben_prozent erhöhen.
+#  Bei negativen Werten wird bewusst angeschnitten, dort wird nichts korrigiert.
 freiraum_oben_prozent = 6
 freiraum_unten_prozent = 6
 

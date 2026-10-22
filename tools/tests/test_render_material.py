@@ -523,18 +523,28 @@ def test_negativer_unterer_rand_schneidet_das_bild_an(render):
     assert framing["kopf_prozent"] == pytest.approx(6.0, abs=0.05)
 
 
-def test_kopfoberkante_ohne_accessoire_ist_der_bezugspunkt(render):
-    # Kopfreal bis 4.09, Halo bis 6.7: bei positiven Raendern wird so weit
-    # aufgezogen, dass der Halo komplett drin ist - die Fuesse bleiben exakt.
-    lo, hi = (-1.8, -0.8, 0.0), (2.2, 0.9, 6.7)
+def test_normaler_hut_wird_nicht_abgeschnitten(render):
+    # Kopf bis 4.09, Hut bis 4.6: die Kamera geht etwas zurueck, damit der
+    # Hut komplett im Bild ist (der Kopf-Abstand waechst leicht mit).
+    lo, hi = (-1.8, -0.8, 0.0), (2.2, 0.9, 4.6)
     framing = _framing(render, lo, hi, 6.0, 6.0, head=4.09, feet=0.0)
     assert framing["aufgezogen"] is True
-    # Bild wird nur so weit aufgezogen wie noetig: Raender wachsen, das
-    # Accessoire ist komplett im Bild, der Avatar wird nicht winzig.
-    assert framing["kopf_prozent"] > 6.0
-    assert framing["fuss_prozent"] > 6.0
-    assert framing["distance"] < 2.0 * _framing(render, lo, hi, head=4.09)["distance"] * 1.05
+    assert framing["abgeschnitten"] is False
+    assert 6.0 <= framing["kopf_prozent"] < 15.0
     assert _ndc(render, framing, (0.0, hi[1], hi[2]))[1] <= 1.0 + 1e-6
+    base = _framing(render, lo, (-1.8, 0.9, 0.0), head=4.09)
+    assert framing["distance"] <= 1.25 * base["distance"] + 1e-6
+
+
+def test_weit_schwebendes_accessoire_kappt_das_aufziehen(render):
+    # Halo bis 6.67 bei Kopf 4.09: der Ausschnitt folgt der Kopfoberkante,
+    # die Kamera geht hoechstens 25 % zurueck (Avatar bleibt gross).
+    lo, hi = (-1.8, -0.8, 0.0), (2.2, 0.9, 6.67)
+    framing = _framing(render, lo, hi, 6.0, 6.0, head=4.09, feet=0.0)
+    base = _framing(render, lo, (-1.8, 0.9, 0.0), head=4.09)
+    assert framing["distance"] <= 1.25 * base["distance"] + 1e-6
+    assert framing["kopf_prozent"] < 20.0
+    assert framing["abgeschnitten"] is True
 
 
 def test_ohne_ueberstehende_accessoires_bleiben_die_prozente_exakt(render):
