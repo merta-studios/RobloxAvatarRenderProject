@@ -8,7 +8,7 @@ username.txt  ──►  UserId  ──►  Avatar-Definition  ──►  Assets
                                                            │
                                         RBXM-Modelle parsen (Mesh-/Textur-IDs)
                                                            │
-                             render_avatar.png  ◄──  Blender Cycles (CPU)
+                             render_avatar.png  ◄──  Blender 5.0 EEVEE (2000×2000, 16 Samples)
                                 Artifact + Branch "renders" + Release
 ```
 
@@ -53,7 +53,7 @@ vermutlich fehl (401) – es wird dann ein Platzhalter-Körper gerendert.
 | 4 | `tools/rbxm.py` | RBXM-/RBXMX-Parser: Mesh-/Textur-IDs aus Modellen |
 | 5 | `tools/roblox_mesh.py` | Roblox-`.mesh`-Parser (v1.00–v7.00) → OBJ |
 | 6 | `tools/avatar_rig.py` | Stand-Pose-Rig, Accessoire-Platzierung |
-| 7 | `blender/render_glass.py` | Cycles-Glasmaterial, Kamera, Licht, Render |
+| 7 | `blender/render_glass.py` | Blender-5.0-EEVEE-Glossy-Material, World-HDRI (`sunset_jhbcentral_4k.exr`), Kamera, Render |
 | 8 | `.github/workflows/avatar-render.yml` | Veröffentlichen: Artifact + Branch `renders` + Release |
 | – | `tools/diagnose.py` | prüft Endpunkte/Key-Rechte (Workflow *Roblox-Diagnose*) |
 
@@ -78,10 +78,10 @@ python3 tools/build_avatar.py --dry-run --out build
 export ROBLOX_OPEN_CLOUD_API_KEY="..."
 python3 tools/build_avatar.py --username Builderman --out build
 
-# rendern (Blender 4.2 muss installiert sein)
+# rendern (Blender 5.0 muss installiert sein)
 blender -b --factory-startup --python blender/render_glass.py -- \
   --manifest build/manifest.json --out render_avatar.png \
-  --resolution 1280x720 --samples 64
+  --resolution 2000x2000 --samples 16
 ```
 
 Verbindungs- und Key-Test (zeigt HTTP-Status aller Roblox-Endpunkte):
@@ -99,8 +99,7 @@ python3 -m pytest tools/tests -q
 
 ## Grenzen
 
-* GitHub-Runner haben **keine GPU** → Cycles rendert auf der CPU, 2–10 Minuten
-  bei 720p/64 Samples.
+* GitHub-Runner haben **keine physische GPU** → Blender 5.0 EEVEE rendert über Mesa Software-OpenGL/Vulkan (`llvmpipe`/`lavapipe`) mit 16 Samples in `2000x2000`.
 * Roblox liefert **keinen** fertig geriggten Avatar als OBJ/GLB. Der Körper wird
   aus den Avatar-Farben/-Proportionen nachgebaut, Accessoires kommen als echte
   Meshes dazu und werden heuristisch an Kopf/Brust/Rücken/Händen platziert.

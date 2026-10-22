@@ -1,12 +1,13 @@
 name: Avatar-Render (Glas)
 
 # Auslöser:
-#   * Push, sobald sich username.txt (oder die Pipeline selbst) ändert
+#   * Push, sobald sich username.txt, das HDRI oder die Pipeline selbst ändert
 #   * Manuell über "Run workflow" (optional mit eigenem Usernamen)
 on:
   push:
     paths:
       - "username.txt"
+      - "sunset_jhbcentral_4k.exr"
       - "tools/**"
       - "blender/**"
       - ".github/workflows/avatar-render.yml"
@@ -17,13 +18,13 @@ on:
         required: false
         default: ""
       resolution:
-        description: "Auflösung, z. B. 1280x720 oder 960x540"
+        description: "Auflösung, z. B. 2000x2000 oder 1280x720"
         required: false
-        default: "1280x720"
+        default: "2000x2000"
       samples:
-        description: "Cycles-Samples (niedriger = schneller)"
+        description: "EEVEE-Samples (Default: 16)"
         required: false
-        default: "64"
+        default: "16"
 
 # Nur ein Render pro Branch gleichzeitig; neue Pushes brechen den alten Lauf ab.
 concurrency:
@@ -36,10 +37,11 @@ permissions:
   contents: write
 
 env:
-  BLENDER_VERSION: "4.2.0"
-  BLENDER_SERIES: "Blender4.2"
-  PIPELINE_RESOLUTION: ${{ github.event.inputs.resolution || '1280x720' }}
-  PIPELINE_SAMPLES: ${{ github.event.inputs.samples || '64' }}
+  BLENDER_VERSION: "5.0.1"
+  BLENDER_FALLBACK_VERSION: "5.0.0"
+  BLENDER_SERIES: "Blender5.0"
+  PIPELINE_RESOLUTION: ${{ github.event.inputs.resolution || '2000x2000' }}
+  PIPELINE_SAMPLES: ${{ github.event.inputs.samples || '16' }}
 
 jobs:
   render:
@@ -128,41 +130,51 @@ jobs:
             cat build/summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: 5) Blender installieren
+      - name: 5) Blender 5.0 installieren
         id: blender
         run: |
           set -euo pipefail
-          if [ -x /usr/local/bin/blender ]; then
-            echo "Blender ist bereits im Image vorhanden."
+          echo "== Systembibliotheken für Blender 5.0 & Headless EEVEE =="
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libvulkan1 mesa-vulkan-drivers \
+            libgl1 libgl1-mesa-dri libglx-mesa0 libegl1 libegl-mesa0 libgbm1 \
+            libxrender1 libxi6 libxxf86vm1 libxfixes3 \
+            libsm6 libice6 libxkbcommon0 libx11-6 libxext6 libgomp1 \
+            xvfb xz-utils
+
+          if [ -x /usr/local/bin/blender ] && /usr/local/bin/blender --version | head -n 1 | grep -q '^Blender 5\.0'; then
+            echo "Blender 5.0 ist bereits im Image vorhanden."
             /usr/local/bin/blender --version | head -n 1 | tee -a "$GITHUB_STEP_SUMMARY"
             echo "bin=/usr/local/bin/blender" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "== Systembibliotheken für Blender =="
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            libxrender1 libxi6 libxxf86vm1 libxfixes3 libgl1 libegl1 \
-            libsm6 libxkbcommon0 libx11-6 libxext6 libgomp1 xz-utils
-
-          echo "== Blender ${BLENDER_VERSION} laden =="
-          TARBALL="blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+          echo "== Blender 5.0 (${BLENDER_VERSION} / Fallback ${BLENDER_FALLBACK_VERSION}) laden =="
           mkdir -p "$HOME/blender"
           DOWNLOADED=0
-          for BASE in \
-            "https://download.blender.org/release/${BLENDER_SERIES}" \
-            "https://mirror.clarkson.edu/blender/release/${BLENDER_SERIES}" \
-            "https://ftp.nluug.nl/pub/graphics/blender/release/${BLENDER_SERIES}"
-          do
-            echo "Versuche $BASE/$TARBALL"
-            if curl -fsSL --retry 3 --retry-delay 2 --max-time 900 \
-                 -o "$HOME/blender/$TARBALL" "$BASE/$TARBALL"; then
-              DOWNLOADED=1
+          TARBALL=""
+          for VER in "${BLENDER_VERSION}" "${BLENDER_FALLBACK_VERSION}"; do
+            CANDIDATE="blender-${VER}-linux-x64.tar.xz"
+            for BASE in \
+              "https://download.blender.org/release/${BLENDER_SERIES}" \
+              "https://mirror.clarkson.edu/blender/release/${BLENDER_SERIES}" \
+              "https://ftp.nluug.nl/pub/graphics/blender/release/${BLENDER_SERIES}"
+            do
+              echo "Versuche $BASE/$CANDIDATE"
+              if curl -fsSL --retry 3 --retry-delay 2 --max-time 900 \
+                   -o "$HOME/blender/$CANDIDATE" "$BASE/$CANDIDATE"; then
+                TARBALL="$CANDIDATE"
+                DOWNLOADED=1
+                break
+              fi
+            done
+            if [ "$DOWNLOADED" -eq 1 ]; then
               break
             fi
           done
           if [ "$DOWNLOADED" -ne 1 ]; then
-            echo "::error::Blender konnte nicht heruntergeladen werden."
+            echo "::error::Blender 5.0 konnte nicht heruntergeladen werden."
             exit 1
           fi
 
@@ -172,31 +184,60 @@ jobs:
           cat "$HOME/blender/version.txt" >> "$GITHUB_STEP_SUMMARY"
           echo "bin=$HOME/blender/blender" >> "$GITHUB_OUTPUT"
 
-      - name: 6) Glas-Render mit Cycles (CPU)
+      - name: 6) Glossy-Render mit Blender 5.0 (EEVEE)
         id: render
         run: |
           set -o pipefail
           BLENDER_BIN="${{ steps.blender.outputs.bin }}"
-          echo "== Rendern: ${PIPELINE_RESOLUTION}, ${PIPELINE_SAMPLES} Samples =="
+          echo "== Rendern (EEVEE): ${PIPELINE_RESOLUTION}, ${PIPELINE_SAMPLES} Samples =="
           mkdir -p build/logs
           START=$(date +%s)
+          RENDER_ARGS=(
+            --manifest build/manifest.json
+            --out render_avatar.png
+            --engine eevee
+            --resolution "${PIPELINE_RESOLUTION}"
+            --samples "${PIPELINE_SAMPLES}"
+            --save-blend build/avatar.blend
+          )
+
           set +e
-          "$BLENDER_BIN" -b --factory-startup --python blender/render_glass.py -- \
-            --manifest build/manifest.json \
-            --out render_avatar.png \
-            --resolution "${PIPELINE_RESOLUTION}" \
-            --samples "${PIPELINE_SAMPLES}" \
-            --save-blend build/avatar.blend \
+          rm -f render_avatar.png
+          LIBGL_ALWAYS_SOFTWARE=1 "$BLENDER_BIN" -b --factory-startup --gpu-backend opengl \
+            --python blender/render_glass.py -- "${RENDER_ARGS[@]}" \
             2>&1 | tee build/logs/blender.log
           RC=${PIPESTATUS[0]}
+
+          if [ "$RC" -ne 0 ] || [ ! -s render_avatar.png ]; then
+            echo "::warning::OpenGL-Headless-Kontext lieferte Exit $RC – versuche Vulkan (lavapipe)..."
+            rm -f render_avatar.png
+            "$BLENDER_BIN" -b --factory-startup --gpu-backend vulkan \
+              --python blender/render_glass.py -- "${RENDER_ARGS[@]}" \
+              2>&1 | tee -a build/logs/blender.log
+            RC=${PIPESTATUS[0]}
+          fi
+
+          if [ "$RC" -ne 0 ] || [ ! -s render_avatar.png ]; then
+            echo "::warning::Vulkan-Headless lieferte Exit $RC – versuche Xvfb + Software-OpenGL..."
+            rm -f render_avatar.png
+            LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX +render -noreset" \
+              "$BLENDER_BIN" -b --factory-startup --gpu-backend opengl \
+              --python blender/render_glass.py -- "${RENDER_ARGS[@]}" \
+              2>&1 | tee -a build/logs/blender.log
+            RC=${PIPESTATUS[0]}
+          fi
           set -e
+
           DURATION=$(( $(date +%s) - START ))
           echo "render_seconds=$DURATION" >> "$GITHUB_OUTPUT"
           {
             echo "### Render"
             echo ""
+            echo "* Engine: Blender 5.0 EEVEE"
             echo "* Auflösung: ${PIPELINE_RESOLUTION}"
-            echo "* Samples: ${PIPELINE_SAMPLES} (Cycles, CPU, Denoising an)"
+            echo "* Samples: ${PIPELINE_SAMPLES}"
+            echo "* World Environment Texture: \`sunset_jhbcentral_4k.exr\`"
+            echo "* Material: Principled BSDF (Rauheit 0, Metallic 0.2, IOR Level 1)"
             echo "* Dauer: ${DURATION}s"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$RC" -ne 0 ]; then
