@@ -35,7 +35,7 @@ username = "MertaStudios"
 #      -90   = nach links gedreht  -> wir sehen die linke Seite (Profil)
 #  Erlaubt ist nur -90 bis 90. Zwischenwerte wie 25 oder -40 sind ideal für
 #  eine schräge 3/4-Ansicht (früher war der Render fest auf ca. 27°).
-drehung_grad = 0
+drehung_grad = 30
 
 
 # -----------------------------------------------------------------------------
@@ -46,7 +46,7 @@ drehung_grad = 0
 #  "Laufen", "Sitzen" oder "Jubel".
 #  Dort stehen für jedes Körperteil die Drehungen (Grad) und leichten
 #  Verschiebungen (Studs). Accessoires, Kleidung usw. folgen automatisch.
-pose = "None"
+pose = "Winken"
 
 
 # -----------------------------------------------------------------------------
@@ -108,11 +108,11 @@ render_bei_aenderung = true
 #  Beispiele:
 #      hintergrund_url = "https://example.com/wallpaper.jpg"
 #      hintergrund_url = "transparent"
-#      hintergrund_url = "hdri"
+#      hintergrund_url = "https://raw.githubusercontent.com/github/explore/main/topics/python/python.png"
 #
 #  Kann das Bild nicht geladen werden (404, kein Netz), rendert die Pipeline
 #  trotzdem weiter und benutzt das HDRI als Hintergrund.
-hintergrund_url = "hdri"
+hintergrund_url = "https://raw.githubusercontent.com/github/explore/main/topics/python/python.png"
 
 
 # -----------------------------------------------------------------------------
