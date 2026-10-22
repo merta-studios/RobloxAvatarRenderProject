@@ -1,7 +1,7 @@
-# Anleitung: Roblox-Avatar als Glas-Render
+# Anleitung: Roblox-Avatar als Glossy-Render (Blender 5.0 EEVEE)
 
-Diese Pipeline rendert einen Roblox-Avatar mit Blender Cycles als gläsernen
-Charakter – automatisch, ausgelöst durch einen Push. Du musst nur einen Namen
+Diese Pipeline rendert einen Roblox-Avatar mit Blender 5.0 EEVEE als hochglänzenden
+(Glossy) Charakter – automatisch, ausgelöst durch einen Push. Du musst nur einen Namen
 in eine Textdatei schreiben.
 
 ---
@@ -103,11 +103,10 @@ einen Usernamen, die Auflösung (z. B. `960x540`) und die Sample-Zahl
 
 ## d) Einschränkungen – bitte lesen
 
-* **Keine GPU.** GitHub-gehostete Runner sind reine CPU-Maschinen. Blender
-  rendert daher mit Cycles auf der CPU. Bei 1280×720 und 64 Samples dauert das
-  grob **2–10 Minuten**; komplexe Avatare mit vielen Meshes/Texturen länger.
-  Der Job-Timeout steht auf 45 Minuten. Schneller geht es über
-  *Run workflow* mit z. B. `960x540` und `32` Samples.
+* **Keine physische GPU.** GitHub-gehostete Runner sind reine CPU-Maschinen. Blender 5.0
+  rendert EEVEE daher über Mesa Software-OpenGL/Vulkan (`llvmpipe` / `lavapipe`)
+  standardmäßig in `2000x2000` mit `16` Samples. Der Job-Timeout steht auf 45 Minuten.
+  Abweichende Auflösungen oder Samples lassen sich jederzeit über *Run workflow* setzen.
 * **Es gibt keinen einzelnen Open-Cloud-Endpunkt, der einen kompletten,
   geriggten Avatar als OBJ liefert.** Roblox gibt Meshes im proprietären
   FileMesh-Format aus (Versionen 1.00–7.00, teils mit LODs und Skin-Daten);
@@ -137,12 +136,14 @@ einen Usernamen, die Auflösung (z. B. `960x540`) und die Sample-Zahl
   in Schema-F-Boxen gepresst. Unplausible RBXM-Größen (z. B. Platzhalter
   1×1×1 bei einem großen Hut) werden verworfen und im Manifest als Hinweis
   vermerkt.
-* **Material-Look:** Das Glas lässt Texturen sichtbar, weil jedes Teil aus
-  einem Glas-Körper und einer deckenden Textur-Ebene besteht. Wer den alten,
-  sehr starken Glas-Look möchte, rendert mit `--transmission 1.0
-  --tint-strength 0.45 --env-strength 0.2` (Texturen werden dann blasser).
-  Weitere Regler: `--roughness`, `--ior`, `--texture-strength`,
-  `--env-color`.
+* **Material- & World-Look (Blender 5.0):** Als World Environment Texture wird
+  [`sunset_jhbcentral_4k.exr`](sunset_jhbcentral_4k.exr) direkt geladen (im Hintergrund
+  sichtbar und für Beleuchtung + Spiegelungen aktiv, ohne Boden und ohne zusätzliche
+  Studio-Lichter). Jedes Teil erhält ein Principled BSDF mit Image Texture auf
+  `Base Color` sowie exakt `Roughness = 0`, `Metallic = 0.2` und `Specular IOR Level = 1.0`
+  (`Transmission = 0`, deckend hochglänzend). Optionale Regler per CLI:
+  `--roughness`, `--metallic`, `--specular-level`, `--env-texture`, `--env-strength`,
+  `--transparent`, `--with-floor`, `--studio-lights`, `--engine cycles`.
 * **RoProxy o. Ä. wird nicht verwendet.** Alle Anfragen gehen direkt an
   Roblox-Domains.
 

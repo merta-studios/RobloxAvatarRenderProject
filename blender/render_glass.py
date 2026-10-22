@@ -1,24 +1,23 @@
-"""Blender-Script: rendert die in build/ erzeugte Avatar-Szene als "Glas-Avatar".
+"""Blender-5.0-Script: rendert die in build/ erzeugte Avatar-Szene hochglaenzend (Glossy) mit EEVEE.
 
 Aufruf (headless):
     blender -b --factory-startup --python blender/render_glass.py -- \
         --manifest build/manifest.json --out render_avatar.png \
-        --resolution 1280x720 --samples 64
+        --resolution 2000x2000 --samples 16
 
 Alles nach dem ersten `--` geht an dieses Script. Ohne Blender-Argumente
-werden sinnvolle Defaults benutzt, damit man das Script auch aus der
-Blender-GUI (Texteditor -> Run Script) starten kann.
+werden die exakten Blender-5.0-Defaults benutzt, damit man das Script auch
+direkt aus der Blender-GUI (Texteditor -> Run Script) starten kann:
 
-Material ("Milchglas mit sichtbaren Texturen"): Principled BSDF mit
-Transmission 0.35, Roughness 0.18, IOR 1.35. Die Base Color kommt aus der
-Textur des Teils (Alpha der Shirt-/Hosen-Vorlagen wird mit der Koerperfarbe
-aufgefuellt), das Glas-Blau wird nur noch schwach (--tint-strength, Default
-0.18) eingemischt - vorher hat eine MULTIPLY-Mischung mit kraeftigem Blau
-alle Texturen zugekleistert ("alles grau/dunkelblau").
-
-Zusaetzlich steuert die Textur-Helligkeit Roughness und Transmission:
-bedruckte Stellen bleiben kompakter und zeigen ihre Farbe, freie Stellen
-bleiben glasig. Mit --mono-glass wird alles einfarbig hellblau.
+  * Render Engine: EEVEE (`BLENDER_EEVEE` in Blender 5.0, Fallback `BLENDER_EEVEE_NEXT`)
+  * Samples: 16
+  * Resolution: 2000x2000
+  * World Properties: Environment Texture (`sunset_jhbcentral_4k.exr` im Repo-Root)
+  * Material (Principled BSDF + Image Texture):
+      - Roughness (Rauheit) = 0.0 (0..1)
+      - Metallic = 0.2 (0..1)
+      - Specular IOR Level (IQR/IOR Level) = 1.0 (0..1)
+      - Transmission = 0.0 (deckend hochglaenzend wie Standard-Principled-BSDF)
 """
 
 from __future__ import annotations
@@ -33,6 +32,10 @@ import time
 import bpy
 from mathutils import Vector
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+DEFAULT_ENV_TEXTURE = os.path.join(REPO_ROOT, "sunset_jhbcentral_4k.exr")
+
 # ---------------------------------------------------------------------------
 # Argumente
 # ---------------------------------------------------------------------------
@@ -41,45 +44,52 @@ from mathutils import Vector
 def parse_args() -> argparse.Namespace:
     argv = sys.argv
     argv = argv[argv.index("--") + 1:] if "--" in argv else []
-    parser = argparse.ArgumentParser(description="Glas-Render eines Roblox-Avatars")
+    parser = argparse.ArgumentParser(description="Glossy-Render eines Roblox-Avatars (Blender 5.0 EEVEE)")
     parser.add_argument("--manifest", default="build/manifest.json")
     parser.add_argument("--out", default="render_avatar.png")
-    parser.add_argument("--resolution", default="1280x720",
-                        help="Breite x Hoehe, z. B. 1280x720 oder 960x540")
-    parser.add_argument("--samples", type=int, default=64)
-    parser.add_argument("--max-bounces", type=int, default=6)
-    parser.add_argument("--transmission", type=float, default=0.78,
-                        help="Glasanteil 0..1 (Default 0.78; 1.0 = starkes Glas, "
-                             "Texturen bleiben Dank Alpha-Mix trotzdem sichtbar)")
-    parser.add_argument("--ior", type=float, default=1.45,
-                        help="Brechungsindex (nahe 1.0 = kaum Verzerrung, "
-                             "1.45 = starkes Glas, IOR Level 0.8)")
+    parser.add_argument("--engine", default="eevee", choices=("eevee", "cycles"),
+                        type=lambda s: s.lower(),
+                        help="Render-Engine: 'eevee' (Default, Blender 5.0) oder 'cycles'")
+    parser.add_argument("--resolution", default="2000x2000",
+                        help="Breite x Hoehe, Default 2000x2000")
+    parser.add_argument("--samples", type=int, default=16,
+                        help="Render-Samples (Default 16 fuer EEVEE)")
+    parser.add_argument("--env-texture", default=DEFAULT_ENV_TEXTURE,
+                        help="Pfad zur World Environment Texture (.exr/.hdr), "
+                             "Default: sunset_jhbcentral_4k.exr im Repository-Root")
+    parser.add_argument("--env-strength", type=float, default=1.0,
+                        help="World-Background-Strength der Environment Texture (Default 1.0)")
     parser.add_argument("--roughness", type=float, default=0.0,
-                        help="Grund-Rauheit des Glases (Default 0.0 - perfekt glatt, wie in Blender)")
+                        help="Rauheit / Roughness 0..1 (Default 0.0)")
     parser.add_argument("--metallic", type=float, default=0.2,
-                        help="Metallness des Glases (Default 0.2 - wie in Blender eingestellt)")
-    parser.add_argument("--specular-level", type=float, default=0.8,
-                        help="Specular IOR Level 0..1 (Default 0.8 - reflektiver, IOR Level)")
-    parser.add_argument("--tint-strength", type=float, default=0.10,
-                        help="Wie stark das Glas-Blau eingefaerbt wird (0 = keine "
-                             "Verfaerbung, 1 = alles blau)")
+                        help="Metallic 0..1 (Default 0.2)")
+    parser.add_argument("--specular-level", "--ior-level", type=float, default=1.0,
+                        dest="specular_level",
+                        help="Specular IOR Level (IQR/IOR Level) 0..1 (Default 1.0)")
+    parser.add_argument("--ior", type=float, default=1.5,
+                        help="Brechungsindex des Principled BSDF (Blender-5.0-Default 1.5)")
+    parser.add_argument("--transmission", type=float, default=0.0,
+                        help="Transmission Weight 0..1 (Default 0.0 = deckend glossy)")
+    parser.add_argument("--tint-strength", type=float, default=0.0,
+                        help="Optionale Einfaerbung mit --glass-tint (Default 0.0 = echte Farben)")
     parser.add_argument("--texture-strength", type=float, default=1.0,
-                        help="Deckkraft der Texturen auf der Base Color (1.0 = voll)")
-    parser.add_argument("--glass-tint", default="#eaf7ff",
-                        help="Grundfarbe des Glases (sehr helles Blau)")
-    parser.add_argument("--metal-tint", default="#d8e9f2",
-                        help="Farbe fuer glaenzende Accessoires ohne Textur")
-    parser.add_argument("--mono-glass", action="store_true",
-                        help="alle Teile in derselben hellblauen Glasfarbe")
-    parser.add_argument("--no-floor", action="store_true")
-    parser.add_argument("--background", default="#eaf1f8",
-                        help="Hintergrund (Kamera-Strahlen)")
-    parser.add_argument("--env-color", default="#3f4d5c",
-                        help="Umgebungslicht/Reflexionsfarbe des Glases")
-    parser.add_argument("--env-strength", type=float, default=1.15,
-                        help="Staerke des Umgebungslichts (kleiner = mehr "
-                             "Kontrast im Glas)")
-    parser.add_argument("--denoise/--no-denoise", default=True, dest="denoise")
+                        help="Deckkraft der Image-Texturen auf Base Color (Default 1.0)")
+    parser.add_argument("--transparent", action="store_true",
+                        help="Film -> Transparent aktivieren (Default: aus, HDRI sichtbar)")
+    parser.add_argument("--with-floor", action="store_true",
+                        help="Optionalen Schatten-Boden einfuegen (Default: aus)")
+    parser.add_argument("--no-floor", action="store_true", default=True,
+                        help="Kompatibilitaets-Flag (kein Boden ist jetzt Standard)")
+    parser.add_argument("--studio-lights", action="store_true",
+                        help="Optionale Dreipunkt-Area-Lichter zusaetzlich zum HDRI")
+    # Rueckwaertskompatible Optionen fuer bestehende Aufrufe
+    parser.add_argument("--max-bounces", type=int, default=6)
+    parser.add_argument("--glass-tint", default="#eaf7ff")
+    parser.add_argument("--metal-tint", default="#d8e9f2")
+    parser.add_argument("--mono-glass", action="store_true")
+    parser.add_argument("--background", default="#eaf1f8")
+    parser.add_argument("--env-color", default="#3f4d5c")
+    parser.add_argument("--denoise", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-blend", default="", help="optional .blend speichern")
     return parser.parse_args(argv)
 
@@ -89,7 +99,7 @@ def log(msg: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Farb-Helfer (kein zusaetzlicher Import aus tools/, haelt das Script autark)
+# Farb- und Pfad-Helfer (autark ohne Import aus tools/)
 # ---------------------------------------------------------------------------
 
 
@@ -114,15 +124,59 @@ def srgb_to_linear(c):
     return tuple((v / 12.92) if v <= 0.04045 else (((v + 0.055) / 1.055) ** 2.4) for v in c)
 
 
+def tup(v):
+    return (v[0], v[1], v[2])
+
+
+def resolve_env_texture(path: str) -> str:
+    """Loest den Pfad zur Environment-Textur robust auf (relativ zu CWD oder Repo-Root)."""
+    if not path:
+        return ""
+    candidates = [
+        path,
+        os.path.join(REPO_ROOT, path),
+        os.path.join(REPO_ROOT, os.path.basename(path)),
+    ]
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return os.path.abspath(candidate)
+    return ""
+
+
 # ---------------------------------------------------------------------------
-# Szene
+# Szene & Node-Helfer
 # ---------------------------------------------------------------------------
 
 
 def reset_scene() -> None:
-    bpy.ops.wm.read_factory_settings(use_empty=True)
+    """Laedt die Blender-5.0-Factory-Szene und entfernt Standard-Objekte (Cube/Light/Camera).
+
+    Durch `use_empty=False` bleiben saemtliche Blender-5.0-Standardwerte fuer
+    EEVEE, Color Management (AgX) und World-Light-Probes exakt wie beim
+    manuellen Oeffnen von Blender 5.0 erhalten.
+    """
+    try:
+        bpy.ops.wm.read_factory_settings(use_empty=False)
+    except TypeError:  # pragma: no cover - falls in Tests gestubbt
+        bpy.ops.wm.read_factory_settings()
+
+    for obj in list(getattr(bpy.data, "objects", ())):
+        bpy.data.objects.remove(obj, do_unlink=True)
+    for collection_name in ("meshes", "lights", "cameras", "materials"):
+        coll = getattr(bpy.data, collection_name, None)
+        if coll is not None:
+            for datablock in list(coll):
+                coll.remove(datablock)
+
     scene = bpy.context.scene
-    scene.unit_settings.system = "NONE"
+    if hasattr(scene, "unit_settings"):
+        scene.unit_settings.system = "NONE"
+
+
+def _ensure_use_nodes(datablock) -> None:
+    """Aktiviert `use_nodes`, sofern die Blender-Version das Attribut noch benoetigt."""
+    if hasattr(datablock, "use_nodes") and not datablock.use_nodes:
+        datablock.use_nodes = True
 
 
 def set_input(node, names, value) -> bool:
@@ -141,13 +195,9 @@ def set_input(node, names, value) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Roblox-Kleidungsvorlagen: passendes Feld herausschneiden
+# Roblox-Kleidungsvorlagen: passendes Feld herausschneiden (Fallback)
 # ---------------------------------------------------------------------------
 
-# Bekannte Feldgroessen der klassischen Roblox-Vorlage (585x559):
-#   Torso vorne/hinten 128x128, Aermel/Seiten 64x128, Schultern 128x64,
-#   Enden 64x64. Fuer ein Koerperteil wird das erste vollstaendig
-#   deckende Feld dieser Groessen benutzt.
 CLOTHING_PANELS = {
     "shirt": ((128, 128), (64, 128), (128, 64)),
     "tshirt": ((128, 128), (64, 128), (128, 64)),
@@ -178,11 +228,7 @@ def _image_alpha_grid(img, max_side: int = 320):
 
 
 def _find_opaque_panel(img, kind: str):
-    """Position des groessten vollstaendig deckenden Vorlagen-Felds.
-
-    Rueckgabe: (u0, v0, u1, v1) in UV-Koordinaten (0..1, Ursprung unten
-    links wie bei Blender-Bildern) oder None, wenn nichts passt.
-    """
+    """Position des groessten vollstaendig deckenden Vorlagen-Felds (0..1 UV)."""
     try:
         import numpy as np
     except ImportError:  # pragma: no cover
@@ -191,12 +237,8 @@ def _find_opaque_panel(img, kind: str):
     if grid is None or grid.size == 0:
         return None
     height, width = grid.shape
-    # Ohne Transparenz ist es keine Vorlage (z. B. ein fertig gemaltes
-    # Bild oder ein Mesh-Atlas) - dann bleibt die Textur unbeschnitten.
     if float((grid < 0.5).mean()) < 0.02:
         return None
-    # Summed-Area-Table: damit ist "Fenster vollstaendig deckend?"
-    # in wenigen numpy-Operationen beantwortet (statt jeder Pixel-Schleife).
     table = np.zeros((height + 1, width + 1), dtype=np.float64)
     table[1:, 1:] = np.cumsum(np.cumsum(grid.astype(np.float64), axis=0), axis=1)
 
@@ -219,12 +261,7 @@ def _find_opaque_panel(img, kind: str):
 
 
 def _apply_clothing_uv(nodes, links, tex, kind: str):
-    """Skaliert die UVs der Box auf das passende Vorlagen-Feld.
-
-    Nur fuer unkomponierte Roh-Vorlagen ('shirt'/'pants') aktiv; bereits per
-    `avatar_uv` komponierte R15-Texturen ('composited') und Bundle-Oberflaechen
-    ('mesh_surface') besitzen exakte 1:1-UV-Koordinaten.
-    """
+    """Skaliert die UVs der Box auf das passende Vorlagen-Feld (nur Roh-Vorlagen)."""
     if kind not in ("shirt", "pants"):
         return False
     region = _find_opaque_panel(tex.image, kind)
@@ -244,7 +281,7 @@ def _apply_clothing_uv(nodes, links, tex, kind: str):
 
 
 def _load_texture_node(nodes, texture_path: str):
-    """Bild-Textur-Node fuer eine Textur-Datei (oder None)."""
+    """Erstellt einen Image-Texture-Node (`ShaderNodeTexImage`) fuer `texture_path`."""
     if not texture_path or not os.path.exists(texture_path):
         return None
     try:
@@ -258,201 +295,170 @@ def _load_texture_node(nodes, texture_path: str):
     tex.image = img
     tex.projection = "FLAT"
     tex.extension = "REPEAT"
-    tex.location = (-900, 240)
+    tex.location = (-560, 260)
     tex.label = os.path.basename(texture_path)
     return tex
 
 
-def _texture_detail_nodes(nodes, links, tex, low: float, high: float):
-    """Helligkeit der Textur -> Wert zwischen low und high.
+def _connect_mixed_base_color(nodes, links, bsdf, base_rgba, tex, texture_strength: float) -> None:
+    """Mischt eine Roh-Textur mit Alpha ueber die Koerperfarbe in `Base Color`."""
+    alpha_socket = tex.outputs["Alpha"]
+    if texture_strength < 0.999:
+        strength = nodes.new("ShaderNodeMath")
+        strength.operation = "MULTIPLY"
+        strength.location = (-460, 40)
+        strength.inputs[1].default_value = max(0.0, min(1.0, texture_strength))
+        links.new(alpha_socket, strength.inputs[0])
+        alpha_socket = strength.outputs["Value"]
 
-    Roblox-Kleidung ist ein Template-Bild: bedruckte Stellen sind farbig
-    und eher dunkel, unbedruckte (transparente) Stellen hell. Ueber diese
-    Rampe bekommen bedruckte Flaechen ihre Farbe zurueck, weil sie dort
-    weniger durchsichtig/rauer sind.
-    """
-    bw = nodes.new("ShaderNodeRGBToBW")
-    bw.location = (-680, -120)
-    links.new(tex.outputs["Color"], bw.inputs["Color"])
-    ramp = nodes.new("ShaderNodeValToRGB")
-    ramp.location = (-480, -120)
-    ramp.color_ramp.elements[0].position = 0.05
-    ramp.color_ramp.elements[0].color = (low, low, low, 1.0)
-    ramp.color_ramp.elements[1].position = 0.95
-    ramp.color_ramp.elements[1].color = (high, high, high, 1.0)
-    links.new(bw.outputs["Val"], ramp.inputs["Fac"])
-    return ramp
+    mix_color = nodes.new("ShaderNodeMixRGB")
+    mix_color.blend_type = "MIX"
+    mix_color.location = (-280, 220)
+    mix_color.inputs["Color1"].default_value = base_rgba
+    links.new(tex.outputs["Color"], mix_color.inputs["Color2"])
+    links.new(alpha_socket, mix_color.inputs["Fac"])
+    links.new(mix_color.outputs["Color"], bsdf.inputs["Base Color"])
 
 
-def make_glass_material(name: str, base_rgb, tint_rgb, texture_path: str = "",
-                        mono: bool = False, transmission: float = 0.78,
-                        roughness: float = 0.0, metallic: float = 0.2, specular_level: float = 0.8,
-                        tint_strength: float = 0.10,
-                        texture_strength: float = 1.0, ior: float = 1.45,
-                        texture_kind: str = "", decal: bool = True):
-    """Glas-Material mit sichtbarer Textur ("farbiges Dekor auf Glas").
+# ---------------------------------------------------------------------------
+# Material: Exakter Blender-5.0-Glossy-Aufbau (Principled BSDF + Image Texture)
+# ---------------------------------------------------------------------------
 
-    Aufbau (bei vorhandener Textur):
-      * Glas-Koerper: Principled mit Transmission (`transmission`), niedriger
-        Roughness, hohem IOR - die Roblox-Silhouette wirkt wie Glas.
-      * Textur-Ebene: zweiter Principled mit der **echten Texturfarbe**
-        (Alpha 0 = Glas). Sie wird ueber den Textur-Alpha mit dem Glas
-        gemischt - Kleidung/Logos bleiben also voll lesbar, waehrend
-        unbekleidete Stellen (Kopf, Arme ohne Shirt) Glas bleiben.
-      * Klassische Roblox-Kleidung (Shirt/Pants) nutzt nur das passende
-        Feld der Vorlage (`texture_kind`), nicht das ganze 585x559-Bild.
 
-    Vorher: eine einzige Principled-Surface mit Transmission 1.0, Base
-    Color = MULTIPLY aus kraeftigem Hellblau und Textur, Roughness 0.05.
-    Ergebnis: alles grau/dunkelblau, Texturen nicht erkennbar.
+def make_glossy_material(
+    name: str,
+    base_rgb,
+    tint_rgb=(0.92, 0.97, 1.0),
+    texture_path: str = "",
+    mono: bool = False,
+    transmission: float = 0.0,
+    roughness: float = 0.0,
+    metallic: float = 0.2,
+    specular_level: float = 1.0,
+    tint_strength: float = 0.0,
+    texture_strength: float = 1.0,
+    ior: float = 1.5,
+    texture_kind: str = "",
+    decal: bool = True,
+):
+    """Erzeugt das exakte Glossy-Material wie in Blender 5.0:
+
+    * Principled BSDF mit:
+        - Base Color = Image Texture (bzw. Koerper-/Teilfarbe ohne Textur)
+        - Roughness (Rauheit) = 0.0
+        - Metallic = 0.2
+        - Specular IOR Level (IQR/IOR Level) = 1.0
+        - IOR = 1.5, Transmission = 0.0 (Standard Principled BSDF)
     """
     mat = bpy.data.materials.new(name)
-    mat.use_nodes = True
+    _ensure_use_nodes(mat)
     tree = mat.node_tree
     nodes, links = tree.nodes, tree.links
 
     bsdf = nodes.get("Principled BSDF")
-    if bsdf is None:  # pragma: no cover - sehr alte Blender-Version
+    out = nodes.get("Material Output") or nodes.new("ShaderNodeOutputMaterial")
+    if bsdf is None:  # pragma: no cover
         bsdf = nodes.new("ShaderNodeBsdfPrincipled")
-        out = nodes.get("Material Output") or nodes.new("ShaderNodeOutputMaterial")
-        links.new(bsdf.outputs[0], out.inputs[0])
-    bsdf.location = (-120, 260)
-    bsdf.name = "Glas"
+    bsdf.location = (0, 260)
+    out.location = (320, 260)
+
+    # Sicherstellen, dass Principled BSDF direkt am Material Output haengt
+    for link in list(links):
+        if link.to_node is out and link.to_socket.name == "Surface":
+            links.remove(link)
+    links.new(bsdf.outputs[0], out.inputs["Surface"])
 
     base = srgb_to_linear(tup(base_rgb)) if not mono else srgb_to_linear((0.93, 0.97, 1.0))
     tint = srgb_to_linear(tup(tint_rgb))
     tint_mix = 0.0 if mono else max(0.0, min(1.0, tint_strength))
     color = mix(base, tint, tint_mix)
+    base_rgba = (color[0], color[1], color[2], 1.0)
 
-    set_input(bsdf, "Base Color", (color[0], color[1], color[2], 1.0))
-    set_input(bsdf, "Roughness", roughness)  # 0.0 = perfekt glatt wie in Blender
-    set_input(bsdf, "IOR", ior)  # 1.45 fuer staerkeren Glas-Effekt
-    set_input(bsdf, ("Transmission Weight", "Transmission"), transmission)  # 0.78 default
-    set_input(bsdf, ("Specular IOR Level", "Specular"), specular_level)  # 0.8 = IOR Level (User: IQR Level)
-    set_input(bsdf, "Metallic", metallic)  # 0.2 wie in Blender
-    set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.40)
+    set_input(bsdf, "Base Color", base_rgba)
+    set_input(bsdf, "Roughness", max(0.0, min(1.0, roughness)))
+    set_input(bsdf, "Metallic", max(0.0, min(1.0, metallic)))
+    set_input(bsdf, ("Specular IOR Level", "Specular"), max(0.0, min(1.0, specular_level)))
+    set_input(bsdf, "IOR", ior)
+    set_input(bsdf, ("Transmission Weight", "Transmission"), max(0.0, min(1.0, transmission)))
+    set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.0)
     set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.0)
 
+    if transmission > 0.001 and hasattr(mat, "use_raytrace_refraction"):
+        mat.use_raytrace_refraction = True
+
     tex = _load_texture_node(nodes, texture_path)
-    if tex is None or not decal:
+    if tex is None or not decal or mono:
         return mat
+
     if texture_kind:
         _apply_clothing_uv(nodes, links, tex, texture_kind)
 
-    # Textur-Ebene: deckende, glossy Farbe (nicht matt!) damit Texturen
-    # glasig wirken. Roughness = 0.0 (wie Glas), hoher Specular + Coat
-    # für Glanz. Texturen bleiben voll sichtbar, aber nicht matt.
-    surface = nodes.new("ShaderNodeBsdfPrincipled")
-    surface.name = "Textur"
-    surface.location = (-120, -180)
-    set_input(surface, "Base Color", (color[0], color[1], color[2], 1.0))
-    set_input(surface, "Roughness", max(0.0, roughness))  # 0.0 = glossy wie Glas
-    set_input(surface, "Metallic", 0.0)  # Texturen nicht metallisch
-    set_input(surface, "IOR", 1.45)
-    set_input(surface, ("Specular IOR Level", "Specular"), specular_level)  # 0.8 = hoher Glanz
-    set_input(surface, ("Coat Weight", "Clearcoat"), 0.3)  # extra Gloss
-    set_input(surface, ("Coat Roughness", "Clearcoat Roughness"), 0.0)
-
-    if texture_kind in ("composited", "mesh_surface"):
-        links.new(tex.outputs["Color"], surface.inputs["Base Color"])
+    # Komponierte R15-Texturen ('composited') und aufbereitete Mesh-Texturen
+    # ('mesh_surface') enthalten bereits die exakte Haut-/Oberflaechenfarbe im RGB-Kanal:
+    # Image Texture wird 1:1 direkt mit Principled BSDF -> Base Color verbunden.
+    if texture_kind in ("composited", "mesh_surface") and texture_strength >= 0.999:
+        links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
     else:
-        mix_color = nodes.new("ShaderNodeMixRGB")
-        mix_color.blend_type = "MIX"
-        mix_color.location = (-420, -60)
-        mix_color.inputs["Color1"].default_value = (color[0], color[1], color[2], 1.0)
-        links.new(tex.outputs["Color"], mix_color.inputs["Color2"])
-        links.new(tex.outputs["Alpha"], mix_color.inputs["Fac"])
-        links.new(mix_color.outputs["Color"], surface.inputs["Base Color"])
-    set_input(surface, ("Emission Color", "Emission"), (0.0, 0.0, 0.0, 1.0))
+        _connect_mixed_base_color(nodes, links, bsdf, base_rgba, tex, texture_strength)
 
-    # Deckkraft der Textur: Alpha * texture_strength
-    alpha = tex.outputs["Alpha"]
-    if texture_strength < 0.999:
-        strength = nodes.new("ShaderNodeMath")
-        strength.operation = "MULTIPLY"
-        strength.location = (-620, -240)
-        strength.inputs[1].default_value = max(0.0, min(1.0, texture_strength))
-        links.new(alpha, strength.inputs[0])
-        alpha = strength.outputs["Value"]
-
-    mix_shader = nodes.new("ShaderNodeMixShader")
-    mix_shader.location = (220, 80)
-    links.new(alpha, mix_shader.inputs["Fac"])
-    links.new(bsdf.outputs[0], mix_shader.inputs[1])
-    links.new(surface.outputs[0], mix_shader.inputs[2])
-    out = nodes.get("Material Output") or nodes.new("ShaderNodeOutputMaterial")
-    # Bestehende Verbindung zur Ausgabe ersetzen
-    for link in list(links):
-        if link.to_node is out and link.to_socket.name == "Surface":
-            links.remove(link)
-    out.location = (460, 80)
-    links.new(mix_shader.outputs[0], out.inputs["Surface"])
     return mat
 
 
-def tup(v):
-    return (v[0], v[1], v[2])
+def make_glass_material(name: str, base_rgb, tint_rgb, texture_path: str = "",
+                        mono: bool = False, transmission: float = 0.0,
+                        roughness: float = 0.0, metallic: float = 0.2, specular_level: float = 1.0,
+                        tint_strength: float = 0.0,
+                        texture_strength: float = 1.0, ior: float = 1.5,
+                        texture_kind: str = "", decal: bool = True):
+    """Kompatibler Alias fuer `make_glossy_material` (Koerperteile)."""
+    return make_glossy_material(
+        name=name,
+        base_rgb=base_rgb,
+        tint_rgb=tint_rgb,
+        texture_path=texture_path,
+        mono=mono,
+        transmission=transmission,
+        roughness=roughness,
+        metallic=metallic,
+        specular_level=specular_level,
+        tint_strength=tint_strength,
+        texture_strength=texture_strength,
+        ior=ior,
+        texture_kind=texture_kind,
+        decal=decal,
+    )
 
 
 def make_accent_material(name: str, color_rgb, texture_path: str = "",
-                         roughness: float = 0.0, transmission: float = 0.65,
-                         metallic: float = 0.2, specular_level: float = 0.8,
+                         roughness: float = 0.0, transmission: float = 0.0,
+                         metallic: float = 0.2, specular_level: float = 1.0,
+                         ior: float = 1.5,
                          texture_strength: float = 1.0, texture_kind: str = ""):
-    """Material fuer Accessoires (Huete, Badges, ...).
+    """Material fuer Accessoires: identisches Principled-BSDF-Glossy-Setup."""
+    return make_glossy_material(
+        name=name,
+        base_rgb=color_rgb,
+        texture_path=texture_path,
+        mono=False,
+        transmission=transmission,
+        roughness=roughness,
+        metallic=metallic,
+        specular_level=specular_level,
+        tint_strength=0.0,
+        texture_strength=texture_strength,
+        ior=ior,
+        texture_kind=texture_kind,
+        decal=True,
+    )
 
-    GLAENEND GLASIG (nicht matt!) — gleiche Parameter wie make_glass_material.
-    Accessoires sollen wie Glas aussehen, nicht wie mattes Plastik oder Metall.
-    Mit Textur: Textur bleibt sichtbar, aber glossy (Roughness 0.0).
-    """
-    mat = bpy.data.materials.new(name)
-    mat.use_nodes = True
-    tree = mat.node_tree
-    nodes, links = tree.nodes, tree.links
-    bsdf = nodes.get("Principled BSDF")
 
-    c = srgb_to_linear(tup(color_rgb))
-    set_input(bsdf, "Base Color", (c[0], c[1], c[2], 1.0))
-    set_input(bsdf, "Metallic", metallic)
-    set_input(bsdf, "Roughness", roughness)  # 0.0 = glossy
-    set_input(bsdf, "IOR", 1.45)
-    set_input(bsdf, ("Transmission Weight", "Transmission"), transmission)
-    set_input(bsdf, ("Specular IOR Level", "Specular"), specular_level)  # hoher Glanz
-    set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.40)
-    set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.0)
-
-    tex = _load_texture_node(nodes, texture_path)
-    if tex is not None:
-        if texture_kind:
-            _apply_clothing_uv(nodes, links, tex, texture_kind)
-        mix_color = nodes.new("ShaderNodeMixRGB")
-        mix_color.blend_type = "MIX"
-        mix_color.location = (-380, 240)
-        mix_color.inputs["Color1"].default_value = (c[0], c[1], c[2], 1.0)
-        links.new(tex.outputs["Color"], mix_color.inputs["Color2"])
-        alpha = tex.outputs["Alpha"]
-        strength = nodes.new("ShaderNodeMath")
-        strength.operation = "MULTIPLY"
-        strength.location = (-680, 60)
-        strength.inputs[1].default_value = max(0.0, min(1.0, texture_strength))
-        links.new(alpha, strength.inputs[0])
-        links.new(strength.outputs["Value"], mix_color.inputs["Fac"])
-        links.new(mix_color.outputs["Color"], bsdf.inputs["Base Color"])
-        # Texturierte Accessoires: GLOSSY (nicht matt!)
-        # Roughness bleibt 0.0, Texturen sind sichtbar aber glaenzend
-        set_input(bsdf, "Roughness", 0.0)
-        set_input(bsdf, "Metallic", 0.0)  # Texturen nicht metallisch
-        set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.3)
-        set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.0)
-        return mat
-
-    # Ohne Textur: glaenzendes Glas
-    set_input(bsdf, "Metallic", metallic)
-    set_input(bsdf, "Roughness", roughness)
-    return mat
+# ---------------------------------------------------------------------------
+# Geometrie-Import & Shading
+# ---------------------------------------------------------------------------
 
 
 def import_obj(path: str):
-    """Importiert eine OBJ-Datei und gibt die neuen Objekte zurueck."""
+    """Importiert eine OBJ-Datei und gibt die neuen Mesh-Objekte zurueck."""
     before = set(bpy.data.objects)
     if hasattr(bpy.ops.wm, "obj_import"):
         bpy.ops.wm.obj_import(filepath=path, forward_axis="NEGATIVE_Z", up_axis="Y")
@@ -463,7 +469,7 @@ def import_obj(path: str):
 
 
 def join_objects(objects):
-    """Fasst mehrere Mesh-Objekte zu einem zusammen (ohne Operatoren)."""
+    """Fasst mehrere Mesh-Objekte zu einem zusammen."""
     if len(objects) <= 1:
         return objects[0] if objects else None
     base = objects[0]
@@ -476,7 +482,7 @@ def join_objects(objects):
 
 
 def recalc_normals(obj) -> None:
-    """Normale nach aussen neu berechnen (nur fuer geschlossene Koerperteile)."""
+    """Normale nach aussen neu berechnen (nur fuer generierte Quader)."""
     import bmesh
     bm = bmesh.new()
     try:
@@ -505,114 +511,60 @@ def add_bevel(obj, width: float, segments: int = 2) -> None:
         mod.use_clamp_overlap = True
 
 
-def setup_world(color_hex: str, strength: float = 1.3,
-                env_hex: str = "", env_strength: float = 0.55,
-                sunset: bool = True) -> None:
-    """Welt mit Sonnenuntergang-Himmel (prozedural, kein externes HDRI).
+# ---------------------------------------------------------------------------
+# World Properties: Environment Texture (`sunset_jhbcentral_4k.exr`)
+# ---------------------------------------------------------------------------
 
-    Sonnenuntergang = warmer, dunkel-oranger Horizont + tiefblaue Oberseite.
-    Das gibt dem Glas warme Reflexe und dunkle Kontraste — genau der Look,
-    den der User in Blender mit einer HDRI-Umgebungsbeleuchtung erzielt.
 
-    Aufbau (wenn sunset=True):
-      * TextureCoordinate (Normal) -> Mapping (90° um X) -> ColorRamp
-        (tiefblau oben -> orange-gelb am Horizont -> warm-rot unten)
-      * Kamera-Strahlen sehen die Hintergrundfarbe (color_hex) als Basis
-      * Alle anderen Strahlen (Reflexionen) sehen den Sonnenuntergang
+def setup_world(
+    env_texture_path: str = DEFAULT_ENV_TEXTURE,
+    env_strength: float = 1.0,
+    fallback_color_hex: str = "#eaf1f8",
+) -> str:
+    """Richtet World Properties exakt wie in Blender 5.0 mit Environment Texture ein:
 
-    Ohne sunset: alte Logik mit Hintergrund + getrennter Umgebungsfarbe.
+    `Environment Texture (sunset_jhbcentral_4k.exr)` -> `Background` -> `World Output`
+    Sichtbar im Hintergrund, beleuchtet die Szene und erzeugt die scharfen
+    Glossy-Spiegelungen auf allen Avatar-Teilen.
     """
-    world = bpy.data.worlds.new("World")
-    bpy.context.scene.world = world
-    world.use_nodes = True
+    scene = bpy.context.scene
+    world = scene.world
+    if world is None:
+        world = bpy.data.worlds.new("World")
+        scene.world = world
+    _ensure_use_nodes(world)
+
     tree = world.node_tree
     nodes, links = tree.nodes, tree.links
-    output = nodes.get("World Output") or nodes.new("ShaderNodeOutputWorld")
-    bg = nodes.get("Background")
+    nodes.clear()
 
-    if not sunset:
-        # Alte Logik: einfache Hintergrundfarbe
-        backdrop = srgb_to_linear(hex_to_rgb(color_hex))
-        if bg:
-            bg.inputs["Color"].default_value = (backdrop[0], backdrop[1], backdrop[2], 1.0)
-            bg.inputs["Strength"].default_value = strength
-        if env_hex:
-            env = srgb_to_linear(hex_to_rgb(env_hex))
-            light_path = nodes.new("ShaderNodeLightPath")
-            light_path.location = (-620, 320)
-            mixn = nodes.new("ShaderNodeMixRGB")
-            mixn.blend_type = "MIX"
-            mixn.location = (-360, 240)
-            mixn.inputs["Color1"].default_value = (env[0], env[1], env[2], 1.0)
-            mixn.inputs["Color2"].default_value = (backdrop[0], backdrop[1], backdrop[2], 1.0)
-            links.new(light_path.outputs["Is Camera Ray"], mixn.inputs["Fac"])
-            env_bg = nodes.new("ShaderNodeBackground")
-            env_bg.location = (-80, 240)
-            env_bg.inputs["Strength"].default_value = env_strength
-            links.new(mixn.outputs["Color"], env_bg.inputs["Color"])
-            links.new(env_bg.outputs["Background"], output.inputs["Surface"])
-        return
+    output = nodes.new("ShaderNodeOutputWorld")
+    output.location = (300, 300)
 
-    # --- Sonnenuntergang (subtil, färbt Avatar NICHT braun) ---
-    # Den alten flachen Background-Node entfernen
-    if bg:
-        nodes.remove(bg)
+    bg = nodes.new("ShaderNodeBackground")
+    bg.location = (60, 300)
+    bg.inputs["Strength"].default_value = env_strength
+    links.new(bg.outputs["Background"], output.inputs["Surface"])
 
-    # TextureCoordinate (Normal) - gibt Blickrichtung als Koordinaten
-    tex_coord = nodes.new("ShaderNodeTexCoord")
-    tex_coord.location = (-1100, 200)
+    resolved_exr = resolve_env_texture(env_texture_path)
+    if resolved_exr:
+        env_tex = nodes.new("ShaderNodeTexEnvironment")
+        env_tex.location = (-260, 300)
+        img = bpy.data.images.load(resolved_exr, check_existing=True)
+        env_tex.image = img
+        links.new(env_tex.outputs["Color"], bg.inputs["Color"])
+        log(f"World Environment Texture: {resolved_exr} (Strength {env_strength:.2f})")
+        return resolved_exr
 
-    # Mapping: dreht die Koordinaten, damit der Gradient vertikal laeuft
-    mapping = nodes.new("ShaderNodeMapping")
-    mapping.location = (-860, 200)
-    mapping.vector_type = "POINT"
-    mapping.inputs["Rotation"].default_value = (0.0, 0.0, 0.0)
+    backdrop = srgb_to_linear(hex_to_rgb(fallback_color_hex))
+    bg.inputs["Color"].default_value = (backdrop[0], backdrop[1], backdrop[2], 1.0)
+    log(f"WARNUNG: Environment Texture '{env_texture_path}' nicht gefunden - Fallback-Farbe aktiv.")
+    return ""
 
-    # Separation: Y-Koordinate aus der Normal-Richtung extrahieren
-    separate = nodes.new("ShaderNodeSeparateXYZ")
-    separate.location = (-620, 200)
 
-    links.new(tex_coord.outputs["Normal"], mapping.inputs["Vector"])
-    links.new(mapping.outputs["Vector"], separate.inputs["Vector"])
-
-    # ColorRamp: Abendhimmel - Blau/Lila, NICHT orange (sonst wird Avatar braun)
-    # Nur als REFLEXION auf Glas sichtbar, nicht als Beleuchtung
-    color_ramp = nodes.new("ShaderNodeValToRGB")
-    color_ramp.location = (-400, 200)
-    # Stop 0: unten = dunkelblau/violett (Y=0 → Horizont)
-    color_ramp.color_ramp.elements[0].position = 0.0
-    color_ramp.color_ramp.elements[0].color = srgb_to_linear((0.08, 0.05, 0.15, 1.0))  # dunkelviolett
-    # Stop 1: oben = tiefblau
-    color_ramp.color_ramp.elements[1].position = 1.0
-    color_ramp.color_ramp.elements[1].color = srgb_to_linear((0.05, 0.10, 0.30, 1.0))  # tiefblau oben
-    # Subtiler warmer Akzent am Horizont (nicht zu orange!)
-    mid1 = color_ramp.color_ramp.elements.new(0.45)
-    mid1.color = srgb_to_linear((0.25, 0.15, 0.20, 1.0))  # dezent warm am Horizont
-
-    links.new(separate.outputs["Y"], color_ramp.inputs["Fac"])
-
-    # Hintergrund-Shader: Sonnenuntergang NUR für Reflexionen, schwach
-    sunset_bg = nodes.new("ShaderNodeBackground")
-    sunset_bg.location = (-140, 200)
-    sunset_bg.inputs["Strength"].default_value = strength * 0.5  # schwach, färbt nicht
-    links.new(color_ramp.outputs["Color"], sunset_bg.inputs["Color"])
-
-    # Kamera-Strahlen: neutraler heller Hintergrund (color_hex) - Avatar wird NICHT gefärbt
-    backdrop = srgb_to_linear(hex_to_rgb(color_hex))
-    cam_bg = nodes.new("ShaderNodeBackground")
-    cam_bg.location = (-140, -60)
-    cam_bg.inputs["Color"].default_value = (backdrop[0], backdrop[1], backdrop[2], 1.0)
-    cam_bg.inputs["Strength"].default_value = strength * 1.1
-
-    # Mix: Kamera-Strahlen sehen den hellen Hintergrund, alles andere den Sonnenuntergang
-    light_path = nodes.new("ShaderNodeLightPath")
-    light_path.location = (-520, -100)
-    mix_shader = nodes.new("ShaderNodeMixShader")
-    mix_shader.location = (120, 80)
-    links.new(light_path.outputs["Is Camera Ray"], mix_shader.inputs["Fac"])
-    links.new(sunset_bg.outputs["Background"], mix_shader.inputs[1])
-    links.new(cam_bg.outputs["Background"], mix_shader.inputs[2])
-    links.new(mix_shader.outputs["Shader"], output.inputs["Surface"])
+# ---------------------------------------------------------------------------
+# Optionale Szene-Helfer & Kamera
+# ---------------------------------------------------------------------------
 
 
 def add_area_light(name: str, location, energy: float, size: float, color=(1, 1, 1),
@@ -637,7 +589,7 @@ def add_floor(radius: float, z: float = 0.0):
     if hasattr(floor, "is_shadow_catcher"):
         floor.is_shadow_catcher = True
     mat = bpy.data.materials.new("Boden-Material")
-    mat.use_nodes = True
+    _ensure_use_nodes(mat)
     bsdf = mat.node_tree.nodes.get("Principled BSDF")
     set_input(bsdf, "Base Color", (0.88, 0.90, 0.94, 1.0))
     set_input(bsdf, "Roughness", 0.35)
@@ -676,62 +628,131 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int):
     # dreht Roblox -Z (Vorne) auf Blender +Y!
     direction = Vector((-0.52, 1.0, 0.24)).normalized()
 
-    # Abstand so waehlen, dass das Modell das Bild gut fuellt
-    h_fov = cam_data.angle
-    v_fov = 2 * math.atan(math.tan(h_fov / 2) * (res_y / res_x))
-    half_h = size.z / 2.0
-    # projizierte Breite in Blickrichtung (X und Y tragen beide bei)
-    half_w = 0.5 * (size.x * 0.85 + size.y * 0.55)
-    dist_v = half_h / math.tan(v_fov / 2.0)
-    dist_h = half_w / math.tan(h_fov / 2.0)
-    distance = max(dist_v, dist_h, radius) * 1.12
+    # Exakte Perspektiv-Einpassung aller 8 BBox-Ecken fuer beliebige Seitenverhaeltnisse
+    # (inkl. 2000x2000 Quadrat), damit weder Hoerner/Kronen oben noch Schuhe unten
+    # angeschnitten werden.
+    base_fov = cam_data.angle
+    if res_x >= res_y:
+        h_fov = base_fov
+        v_fov = 2.0 * math.atan(math.tan(h_fov / 2.0) * (res_y / res_x))
+    else:
+        v_fov = base_fov
+        h_fov = 2.0 * math.atan(math.tan(v_fov / 2.0) * (res_x / res_y))
+
+    fill = 0.86
+    tan_h = max(1e-4, math.tan(h_fov / 2.0) * fill)
+    tan_v = max(1e-4, math.tan(v_fov / 2.0) * fill)
+
+    forward = -direction
+    world_up = Vector((0.0, 0.0, 1.0))
+    right = forward.cross(world_up).normalized()
+    up = right.cross(forward).normalized()
+
+    distance = radius
+    for x in (lo.x, hi.x):
+        for y in (lo.y, hi.y):
+            for z in (lo.z, hi.z):
+                offset = Vector((x, y, z)) - center
+                zf = offset.dot(forward)
+                xr = abs(offset.dot(right))
+                yu = abs(offset.dot(up))
+                distance = max(distance, xr / tan_h - zf, yu / tan_v - zf)
+
     cam.location = center + direction * distance
     cam.rotation_euler = (center - cam.location).to_track_quat("-Z", "Y").to_euler()
     return cam, center, radius
 
 
-def setup_render(scene, res_x: int, res_y: int, samples: int, max_bounces: int,
-                 denoise: bool) -> None:
-    scene.render.engine = "CYCLES"
-    scene.cycles.device = "CPU"
-    scene.cycles.samples = samples
-    scene.cycles.preview_samples = min(16, samples)
-    scene.cycles.use_adaptive_sampling = True
-    scene.cycles.adaptive_threshold = 0.02
-    scene.cycles.use_denoising = denoise
-    if denoise:
-        try:
-            scene.cycles.denoiser = "OPENIMAGEDENOISE"
-        except TypeError:  # pragma: no cover
-            pass
-    scene.cycles.max_bounces = max_bounces
-    scene.cycles.diffuse_bounces = 3
-    scene.cycles.glossy_bounces = 4
-    scene.cycles.transmission_bounces = max(4, max_bounces)
-    scene.cycles.transparent_max_bounces = max(4, max_bounces)
-    scene.cycles.volume_bounces = 1
-    # Kaustik kostet auf der CPU viel Zeit und bringt bei diesem Look kaum etwas
-    if hasattr(scene.cycles, "caustics_reflective"):
-        scene.cycles.caustics_reflective = False
-        scene.cycles.caustics_refractive = False
-    scene.cycles.blur_glossy = 1.0
-    scene.render.use_persistent_data = True
+# ---------------------------------------------------------------------------
+# Render-Einstellungen (EEVEE Default in Blender 5.0, optional Cycles)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_eevee_engine_id(scene) -> str:
+    """Gibt 'BLENDER_EEVEE' (Blender 5.0) bzw. 'BLENDER_EEVEE_NEXT' (Blender 4.2) zurueck."""
+    try:
+        valid = {
+            item.identifier
+            for item in scene.render.bl_rna.properties["engine"].enum_items
+        }
+    except Exception:  # pragma: no cover
+        valid = {"BLENDER_EEVEE"}
+    if "BLENDER_EEVEE" in valid:
+        return "BLENDER_EEVEE"
+    if "BLENDER_EEVEE_NEXT" in valid:
+        return "BLENDER_EEVEE_NEXT"
+    return "BLENDER_EEVEE"
+
+
+def setup_render(
+    scene,
+    res_x: int,
+    res_y: int,
+    samples: int,
+    engine: str = "eevee",
+    max_bounces: int = 6,
+    denoise: bool = True,
+    transparent: bool = False,
+) -> str:
+    if (engine or "eevee").lower() == "cycles":
+        scene.render.engine = "CYCLES"
+        scene.cycles.device = "CPU"
+        scene.cycles.samples = samples
+        scene.cycles.preview_samples = min(16, samples)
+        scene.cycles.use_adaptive_sampling = True
+        scene.cycles.adaptive_threshold = 0.02
+        scene.cycles.use_denoising = denoise
+        if denoise:
+            try:
+                scene.cycles.denoiser = "OPENIMAGEDENOISE"
+            except TypeError:  # pragma: no cover
+                pass
+        scene.cycles.max_bounces = max_bounces
+        scene.cycles.diffuse_bounces = 3
+        scene.cycles.glossy_bounces = 4
+        scene.cycles.transmission_bounces = max(4, max_bounces)
+        scene.cycles.transparent_max_bounces = max(4, max_bounces)
+        scene.cycles.volume_bounces = 1
+        if hasattr(scene.cycles, "caustics_reflective"):
+            scene.cycles.caustics_reflective = False
+            scene.cycles.caustics_refractive = False
+    else:
+        eevee_id = _resolve_eevee_engine_id(scene)
+        scene.render.engine = eevee_id
+        eevee = scene.eevee
+        if hasattr(eevee, "taa_render_samples"):
+            eevee.taa_render_samples = samples
+        if hasattr(eevee, "taa_samples"):
+            eevee.taa_samples = min(16, samples)
+        if hasattr(eevee, "use_shadows"):
+            eevee.use_shadows = True
+        if hasattr(eevee, "use_raytracing"):
+            eevee.use_raytracing = True
 
     scene.render.resolution_x = res_x
     scene.render.resolution_y = res_y
     scene.render.resolution_percentage = 100
     scene.render.image_settings.file_format = "PNG"
     scene.render.image_settings.color_mode = "RGBA"
-    scene.render.film_transparent = False
+    scene.render.film_transparent = bool(transparent)
 
     try:
+        scene.display_settings.display_device = "sRGB"
+    except (TypeError, AttributeError):
+        pass
+    try:
         scene.view_settings.view_transform = "AgX"
-        scene.view_settings.look = "AgX - Medium High Contrast"
     except (TypeError, AttributeError):
         try:
             scene.view_settings.view_transform = "Filmic"
         except (TypeError, AttributeError):
             pass
+    try:
+        scene.view_settings.look = "None"
+    except (TypeError, AttributeError):
+        pass
+
+    return scene.render.engine
 
 
 # ---------------------------------------------------------------------------
@@ -754,23 +775,35 @@ def main() -> int:
 
     reset_scene()
     scene = bpy.context.scene
-    setup_world(args.background, env_hex=args.env_color,
-                env_strength=args.env_strength, sunset=True)
-    setup_render(scene, res_x, res_y, args.samples, args.max_bounces, args.denoise)
+    active_engine = setup_render(
+        scene,
+        res_x=res_x,
+        res_y=res_y,
+        samples=args.samples,
+        engine=args.engine,
+        max_bounces=args.max_bounces,
+        denoise=args.denoise,
+        transparent=args.transparent,
+    )
+    loaded_exr = setup_world(
+        env_texture_path=args.env_texture,
+        env_strength=args.env_strength,
+        fallback_color_hex=args.background,
+    )
 
-    glass_tint = srgb_to_linear(hex_to_rgb(args.glass_tint))
+    glass_tint = hex_to_rgb(args.glass_tint)
     metal_tint = hex_to_rgb(args.metal_tint)
 
     log(f"Manifest: {args.manifest} ({len(manifest.get('parts', []))} Teile), "
-        f"{res_x}x{res_y}, {args.samples} Samples, Cycles CPU")
-    log(f"Material: Transmission {args.transmission:.2f}, Roughness "
-        f"{args.roughness:.2f}, Metallic {args.metallic:.2f}, Specular-Level {args.specular_level:.2f}, "
-        f"IOR {args.ior:.2f}, Tint {args.tint_strength:.2f}, "
-        f"Textur {args.texture_strength:.2f}, Sonnenuntergang-Env")
+        f"{res_x}x{res_y}, {args.samples} Samples, Engine {active_engine} "
+        f"(Blender {bpy.app.version_string})")
+    log(f"Material: Principled BSDF | Roughness={args.roughness:.2f}, "
+        f"Metallic={args.metallic:.2f}, Specular IOR Level={args.specular_level:.2f}, "
+        f"IOR={args.ior:.2f}, Transmission={args.transmission:.2f} | "
+        f"World EXR={'aktiv' if loaded_exr else 'Fallback'}")
 
     imported = []
     material_cache = {}
-    # grobe Modellgroesse fuer proportionsabhaengige Effekte
     height_hint = float(manifest.get("metrics", {}).get("height") or 5.5)
     for part in manifest.get("parts", []):
         obj_path = os.path.join(base_dir, part.get("obj", ""))
@@ -797,39 +830,51 @@ def main() -> int:
             candidate = os.path.join(base_dir, part["texture"])
             texture = candidate if os.path.exists(candidate) else ""
 
+        texture_kind = part.get("texture_kind") or ""
         if part.get("kind") == "accessory" and not args.mono_glass:
-            # Accessoires GLAENZEND GLASIG wie die Koerperteile (nicht matt!)
-            texture_kind = part.get("texture_kind") or ""
-            key = ("accent", texture, tuple(round(c, 3) for c in color),
+            base_col = color if texture else metal_tint
+            key = ("accent", texture, tuple(round(c, 3) for c in base_col),
+                   args.roughness, args.metallic, args.specular_level,
+                   args.transmission, args.ior, args.texture_strength,
                    texture_kind)
             mat = material_cache.get(key)
             if mat is None:
                 mat = make_accent_material(
-                    f"Akzent {part.get('name')}",
-                    color if texture else metal_tint,
-                    texture, roughness=args.roughness,
-                    transmission=args.transmission * 0.85,  # etwas weniger Transmission fuer Accessoires
+                    f"Glossy {part.get('name')}",
+                    base_col,
+                    texture_path=texture,
+                    roughness=args.roughness,
+                    transmission=args.transmission,
                     metallic=args.metallic,
                     specular_level=args.specular_level,
+                    ior=args.ior,
                     texture_strength=args.texture_strength,
-                    texture_kind=texture_kind)
+                    texture_kind=texture_kind,
+                )
                 material_cache[key] = mat
         else:
-            texture_kind = part.get("texture_kind") or ""
-            key = ("glass", tuple(round(c, 3) for c in color), texture,
-                   args.mono_glass, args.transmission, args.roughness, args.metallic,
-                   args.specular_level, args.tint_strength, args.texture_strength,
-                   texture_kind)
+            key = ("glossy", tuple(round(c, 3) for c in color), texture,
+                   args.mono_glass, args.transmission, args.roughness,
+                   args.metallic, args.specular_level, args.tint_strength,
+                   args.texture_strength, args.ior, texture_kind)
             mat = material_cache.get(key)
             if mat is None:
                 mat = make_glass_material(
-                    f"Glas {part.get('name')}", color, glass_tint, texture,
-                    args.mono_glass, transmission=args.transmission,
-                    roughness=args.roughness, metallic=args.metallic,
+                    f"Glossy {part.get('name')}",
+                    color,
+                    glass_tint,
+                    texture_path=texture,
+                    mono=args.mono_glass,
+                    transmission=args.transmission,
+                    roughness=args.roughness,
+                    metallic=args.metallic,
                     specular_level=args.specular_level,
                     tint_strength=args.tint_strength,
-                    texture_strength=args.texture_strength, ior=args.ior,
-                    texture_kind=texture_kind, decal=not args.mono_glass)
+                    texture_strength=args.texture_strength,
+                    ior=args.ior,
+                    texture_kind=texture_kind,
+                    decal=not args.mono_glass,
+                )
                 material_cache[key] = mat
 
         obj.data.materials.clear()
@@ -862,17 +907,17 @@ def main() -> int:
     height = max(hi.z - lo.z, 0.5)
     cam, center, radius = setup_camera(lo, hi, res_x, res_y)
 
-    # Studio-Dreipunktlicht - NEUTRAL damit Avatar nicht braun gefärbt wird.
-    # Sonnenuntergang ist nur in Reflexionen sichtbar, nicht als Beleuchtung.
-    s = height / 5.5
-    key = add_area_light("Key", (center.x - 5.5 * s, center.y + 6.5 * s, center.z + 7.0 * s),
-                         energy=350 * s * s, size=5.0 * s, color=(1.0, 0.98, 0.95), target=center)  # neutral warm
-    fill = add_area_light("Fill", (center.x + 6.5 * s, center.y + 5.0 * s, center.z + 3.0 * s),
-                          energy=180 * s * s, size=6.0 * s, color=(0.95, 0.97, 1.0), target=center)  # neutral cool
-    rim = add_area_light("Rim", (center.x + 2.0 * s, center.y - 7.5 * s, center.z + 6.0 * s),
-                         energy=250 * s * s, size=4.0 * s, color=(0.98, 0.95, 1.0), target=center)  # neutral
+    # Standardmaessig reine Beleuchtung & Spiegelungen ueber sunset_jhbcentral_4k.exr
+    if args.studio_lights:
+        s = height / 5.5
+        add_area_light("Key", (center.x - 5.5 * s, center.y + 6.5 * s, center.z + 7.0 * s),
+                       energy=350 * s * s, size=5.0 * s, color=(1.0, 0.98, 0.95), target=center)
+        add_area_light("Fill", (center.x + 6.5 * s, center.y + 5.0 * s, center.z + 3.0 * s),
+                       energy=180 * s * s, size=6.0 * s, color=(0.95, 0.97, 1.0), target=center)
+        add_area_light("Rim", (center.x + 2.0 * s, center.y - 7.5 * s, center.z + 6.0 * s),
+                       energy=250 * s * s, size=4.0 * s, color=(0.98, 0.95, 1.0), target=center)
 
-    if not args.no_floor:
+    if args.with_floor:
         add_floor(radius, z=lo.z)
 
     scene.render.filepath = os.path.abspath(args.out)
@@ -887,7 +932,7 @@ def main() -> int:
         bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(args.save_blend))
         log(f"Blend-Datei gespeichert: {args.save_blend}")
 
-    _ = (key, fill, rim, cam)
+    _ = cam
     return 0
 
 
@@ -899,6 +944,5 @@ if __name__ == "__main__":
         traceback.print_exc()
         log(f"FEHLER: {exc}")
         code = 1
-    # Bei `blender --python` beendet sich Blender nicht automatisch mit dem Code
     if code:
         sys.exit(code)
