@@ -483,23 +483,66 @@ def test_kein_multiply_von_grellem_blau_ueber_die_textur():
 # Bildausschnitt (Configs.toml) und Hintergrundflaeche
 # ---------------------------------------------------------------------------
 
-def test_bildausschnitt_haelt_die_prozentwerte_exakt_ein(render):
-    framing = render.compute_vertical_framing(0.0, 5.0, 6.0, 6.0)
-    # 5 Studs Avatar + je 6 % Rand -> 5 / 0.88
-    assert framing["visible_h"] == pytest.approx(5.0 / 0.88)
-    # Oberkante des Kopfes liegt exakt 6 % unter der Bildoberkante.
-    head_margin = framing["z_top"] - 5.0
-    assert head_margin / framing["visible_h"] == pytest.approx(0.06)
-    # Unterkante der Fuesse liegt exakt 6 % ueber der Bildunterkante.
-    foot_margin = 0.0 - framing["z_bottom"]
-    assert foot_margin / framing["visible_h"] == pytest.approx(0.06)
+FOV_TAN = 18.0 / 55.0   # 36-mm-Sensor, 55-mm-Objektiv, quadratisches Bild
+
+
+def _framing(render, lo, hi, top=6.0, bottom=6.0, head=None, feet=None, yaw=0.0):
+    return render.compute_camera_placement(
+        lo, hi, FOV_TAN, FOV_TAN, yaw_deg=yaw, top_percent=top,
+        bottom_percent=bottom,
+        head_z=hi[2] if head is None else head,
+        feet_z=lo[2] if feet is None else feet)
+
+
+def _ndc(render, placement, point, yaw=0.0):
+    _, forward, right, up = render.camera_basis(yaw)
+    return render.project_ndc(point, placement["cam_location"], forward, right,
+                              up, FOV_TAN, FOV_TAN)
+
+
+def test_prozentwerte_werden_perspektivisch_exakt_eingehalten(render):
+    lo, hi = (-1.0, -0.5, 0.0), (1.0, 0.5, 5.0)
+    framing = _framing(render, lo, hi, 6.0, 6.0)
+    assert framing["kopf_prozent"] == pytest.approx(6.0, abs=0.05)
+    assert framing["fuss_prozent"] == pytest.approx(6.0, abs=0.05)
+
+    # Auch der vorderste (kameranaechste) Fuss-Punkt bleibt im Bild - genau
+    # dieser Punkt wurde vorher unten abgeschnitten.
+    vorderer_fuss = _ndc(render, framing, (0.0, hi[1], lo[2]))
+    assert vorderer_fuss[1] == pytest.approx(-0.88, abs=0.01)
+    hinterer_fuss = _ndc(render, framing, (0.0, lo[1], lo[2]))
+    assert hinterer_fuss[1] > -1.0
 
 
 def test_negativer_unterer_rand_schneidet_das_bild_an(render):
-    framing = render.compute_vertical_framing(0.0, 5.0, 6.0, -40.0)
-    # Die Fuesse liegen jetzt 40 % der Bildhoehe *unterhalb* des Bildrands.
-    assert framing["z_bottom"] > 0.0
-    assert (0.0 - framing["z_bottom"]) / framing["visible_h"] == pytest.approx(-0.40)
+    framing = _framing(render, (-1.0, -0.5, 0.0), (1.0, 0.5, 5.0), 6.0, -40.0)
+    # Fuesse liegen 40 % der Bildhoehe unterhalb des unteren Rands.
+    assert framing["fuss_prozent"] == pytest.approx(-40.0, abs=0.05)
+    assert _ndc(render, framing, (0.0, 0.5, 0.0))[1] < -1.0
+    # Der Kopf bleibt wie eingestellt im Bild.
+    assert framing["kopf_prozent"] == pytest.approx(6.0, abs=0.05)
+
+
+def test_kopfoberkante_ohne_accessoire_ist_der_bezugspunkt(render):
+    # Kopfreal bis 4.09, Halo bis 6.7: bei positiven Raendern wird so weit
+    # aufgezogen, dass der Halo komplett drin ist - die Fuesse bleiben exakt.
+    lo, hi = (-1.8, -0.8, 0.0), (2.2, 0.9, 6.7)
+    framing = _framing(render, lo, hi, 6.0, 6.0, head=4.09, feet=0.0)
+    assert framing["aufgezogen"] is True
+    # Bild wird nur so weit aufgezogen wie noetig: Raender wachsen, das
+    # Accessoire ist komplett im Bild, der Avatar wird nicht winzig.
+    assert framing["kopf_prozent"] > 6.0
+    assert framing["fuss_prozent"] > 6.0
+    assert framing["distance"] < 2.0 * _framing(render, lo, hi, head=4.09)["distance"] * 1.05
+    assert _ndc(render, framing, (0.0, hi[1], hi[2]))[1] <= 1.0 + 1e-6
+
+
+def test_ohne_ueberstehende_accessoires_bleiben_die_prozente_exakt(render):
+    framing = _framing(render, (-1.0, -0.5, 0.0), (1.0, 0.5, 5.02),
+                       head=5.0, feet=0.0)
+    assert framing["aufgezogen"] is False
+    assert framing["kopf_prozent"] == pytest.approx(6.0, abs=0.1)
+    assert framing["fuss_prozent"] == pytest.approx(6.0, abs=0.1)
 
 
 def test_kamera_drehung_0_ist_frontal_und_90_rechts(render):
@@ -558,37 +601,11 @@ def test_hintergrund_material_ist_matt_oder_glossy_wie_der_avatar(render, tmp_pa
     assert "ShaderNodeTexImage" in node_types
 
 
-def test_accessoire_ueber_dem_kopf_wird_nicht_abgeschnitten(render):
-    # Headless-Avatar (Kopf geschaetzt bei 4.2), Halo-Accessoire bis 5.6
-    framing = render.compute_vertical_framing(
-        0.0, 4.2, 6.0, 6.0, content_hi=5.6, content_lo=0.0)
-    assert framing["angepasst"] is True
-    # Der Halo liegt komplett im Bild ...
-    assert framing["z_top"] > 5.6
-    assert framing["z_bottom"] < 0.0
-    # ... und der Avatar wird dabei nicht winzig (Bild bleibt < 2x Avatar).
-    assert framing["visible_h"] < 2.0 * 5.6
-    # Der Kopf sitzt dann tiefer als 6 % - das steht auch im Log.
-    assert framing["kopf_abstand_prozent"] > 6.0
-
-
-def test_ohne_ueberstehende_accessoires_bleiben_die_prozente_exakt(render):
-    framing = render.compute_vertical_framing(
-        0.0, 5.0, 6.0, 6.0, content_hi=5.02, content_lo=0.0)
-    assert framing["angepasst"] is False
-    assert framing["kopf_abstand_prozent"] == pytest.approx(6.0)
-    assert framing["fuss_abstand_prozent"] == pytest.approx(6.0)
-
-
 def test_negative_raender_schneiden_bewusst_an(render):
-    oben = render.compute_vertical_framing(
-        0.0, 5.0, -10.0, 6.0, content_hi=6.5, content_lo=0.0)
-    assert oben["angepasst"] is False
-    assert oben["kopf_abstand_prozent"] == pytest.approx(-10.0)
+    oben = _framing(render, (-1.0, -0.5, 0.0), (1.0, 0.5, 5.0), -10.0, 6.0)
+    assert oben["aufgezogen"] is False
+    assert oben["kopf_prozent"] == pytest.approx(-10.0, abs=0.05)
 
-    unten = render.compute_vertical_framing(
-        0.0, 5.0, 6.0, -40.0, content_hi=5.0, content_lo=0.0)
-    assert unten["angepasst"] is False
-    assert unten["fuss_abstand_prozent"] == pytest.approx(-40.0)
-    # Nur der obere Teil des Avatars ist im Bild (Torso-Ausschnitt).
-    assert unten["z_bottom"] > 0.0
+    unten = _framing(render, (-1.0, -0.5, 0.0), (1.0, 0.5, 5.0), 6.0, -40.0)
+    assert unten["aufgezogen"] is False
+    assert unten["fuss_prozent"] == pytest.approx(-40.0, abs=0.05)

@@ -295,20 +295,6 @@ jobs:
           test -s render_avatar.png || { echo "::error::render_avatar.png wurde nicht erzeugt."; exit 1; }
           ls -lh render_avatar.png
 
-      - name: 6b) TEMPORAER Diagnose in Annotations (Framing)
-        if: always()
-        run: |
-          set +e
-          grep -hE "Kamera:|Kopfoberkante|Hinweis:|Bildausschnitt" build/logs/blender.log \
-            | sed 's/^/::notice::/' || true
-          python3 - <<'PY2' | sed 's/^/::notice::/' || true
-          import json
-          m = json.load(open("build/manifest.json"))
-          print("metrics:", json.dumps(m.get("metrics"))[:400])
-          print("bbox:", json.dumps(m.get("bbox")))
-          print("render:", json.dumps(m.get("render"))[:400])
-          PY2
-
       - name: 7) Ergebnis als Artifact hochladen
         uses: actions/upload-artifact@v4
         with:
@@ -400,7 +386,7 @@ jobs:
           fi
 
       - name: 12) Debug-Daten hochladen (nur bei Problemen oder mit debug=true)
-        if: always()   # TEMPORAER: Diagnose eines Framing-Problems
+        if: failure() || github.event.inputs.debug == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: render-debug
