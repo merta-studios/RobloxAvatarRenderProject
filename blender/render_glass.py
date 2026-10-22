@@ -54,8 +54,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ior", type=float, default=1.35,
                         help="Brechungsindex (nahe 1.0 = kaum Verzerrung, "
                              "1.45 = starkes Glas)")
-    parser.add_argument("--roughness", type=float, default=0.05,
-                        help="Grund-Rauheit des Glases (Default 0.18)")
+    parser.add_argument("--roughness", type=float, default=0.0,
+                        help="Grund-Rauheit des Glases (Default 0.0 - perfekt glatt, wie in Blender)")
+    parser.add_argument("--metallic", type=float, default=0.2,
+                        help="Metallness des Glases (Default 0.2 - wie in Blender eingestellt)")
     parser.add_argument("--tint-strength", type=float, default=0.10,
                         help="Wie stark das Glas-Blau eingefaerbt wird (0 = keine "
                              "Verfaerbung, 1 = alles blau)")
@@ -282,7 +284,8 @@ def _texture_detail_nodes(nodes, links, tex, low: float, high: float):
 
 def make_glass_material(name: str, base_rgb, tint_rgb, texture_path: str = "",
                         mono: bool = False, transmission: float = 0.65,
-                        roughness: float = 0.05, tint_strength: float = 0.10,
+                        roughness: float = 0.0, metallic: float = 0.2,
+                        tint_strength: float = 0.10,
                         texture_strength: float = 1.0, ior: float = 1.35,
                         texture_kind: str = "", decal: bool = True):
     """Glas-Material mit sichtbarer Textur ("farbiges Dekor auf Glas").
@@ -324,7 +327,7 @@ def make_glass_material(name: str, base_rgb, tint_rgb, texture_path: str = "",
     set_input(bsdf, "IOR", ior)
     set_input(bsdf, ("Transmission Weight", "Transmission"), transmission)
     set_input(bsdf, ("Specular IOR Level", "Specular"), 0.5)
-    set_input(bsdf, "Metallic", 0.0)
+    set_input(bsdf, "Metallic", metallic)
     set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.25)
     set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.03)
 
@@ -691,7 +694,7 @@ def main() -> int:
     log(f"Manifest: {args.manifest} ({len(manifest.get('parts', []))} Teile), "
         f"{res_x}x{res_y}, {args.samples} Samples, Cycles CPU")
     log(f"Material: Transmission {args.transmission:.2f}, Roughness "
-        f"{args.roughness:.2f}, IOR {args.ior:.2f}, Tint {args.tint_strength:.2f}, "
+        f"{args.roughness:.2f}, Metallic {args.metallic:.2f}, IOR {args.ior:.2f}, Tint {args.tint_strength:.2f}, "
         f"Textur {args.texture_strength:.2f}")
 
     imported = []
@@ -742,14 +745,15 @@ def main() -> int:
         else:
             texture_kind = part.get("texture_kind") or ""
             key = ("glass", tuple(round(c, 3) for c in color), texture,
-                   args.mono_glass, args.transmission, args.roughness,
+                   args.mono_glass, args.transmission, args.roughness, args.metallic,
                    args.tint_strength, args.texture_strength, texture_kind)
             mat = material_cache.get(key)
             if mat is None:
                 mat = make_glass_material(
                     f"Glas {part.get('name')}", color, glass_tint, texture,
                     args.mono_glass, transmission=args.transmission,
-                    roughness=args.roughness, tint_strength=args.tint_strength,
+                    roughness=args.roughness, metallic=args.metallic,
+                    tint_strength=args.tint_strength,
                     texture_strength=args.texture_strength, ior=args.ior,
                     texture_kind=texture_kind, decal=not args.mono_glass)
                 material_cache[key] = mat
