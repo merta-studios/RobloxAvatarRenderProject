@@ -48,16 +48,18 @@ def parse_args() -> argparse.Namespace:
                         help="Breite x Hoehe, z. B. 1280x720 oder 960x540")
     parser.add_argument("--samples", type=int, default=64)
     parser.add_argument("--max-bounces", type=int, default=6)
-    parser.add_argument("--transmission", type=float, default=0.65,
-                        help="Glasanteil 0..1 (Default 0.65; 1.0 = starkes Glas, "
-                             "Texturen verschwinden dann)")
-    parser.add_argument("--ior", type=float, default=1.35,
+    parser.add_argument("--transmission", type=float, default=0.78,
+                        help="Glasanteil 0..1 (Default 0.78; 1.0 = starkes Glas, "
+                             "Texturen bleiben Dank Alpha-Mix trotzdem sichtbar)")
+    parser.add_argument("--ior", type=float, default=1.45,
                         help="Brechungsindex (nahe 1.0 = kaum Verzerrung, "
-                             "1.45 = starkes Glas)")
+                             "1.45 = starkes Glas, IOR Level 0.8)")
     parser.add_argument("--roughness", type=float, default=0.0,
                         help="Grund-Rauheit des Glases (Default 0.0 - perfekt glatt, wie in Blender)")
     parser.add_argument("--metallic", type=float, default=0.2,
                         help="Metallness des Glases (Default 0.2 - wie in Blender eingestellt)")
+    parser.add_argument("--specular-level", type=float, default=0.8,
+                        help="Specular IOR Level 0..1 (Default 0.8 - reflektiver, IOR Level)")
     parser.add_argument("--tint-strength", type=float, default=0.10,
                         help="Wie stark das Glas-Blau eingefaerbt wird (0 = keine "
                              "Verfaerbung, 1 = alles blau)")
@@ -283,10 +285,10 @@ def _texture_detail_nodes(nodes, links, tex, low: float, high: float):
 
 
 def make_glass_material(name: str, base_rgb, tint_rgb, texture_path: str = "",
-                        mono: bool = False, transmission: float = 0.65,
-                        roughness: float = 0.0, metallic: float = 0.2,
+                        mono: bool = False, transmission: float = 0.78,
+                        roughness: float = 0.0, metallic: float = 0.2, specular_level: float = 0.8,
                         tint_strength: float = 0.10,
-                        texture_strength: float = 1.0, ior: float = 1.35,
+                        texture_strength: float = 1.0, ior: float = 1.45,
                         texture_kind: str = "", decal: bool = True):
     """Glas-Material mit sichtbarer Textur ("farbiges Dekor auf Glas").
 
@@ -323,13 +325,13 @@ def make_glass_material(name: str, base_rgb, tint_rgb, texture_path: str = "",
     color = mix(base, tint, tint_mix)
 
     set_input(bsdf, "Base Color", (color[0], color[1], color[2], 1.0))
-    set_input(bsdf, "Roughness", roughness)
-    set_input(bsdf, "IOR", ior)
-    set_input(bsdf, ("Transmission Weight", "Transmission"), transmission)
-    set_input(bsdf, ("Specular IOR Level", "Specular"), 0.5)
-    set_input(bsdf, "Metallic", metallic)
-    set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.25)
-    set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.03)
+    set_input(bsdf, "Roughness", roughness)  # 0.0 = perfekt glatt wie in Blender
+    set_input(bsdf, "IOR", ior)  # 1.45 fuer staerkeren Glas-Effekt
+    set_input(bsdf, ("Transmission Weight", "Transmission"), transmission)  # 0.78 default
+    set_input(bsdf, ("Specular IOR Level", "Specular"), specular_level)  # 0.8 = IOR Level (User: IQR Level)
+    set_input(bsdf, "Metallic", metallic)  # 0.2 wie in Blender
+    set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.40)
+    set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.0)
 
     tex = _load_texture_node(nodes, texture_path)
     if tex is None or not decal:
@@ -337,17 +339,19 @@ def make_glass_material(name: str, base_rgb, tint_rgb, texture_path: str = "",
     if texture_kind:
         _apply_clothing_uv(nodes, links, tex, texture_kind)
 
-    # Textur-Ebene: deckende, leicht matte Farbe mit etwas Eigenlicht, damit
-    # das Motiv auch in dunklen Reflexionen lesbar bleibt.
+    # Textur-Ebene: deckende, glossy Farbe (nicht matt!) damit Texturen
+    # glasig wirken. Roughness = 0.0 (wie Glas), hoher Specular + Coat
+    # für Glanz. Texturen bleiben voll sichtbar, aber nicht matt.
     surface = nodes.new("ShaderNodeBsdfPrincipled")
     surface.name = "Textur"
     surface.location = (-120, -180)
     set_input(surface, "Base Color", (color[0], color[1], color[2], 1.0))
-    set_input(surface, "Roughness", max(0.25, roughness + 0.22))
-    set_input(surface, "Metallic", 0.0)
+    set_input(surface, "Roughness", max(0.0, roughness))  # 0.0 = glossy wie Glas
+    set_input(surface, "Metallic", 0.0)  # Texturen nicht metallisch
     set_input(surface, "IOR", 1.45)
-    set_input(surface, ("Specular IOR Level", "Specular"), 0.35)
-    set_input(surface, ("Coat Weight", "Clearcoat"), 0.1)
+    set_input(surface, ("Specular IOR Level", "Specular"), specular_level)  # 0.8 = hoher Glanz
+    set_input(surface, ("Coat Weight", "Clearcoat"), 0.3)  # extra Gloss
+    set_input(surface, ("Coat Roughness", "Clearcoat Roughness"), 0.0)
 
     if texture_kind in ("composited", "mesh_surface"):
         links.new(tex.outputs["Color"], surface.inputs["Base Color"])
@@ -505,44 +509,116 @@ def add_bevel(obj, width: float, segments: int = 2) -> None:
 
 
 def setup_world(color_hex: str, strength: float = 1.3,
-                env_hex: str = "", env_strength: float = 0.55) -> None:
-    """Welt mit getrennter Hintergrund- und Beleuchtungsfarbe.
+                env_hex: str = "", env_strength: float = 0.55,
+                sunset: bool = True) -> None:
+    """Welt mit Sonnenuntergang-Himmel (prozedural, kein externes HDRI).
 
-    Ein rein helles Umgebungslicht (Strength 1.3, fast weiss) hat das
-    Glas von innen ausgeleuchtet: alles wurde milchig-grau und die
-    Texturen verschwanden. Deshalb:
-      * Kamera-Strahlen sehen den hellen Hintergrund (`color_hex`)
-      * alle anderen Strahlen sehen ein gedaempftes, leicht blaues
-        Umgebungslicht (`env_hex`, `env_strength`) - das gibt dem Glas
-        dunkle Reflexe und damit Kontrast ("Glas-Look").
+    Sonnenuntergang = warmer, dunkel-oranger Horizont + tiefblaue Oberseite.
+    Das gibt dem Glas warme Reflexe und dunkle Kontraste — genau der Look,
+    den der User in Blender mit einer HDRI-Umgebungsbeleuchtung erzielt.
+
+    Aufbau (wenn sunset=True):
+      * TextureCoordinate (Normal) -> Mapping (90° um X) -> ColorRamp
+        (tiefblau oben -> orange-gelb am Horizont -> warm-rot unten)
+      * Kamera-Strahlen sehen die Hintergrundfarbe (color_hex) als Basis
+      * Alle anderen Strahlen (Reflexionen) sehen den Sonnenuntergang
+
+    Ohne sunset: alte Logik mit Hintergrund + getrennter Umgebungsfarbe.
     """
     world = bpy.data.worlds.new("World")
     bpy.context.scene.world = world
     world.use_nodes = True
     tree = world.node_tree
     nodes, links = tree.nodes, tree.links
-    bg = nodes.get("Background")
     output = nodes.get("World Output") or nodes.new("ShaderNodeOutputWorld")
-    backdrop = srgb_to_linear(hex_to_rgb(color_hex))
-    if bg:
-        bg.inputs["Color"].default_value = (backdrop[0], backdrop[1], backdrop[2], 1.0)
-        bg.inputs["Strength"].default_value = strength
-    if not env_hex:
+    bg = nodes.get("Background")
+
+    if not sunset:
+        # Alte Logik: einfache Hintergrundfarbe
+        backdrop = srgb_to_linear(hex_to_rgb(color_hex))
+        if bg:
+            bg.inputs["Color"].default_value = (backdrop[0], backdrop[1], backdrop[2], 1.0)
+            bg.inputs["Strength"].default_value = strength
+        if env_hex:
+            env = srgb_to_linear(hex_to_rgb(env_hex))
+            light_path = nodes.new("ShaderNodeLightPath")
+            light_path.location = (-620, 320)
+            mixn = nodes.new("ShaderNodeMixRGB")
+            mixn.blend_type = "MIX"
+            mixn.location = (-360, 240)
+            mixn.inputs["Color1"].default_value = (env[0], env[1], env[2], 1.0)
+            mixn.inputs["Color2"].default_value = (backdrop[0], backdrop[1], backdrop[2], 1.0)
+            links.new(light_path.outputs["Is Camera Ray"], mixn.inputs["Fac"])
+            env_bg = nodes.new("ShaderNodeBackground")
+            env_bg.location = (-80, 240)
+            env_bg.inputs["Strength"].default_value = env_strength
+            links.new(mixn.outputs["Color"], env_bg.inputs["Color"])
+            links.new(env_bg.outputs["Background"], output.inputs["Surface"])
         return
-    env = srgb_to_linear(hex_to_rgb(env_hex))
+
+    # --- Sonnenuntergang ---
+    # Den alten flachen Background-Node entfernen
+    if bg:
+        nodes.remove(bg)
+
+    # TextureCoordinate (Normal) - gibt Blickrichtung als Koordinaten
+    tex_coord = nodes.new("ShaderNodeTexCoord")
+    tex_coord.location = (-1100, 200)
+
+    # Mapping: dreht die Koordinaten, damit der Gradient vertikal laeuft
+    mapping = nodes.new("ShaderNodeMapping")
+    mapping.location = (-860, 200)
+    mapping.vector_type = "POINT"
+    mapping.inputs["Rotation"].default_value = (0.0, 0.0, 0.0)
+
+    # Separation: Y-Koordinate aus der Normal-Richtung extrahieren
+    separate = nodes.new("ShaderNodeSeparateXYZ")
+    separate.location = (-620, 200)
+
+    links.new(tex_coord.outputs["Normal"], mapping.inputs["Vector"])
+    links.new(mapping.outputs["Vector"], separate.inputs["Vector"])
+
+    # ColorRamp: Horizont (Y=0) = warmes Orange, oben (Y>0) = tiefblau,
+    # unten (Y<0) = dunkelrot (unter dem Horizont)
+    color_ramp = nodes.new("ShaderNodeValToRGB")
+    color_ramp.location = (-400, 200)
+    # Stop 0: unterer Himmel = tiefrot/dunkelorange (Y=0 → unten)
+    color_ramp.color_ramp.elements[0].position = 0.0
+    color_ramp.color_ramp.elements[0].color = srgb_to_linear((0.15, 0.04, 0.02, 1.0))  # dunkelrot unten
+    # Stop 1: oberer Himmel = tiefblau
+    color_ramp.color_ramp.elements[1].position = 1.0
+    color_ramp.color_ramp.elements[1].color = srgb_to_linear((0.04, 0.08, 0.22, 1.0))  # tiefblau oben
+    # Zusätzliche Stops für den warmen Horizont
+    mid1 = color_ramp.color_ramp.elements.new(0.42)
+    mid1.color = srgb_to_linear((1.0, 0.55, 0.18, 1.0))  # warmes Orange-Gelb am Horizont
+    mid2 = color_ramp.color_ramp.elements.new(0.52)
+    mid2.color = srgb_to_linear((0.95, 0.35, 0.12, 1.0))  # warmes Orange-Rot
+
+    links.new(separate.outputs["Y"], color_ramp.inputs["Fac"])
+
+    # Hintergrund-Shader: Sonnenuntergang mit Stärke
+    sunset_bg = nodes.new("ShaderNodeBackground")
+    sunset_bg.location = (-140, 200)
+    sunset_bg.inputs["Strength"].default_value = strength * 0.8
+    links.new(color_ramp.outputs["Color"], sunset_bg.inputs["Color"])
+
+    # Kamera-Strahlen: leicht aufgehellte Basis-Farbe (color_hex) statt Sonnenuntergang
+    # damit der Hintergrund im Bild nicht zu dunkel wird
+    backdrop = srgb_to_linear(hex_to_rgb(color_hex))
+    cam_bg = nodes.new("ShaderNodeBackground")
+    cam_bg.location = (-140, -60)
+    cam_bg.inputs["Color"].default_value = (backdrop[0], backdrop[1], backdrop[2], 1.0)
+    cam_bg.inputs["Strength"].default_value = strength * 1.1
+
+    # Mix: Kamera-Strahlen sehen den hellen Hintergrund, alles andere den Sonnenuntergang
     light_path = nodes.new("ShaderNodeLightPath")
-    light_path.location = (-620, 320)
-    mixn = nodes.new("ShaderNodeMixRGB")
-    mixn.blend_type = "MIX"
-    mixn.location = (-360, 240)
-    mixn.inputs["Color1"].default_value = (env[0], env[1], env[2], 1.0)
-    mixn.inputs["Color2"].default_value = (backdrop[0], backdrop[1], backdrop[2], 1.0)
-    links.new(light_path.outputs["Is Camera Ray"], mixn.inputs["Fac"])
-    env_bg = nodes.new("ShaderNodeBackground")
-    env_bg.location = (-80, 240)
-    env_bg.inputs["Strength"].default_value = env_strength
-    links.new(mixn.outputs["Color"], env_bg.inputs["Color"])
-    links.new(env_bg.outputs["Background"], output.inputs["Surface"])
+    light_path.location = (-520, -100)
+    mix_shader = nodes.new("ShaderNodeMixShader")
+    mix_shader.location = (120, 80)
+    links.new(light_path.outputs["Is Camera Ray"], mix_shader.inputs["Fac"])
+    links.new(sunset_bg.outputs["Background"], mix_shader.inputs[1])
+    links.new(cam_bg.outputs["Background"], mix_shader.inputs[2])
+    links.new(mix_shader.outputs["Shader"], output.inputs["Surface"])
 
 
 def add_area_light(name: str, location, energy: float, size: float, color=(1, 1, 1),
@@ -685,7 +761,7 @@ def main() -> int:
     reset_scene()
     scene = bpy.context.scene
     setup_world(args.background, env_hex=args.env_color,
-                env_strength=args.env_strength)
+                env_strength=args.env_strength, sunset=True)
     setup_render(scene, res_x, res_y, args.samples, args.max_bounces, args.denoise)
 
     glass_tint = srgb_to_linear(hex_to_rgb(args.glass_tint))
@@ -694,8 +770,9 @@ def main() -> int:
     log(f"Manifest: {args.manifest} ({len(manifest.get('parts', []))} Teile), "
         f"{res_x}x{res_y}, {args.samples} Samples, Cycles CPU")
     log(f"Material: Transmission {args.transmission:.2f}, Roughness "
-        f"{args.roughness:.2f}, Metallic {args.metallic:.2f}, IOR {args.ior:.2f}, Tint {args.tint_strength:.2f}, "
-        f"Textur {args.texture_strength:.2f}")
+        f"{args.roughness:.2f}, Metallic {args.metallic:.2f}, Specular-Level {args.specular_level:.2f}, "
+        f"IOR {args.ior:.2f}, Tint {args.tint_strength:.2f}, "
+        f"Textur {args.texture_strength:.2f}, Sonnenuntergang-Env")
 
     imported = []
     material_cache = {}
@@ -746,13 +823,15 @@ def main() -> int:
             texture_kind = part.get("texture_kind") or ""
             key = ("glass", tuple(round(c, 3) for c in color), texture,
                    args.mono_glass, args.transmission, args.roughness, args.metallic,
-                   args.tint_strength, args.texture_strength, texture_kind)
+                   args.specular_level, args.tint_strength, args.texture_strength,
+                   texture_kind)
             mat = material_cache.get(key)
             if mat is None:
                 mat = make_glass_material(
                     f"Glas {part.get('name')}", color, glass_tint, texture,
                     args.mono_glass, transmission=args.transmission,
                     roughness=args.roughness, metallic=args.metallic,
+                    specular_level=args.specular_level,
                     tint_strength=args.tint_strength,
                     texture_strength=args.texture_strength, ior=args.ior,
                     texture_kind=texture_kind, decal=not args.mono_glass)
@@ -788,14 +867,15 @@ def main() -> int:
     height = max(hi.z - lo.z, 0.5)
     cam, center, radius = setup_camera(lo, hi, res_x, res_y)
 
-    # Studio-Dreipunktlicht passend zur Vorderansicht (+Y)
+    # Studio-Dreipunktlicht - gedimmt damit Sonnenuntergang-Env dominiert.
+    # Warme Farben passend zum Sonnenuntergang.
     s = height / 5.5
     key = add_area_light("Key", (center.x - 5.5 * s, center.y + 6.5 * s, center.z + 7.0 * s),
-                         energy=900 * s * s, size=5.0 * s, color=(1.0, 0.97, 0.94), target=center)
+                         energy=220 * s * s, size=5.0 * s, color=(1.0, 0.85, 0.65), target=center)  # warm orange
     fill = add_area_light("Fill", (center.x + 6.5 * s, center.y + 5.0 * s, center.z + 3.0 * s),
-                          energy=420 * s * s, size=6.0 * s, color=(0.88, 0.94, 1.0), target=center)
+                          energy=100 * s * s, size=6.0 * s, color=(1.0, 0.80, 0.55), target=center)  # warm fill
     rim = add_area_light("Rim", (center.x + 2.0 * s, center.y - 7.5 * s, center.z + 6.0 * s),
-                         energy=700 * s * s, size=4.0 * s, color=(0.92, 0.96, 1.0), target=center)
+                         energy=160 * s * s, size=4.0 * s, color=(1.0, 0.60, 0.30), target=center)  # sunset rim
 
     if not args.no_floor:
         add_floor(radius, z=lo.z)

@@ -766,13 +766,19 @@ def assemble_r15_rig(
         shoulder_w = world_atts.get(sh_att_name, ((sign * 1.0 * sw, 1.4 * sh, 0.0), IDENTITY_MAT3))[0]
         joint_pos[u_name] = shoulder_w
 
+        # Schulter leicht nach außen schieben, damit Arm-Volumen nicht in Torso schneidet
+        # (echte UpperTorso-Meshes haben Schulter bei exakt Torso-Rand; das Arm-Mesh
+        # ragt sonst 0.5 Studs nach innen in den Torso - „schief in den Körper“)
+        shoulder_w = (shoulder_w[0] + sign * 0.060, shoulder_w[1], shoulder_w[2])
+
         if u_name in seg_lookup and l_name in seg_lookup and h_name in seg_lookup:
             um, ua, utr = seg_lookup[u_name]
             lm, la, ltr = seg_lookup[l_name]
             hm, ha, htr = seg_lookup[h_name]
 
-            d_upper_target = (sign * 0.3420, -0.9397, 0.0)
-            d_lower_target = (sign * 0.2588, -0.9650, -0.04)
+            # Senkrecht leicht nach außen (30° statt 20°) - vorher 20° ließ Innenkante noch im Torso
+            d_upper_target = (sign * 0.5000, -0.8660, 0.0)
+            d_lower_target = (sign * 0.3420, -0.9397, -0.02)
 
             rot_u = IDENTITY_MAT3
             if sh_att_name in ua and el_att_name in ua:
