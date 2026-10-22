@@ -632,14 +632,25 @@ def scene_bounds(objects):
 
 
 def compute_vertical_framing(feet: float, head_top: float,
-                             top_percent: float, bottom_percent: float):
+                             top_percent: float, bottom_percent: float,
+                             content_hi=None, content_lo=None):
     """Bildausschnitt in Studs aus den Prozentwerten (reine Zahlen, testbar).
 
     ``freiraum_oben_prozent`` ist der freie Platz zwischen Kopfoberkante und
     oberer Bildkante (Anteil der Bildhoehe), ``freiraum_unten_prozent`` der
     Platz zwischen Fuessen und unterer Bildkante. Negative Werte schneiden
-    das Bild an. Rueckgabe: dict mit ``visible_h``, ``z_top``, ``z_bottom``,
-    ``center_z``, ``top`` und ``bottom``.
+    das Bild an.
+
+    ``content_hi`` / ``content_lo``: hoechster/tiefster *sichtbarer* Punkt
+    inklusive Accessoires (Hut, Krone, Halo, Haenge-Gear ...). Sind beide
+    Prozentwerte nicht negativ, wird das Bild so weit aufgezogen, dass nichts
+    abgeschnitten wird; der Kopf sitzt dann ggf. etwas tiefer als eingestellt.
+    Mit negativen Prozentwerten wird bewusst angeschnitten - dann gilt die
+    Einstellung exakt.
+
+    Rueckgabe: dict mit ``visible_h``, ``z_top``, ``z_bottom``, ``center_z``,
+    ``top``, ``bottom``, ``angepasst`` (True = Bild wurde aufgezogen) und
+    ``kopf_abstand_prozent`` (tatsaechlicher Abstand ueber dem Kopf).
     """
     feet = float(feet)
     head_top = float(head_top)
@@ -656,7 +667,26 @@ def compute_vertical_framing(feet: float, head_top: float,
 
     visible_h = body_span / max(0.05, 1.0 - (top + bottom) / 100.0)
     z_top = head_top + top / 100.0 * visible_h
-    z_bottom = z_top - visible_h
+
+    pad = 0.02 * body_span
+    angepasst = False
+    if top >= 0.0 and bottom >= 0.0 and content_hi is not None and content_lo is not None:
+        # Nichts abschneiden: mindestens der komplette Inhalt (inkl.
+        # Accessoires) muss ins Bild passen.
+        visible_h = max(visible_h, float(content_hi) - float(content_lo) + 2.0 * pad)
+        z_top = head_top + top / 100.0 * visible_h
+        if z_top < float(content_hi) + pad:
+            z_top = float(content_hi) + pad
+            angepasst = True
+        z_bottom = z_top - visible_h
+        if z_bottom > float(content_lo) - pad:
+            z_bottom = float(content_lo) - pad
+            z_top = z_bottom + visible_h
+            angepasst = True
+        angepasst = angepasst or visible_h > body_span / max(0.05, 1.0 - (top + bottom) / 100.0) + 1e-9
+    else:
+        z_bottom = z_top - visible_h
+
     return {
         "visible_h": visible_h,
         "z_top": z_top,
@@ -664,6 +694,9 @@ def compute_vertical_framing(feet: float, head_top: float,
         "center_z": (z_top + z_bottom) / 2.0,
         "top": top,
         "bottom": bottom,
+        "angepasst": angepasst,
+        "kopf_abstand_prozent": (z_top - head_top) / visible_h * 100.0,
+        "fuss_abstand_prozent": (feet - z_bottom) / visible_h * 100.0,
     }
 
 
@@ -711,11 +744,19 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
         focus_hi if focus_hi is not None else hi.z,
         top_percent,
         bottom_percent,
+        content_hi=hi.z,
+        content_lo=lo.z,
     )
     visible_h = framing["visible_h"]
     center_z = framing["center_z"]
     top = framing["top"]
     bottom = framing["bottom"]
+    if framing["angepasst"]:
+        log(f"Hinweis: Accessoires ragen ueber Kopf/Fuesse hinaus - Bild wurde "
+            f"aufgezogen, damit nichts abgeschnitten wird (Abstand ueber dem "
+            f"Kopf jetzt {framing['kopf_abstand_prozent']:.1f} % statt "
+            f"{top:g} %, unter den Fuessen "
+            f"{framing['fuss_abstand_prozent']:.1f} % statt {bottom:g} %).")
 
     cam_data = bpy.data.cameras.new("Kamera")
     cam_data.lens = 55.0
@@ -1141,6 +1182,14 @@ def main() -> int:
                 head_z.append(world.z)
     focus_lo = min(body_z) if body_z else lo.z
     focus_hi = max(head_z) if head_z else (max(body_z) if body_z else hi.z)
+    # Headless/ohne Kopf-Mesh: die Kopfoberkante kommt aus dem Rig
+    # (Manifest, nach der Pose berechnet) - sonst wuerde der freie Abstand
+    # oben am Torso gemessen und Halo/Krone abgeschnitten.
+    manifest_head_top = render_cfg.get("kopf_oberkante")
+    if not head_z and isinstance(manifest_head_top, (int, float)):
+        focus_hi = max(focus_hi, float(manifest_head_top))
+        log(f"Kopfoberkante aus dem Rig (Headless/ohne Kopf-Mesh): "
+            f"{float(manifest_head_top):.2f}")
 
     cam, center, radius = setup_camera(
         lo, hi, res_x, res_y,

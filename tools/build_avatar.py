@@ -1092,6 +1092,22 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     pose_ctx, pose_info = setup_pose(config or {}, body_parts, metrics,
                                      rig_avatar, use_r15_rig, warnings)
 
+    # Oberkante des Kopfes in Weltkoordinaten (nach der Pose). Wichtig fuer
+    # Headless-Avatare: dort gibt es kein Kopf-Mesh, aber der Bildausschnitt
+    # soll sich trotzdem am Kopf (nicht an Hut/Krone) orientieren.
+    head_joint = (rig_avatar.joint_positions.get("Head") if rig_avatar else None)
+    head_center = head_joint or (0.0, metrics.head_center_y, 0.0)
+    if headless["active"] and metrics.hat_base_y is not None:
+        head_center = (head_center[0], metrics.hat_base_y, head_center[2])
+        head_radius = 0.0
+    else:
+        head_center = (head_center[0], metrics.head_center_y, head_center[2])
+        head_radius = metrics.head_radius
+    if pose_ctx is not None and pose_ctx.active:
+        head_center = avatar_pose._mat4_point(
+            pose_ctx.transforms["kopf"], head_center)
+    head_top_world = round(head_center[1] + head_radius, 3)
+
     body_parts_from_mesh = 0
     for part in body_parts:
         if part.name == "kopf":
@@ -1332,6 +1348,9 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             "pose": pose_info["name"],
             "pose_aktiv": bool(pose_info["aktiv"]),
             "pose_details": pose_info["details"],
+            # Oberkante des Kopfes (ohne Accessoires) - Bezug fuer den
+            # freien Abstand oben, funktioniert auch bei Headless-Avataren.
+            "kopf_oberkante": head_top_world,
             "freiraum_oben_prozent": config_number("freiraum_oben_prozent", 6.0),
             "freiraum_unten_prozent": config_number("freiraum_unten_prozent", 6.0),
             "render_bei_aenderung": config_flag("render_bei_aenderung", False),

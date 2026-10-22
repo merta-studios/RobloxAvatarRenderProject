@@ -117,7 +117,7 @@ Werte werden vor dem Render geprüft (`tools/render_config.py`,
 | `username` | Roblox-Username (früher `username.txt`) |
 | `drehung_grad` | Seitliche Drehung: `0` = frontal, `90` = rechte Seite, `-90` = linke Seite. Nur −90 … 90 ist erlaubt. |
 | `pose` | `None` = Stand-Pose, sonst ein Name aus `Posen.toml` (z. B. `Winken`) |
-| `freiraum_oben_prozent` | Freier Platz über der Kopfoberkante in Prozent der Bildhöhe. Accessoires zählen nicht mit. |
+| `freiraum_oben_prozent` | Freier Platz über der Kopfoberkante in Prozent der Bildhöhe. Accessoires zählen nicht mit; ragen sie darüber hinaus, wird das Bild aufgezogen (nichts wird abgeschnitten). |
 | `freiraum_unten_prozent` | Freier Platz unter den Füßen in Prozent der Bildhöhe. **Negativ** schneidet an (z. B. `-40` → nur der Torso). |
 | `render_bei_aenderung` | `true` = nach diesem Push sofort rendern. Der Workflow setzt den Wert nach erfolgreichem Render automatisch auf `false`. |
 | `hintergrund_url` | URL (oder lokaler Pfad) zu einem Hintergrundbild, `"hdri"` für die HDRI-Umgebung (Standard) oder `"transparent"` für einen durchsichtigen Hintergrund. |
