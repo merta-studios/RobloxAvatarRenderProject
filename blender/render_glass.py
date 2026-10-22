@@ -631,33 +631,94 @@ def scene_bounds(objects):
     return lo, hi
 
 
-def compute_vertical_framing(feet: float, head_top: float,
-                             top_percent: float, bottom_percent: float,
-                             content_hi=None, content_lo=None):
-    """Bildausschnitt in Studs aus den Prozentwerten (reine Zahlen, testbar).
+# ---------------------------------------------------------------------------
+# Kamera: perspektivisch exakter Bildausschnitt
+# ---------------------------------------------------------------------------
 
-    ``freiraum_oben_prozent`` ist der freie Platz zwischen Kopfoberkante und
-    oberer Bildkante (Anteil der Bildhoehe), ``freiraum_unten_prozent`` der
-    Platz zwischen Fuessen und unterer Bildkante. Negative Werte schneiden
-    das Bild an.
+def _v_sub(a, b):
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
 
-    ``content_hi`` / ``content_lo``: hoechster/tiefster *sichtbarer* Punkt
-    inklusive Accessoires (Hut, Krone, Halo, Haenge-Gear ...). Sind beide
-    Prozentwerte nicht negativ, wird das Bild so weit aufgezogen, dass nichts
-    abgeschnitten wird; der Kopf sitzt dann ggf. etwas tiefer als eingestellt.
-    Mit negativen Prozentwerten wird bewusst angeschnitten - dann gilt die
-    Einstellung exakt.
 
-    Rueckgabe: dict mit ``visible_h``, ``z_top``, ``z_bottom``, ``center_z``,
-    ``top``, ``bottom``, ``angepasst`` (True = Bild wurde aufgezogen) und
-    ``kopf_abstand_prozent`` (tatsaechlicher Abstand ueber dem Kopf).
+def _v_add(a, b):
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+
+def _v_mul(a, f):
+    return (a[0] * f, a[1] * f, a[2] * f)
+
+
+def _v_dot(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _v_cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0])
+
+
+def _v_norm(a, fallback=(0.0, 0.0, 1.0)):
+    length = math.sqrt(_v_dot(a, a))
+    if length < 1e-9:
+        return fallback
+    return (a[0] / length, a[1] / length, a[2] / length)
+
+
+def camera_basis(yaw_deg: float):
+    """Blickrichtungen der Kamera: (to_avatar, forward, right, up)."""
+    direction = camera_direction(yaw_deg)
+    forward = _v_mul(direction, -1.0)
+    right = _v_norm(_v_cross(forward, (0.0, 0.0, 1.0)))
+    up = _v_norm(_v_cross(right, forward))
+    return direction, forward, right, up
+
+
+def project_ndc(point, cam_location, forward, right, up, tan_h, tan_v):
+    """Projiziert einen Punkt in normalisierte Bildkoordinaten (-1 .. +1)."""
+    d = _v_sub(point, cam_location)
+    depth = _v_dot(d, forward)
+    if depth <= 1e-6:
+        return None
+    return (_v_dot(d, right) / depth / max(tan_h, 1e-6),
+            _v_dot(d, up) / depth / max(tan_v, 1e-6))
+
+
+def _span_over(points, cam, forward, right, up, tan_h, tan_v):
+    ys = []
+    xs = []
+    for p in points:
+        ndc = project_ndc(p, cam, forward, right, up, tan_h, tan_v)
+        if ndc is None:
+            continue
+        xs.append(ndc[0])
+        ys.append(ndc[1])
+    if not ys:
+        return (0.0, 0.0, 0.0, 0.0)
+    return (min(xs), max(xs), min(ys), max(ys))
+
+
+def compute_camera_placement(lo, hi, tan_h: float, tan_v: float,
+                             yaw_deg: float = 0.0,
+                             top_percent: float = 6.0,
+                             bottom_percent: float = 6.0,
+                             head_z=None, feet_z=None):
+    """Kameraabstand und -hoehe so, dass der Bildausschnitt exakt passt.
+
+    Rechnet **perspektivisch**: Punkte naeher an der Kamera werden groesser
+    abgebildet. Dadurch sitzen die Fuesse (vorn) genauso an der richtigen
+    Stelle wie der Kopf (hinten), und der Avatar wird nicht mehr unten
+    abgeschnitten.
+
+    * ``top_percent`` / ``bottom_percent`` >= 0: Abstand ueber der
+      Kopfoberkante (ohne Accessoires) bzw. unter den Fuessen. Ragen
+      Accessoires darueber hinaus, wird das Bild zusaetzlich aufgezogen,
+      damit nichts abgeschnitten wird.
+    * negative Prozentwerte: bewusstes Anschneiden (z. B. unten -40 ->
+      nur der Torso). Dann gelten die Werte exakt, nichts wird aufgezogen.
+
+    Rueckgabe: dict mit ``cam_location``, ``center``, ``distance``,
+    ``kopf_prozent``, ``fuss_prozent``, ``aufgezogen`` und ``abgeschnitten``.
     """
-    feet = float(feet)
-    head_top = float(head_top)
-    if head_top < feet:
-        feet, head_top = head_top, feet
-    body_span = max(1e-3, head_top - feet)
-
     top = max(-100.0, min(95.0, float(top_percent)))
     bottom = max(-100.0, min(95.0, float(bottom_percent)))
     if top + bottom > 95.0:  # Sicherheitsnetz (die Config prueft das schon)
@@ -665,38 +726,104 @@ def compute_vertical_framing(feet: float, head_top: float,
         top *= factor
         bottom *= factor
 
-    visible_h = body_span / max(0.05, 1.0 - (top + bottom) / 100.0)
-    z_top = head_top + top / 100.0 * visible_h
+    cx = (lo[0] + hi[0]) / 2.0
+    cy = (lo[1] + hi[1]) / 2.0
+    feet = float(feet_z if feet_z is not None else lo[2])
+    head = float(head_z if head_z is not None else hi[2])
+    if head < feet:
+        feet, head = head, feet
+    body_span = max(1e-3, head - feet)
 
-    pad = 0.02 * body_span
-    angepasst = False
-    if top >= 0.0 and bottom >= 0.0 and content_hi is not None and content_lo is not None:
-        # Nichts abschneiden: mindestens der komplette Inhalt (inkl.
-        # Accessoires) muss ins Bild passen.
-        visible_h = max(visible_h, float(content_hi) - float(content_lo) + 2.0 * pad)
-        z_top = head_top + top / 100.0 * visible_h
-        if z_top < float(content_hi) + pad:
-            z_top = float(content_hi) + pad
-            angepasst = True
-        z_bottom = z_top - visible_h
-        if z_bottom > float(content_lo) - pad:
-            z_bottom = float(content_lo) - pad
-            z_top = z_bottom + visible_h
-            angepasst = True
-        angepasst = angepasst or visible_h > body_span / max(0.05, 1.0 - (top + bottom) / 100.0) + 1e-9
-    else:
-        z_bottom = z_top - visible_h
+    direction, forward, right, up = camera_basis(yaw_deg)
+    # Die Kamera steht auf der +Y-Seite: vorderste Punkte liegen bei max. y
+    # und werden perspektivisch am groessten abgebildet.
+    front_y = hi[1]
+    head_point = (cx, front_y, head)
+    feet_point = (cx, front_y, feet)
+    corners = [(x, y, z) for x in (lo[0], hi[0])
+               for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+
+    target_top = 1.0 - 2.0 * top / 100.0
+    target_bottom = -1.0 + 2.0 * bottom / 100.0
+    target_span = max(1e-3, target_top - target_bottom)
+    exact = top < 0.0 or bottom < 0.0
+
+    def placement(distance: float):
+        """Kamera fuer einen Abstand: Kopf und Fuesse exakt an den Raendern."""
+        centre_target = (target_top + target_bottom) / 2.0
+        low = feet - 4.0 * body_span
+        high = head + 4.0 * body_span
+        for _ in range(90):
+            cz = (low + high) / 2.0
+            cam = (cx + direction[0] * distance,
+                   cy + direction[1] * distance,
+                   cz)
+            _, _, ymin, ymax = _span_over([head_point, feet_point], cam,
+                                          forward, right, up, tan_h, tan_v)
+            if (ymin + ymax) / 2.0 > centre_target:
+                low = cz            # Bild noch zu hoch -> Kamera hoeher
+            else:
+                high = cz
+        cz = (low + high) / 2.0
+        cam = (cx + direction[0] * distance, cy + direction[1] * distance, cz)
+        return cam
+
+    def point_span(distance: float) -> float:
+        cam = placement(distance)
+        _, _, ymin, ymax = _span_over([head_point, feet_point], cam, forward,
+                                      right, up, tan_h, tan_v)
+        return ymax - ymin
+
+    # Abstand per Bisektion: groesserer Abstand = kleinerer Ausschnitt.
+    low_d, high_d = 0.05, 500.0
+    for _ in range(70):
+        mid = (low_d + high_d) / 2.0
+        if point_span(mid) > target_span:
+            low_d = mid
+        else:
+            high_d = mid
+    base_distance = (low_d + high_d) / 2.0
+    distance = base_distance
+
+    def content_fits(d: float):
+        cam = placement(d)
+        xmin, xmax, ymin, ymax = _span_over(corners, cam, forward, right, up,
+                                            tan_h, tan_v)
+        fits_vertical = ymin >= -1.0 - 1e-6 and ymax <= 1.0 + 1e-6
+        fits_horizontal = exact or (xmin >= -1.0 - 1e-6 and xmax <= 1.0 + 1e-6)
+        return fits_vertical and fits_horizontal, cam
+
+    abgeschnitten = False
+    # Aufziehen bringt nur etwas, wenn oben und unten Platz vorgesehen ist
+    # (bei 0 % beruehrt Kopf bzw. Fuss direkt den Bildrand - dann ist ein
+    # Accessoire zwangslaeufig ausserhalb).
+    if not exact and top > 0.0 and bottom > 0.0:
+        # Nichts abschneiden: nur so weit aufziehen wie noetig (max. 2x).
+        max_distance = base_distance * 2.0
+        for _ in range(80):
+            fits, cam = content_fits(distance)
+            if fits:
+                break
+            if distance >= max_distance - 1e-9:
+                distance = max_distance
+                abgeschnitten = True
+                break
+            distance = min(max_distance, distance * 1.01)
+
+    cam = placement(distance)
+    head_ndc = project_ndc(head_point, cam, forward, right, up, tan_h, tan_v)
+    feet_ndc = project_ndc(feet_point, cam, forward, right, up, tan_h, tan_v)
+    head_pct = (1.0 - head_ndc[1]) / 2.0 * 100.0 if head_ndc else 0.0
+    feet_pct = (1.0 + feet_ndc[1]) / 2.0 * 100.0 if feet_ndc else 0.0
 
     return {
-        "visible_h": visible_h,
-        "z_top": z_top,
-        "z_bottom": z_bottom,
-        "center_z": (z_top + z_bottom) / 2.0,
-        "top": top,
-        "bottom": bottom,
-        "angepasst": angepasst,
-        "kopf_abstand_prozent": (z_top - head_top) / visible_h * 100.0,
-        "fuss_abstand_prozent": (feet - z_bottom) / visible_h * 100.0,
+        "cam_location": cam,
+        "center": (cx, cy, cam[2]),
+        "distance": distance,
+        "kopf_prozent": head_pct,
+        "fuss_prozent": feet_pct,
+        "aufgezogen": distance > base_distance * 1.001,
+        "abgeschnitten": abgeschnitten,
     }
 
 
@@ -722,42 +849,15 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
                  yaw_deg: float = 0.0, top_percent: float = 6.0,
                  bottom_percent: float = 6.0,
                  focus_lo=None, focus_hi=None):
-    """Kamera exakt nach Configs.toml ausrichten.
+    """Kamera exakt nach Configs.toml ausrichten (perspektivisch korrekt).
 
     * ``yaw_deg``: 0 = frontal (Avatar schaut zur Kamera), 90 = rechte Seite,
-      -90 = linke Seite. Die Kamera kreist dabei waagerecht um den Avatar.
+      -90 = linke Seite.
     * ``top_percent`` / ``bottom_percent``: freier Platz in Prozent der
       Bildhoehe oberhalb der Kopfoberkante (``focus_hi``, ohne Accessoires)
       bzw. unterhalb der Fuesse (``focus_lo``). Negative Werte schneiden das
       Bild an (z. B. unten -40 -> nur der Torso ist sichtbar).
-    * Waagerecht wird so weit aufgezogen, dass Accessoires nicht abgeschnitten
-      werden. Ist der Avatar samt Accessoires breiter als das durch die
-      Prozentwerte vorgegebene Bild, wird die Kamera etwas weiter weg
-      geschoben (die Prozentwerte gelten dann fuer die Hoehe nur noch
-      naeherungsweise - das steht im Log).
     """
-    center_x = (lo.x + hi.x) / 2.0
-    center_y = (lo.y + hi.y) / 2.0
-
-    framing = compute_vertical_framing(
-        focus_lo if focus_lo is not None else lo.z,
-        focus_hi if focus_hi is not None else hi.z,
-        top_percent,
-        bottom_percent,
-        content_hi=hi.z,
-        content_lo=lo.z,
-    )
-    visible_h = framing["visible_h"]
-    center_z = framing["center_z"]
-    top = framing["top"]
-    bottom = framing["bottom"]
-    if framing["angepasst"]:
-        log(f"Hinweis: Accessoires ragen ueber Kopf/Fuesse hinaus - Bild wurde "
-            f"aufgezogen, damit nichts abgeschnitten wird (Abstand ueber dem "
-            f"Kopf jetzt {framing['kopf_abstand_prozent']:.1f} % statt "
-            f"{top:g} %, unter den Fuessen "
-            f"{framing['fuss_abstand_prozent']:.1f} % statt {bottom:g} %).")
-
     cam_data = bpy.data.cameras.new("Kamera")
     cam_data.lens = 55.0
     cam_data.sensor_width = 36.0
@@ -766,38 +866,33 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
     bpy.context.scene.camera = cam
 
     tan_h, tan_v = camera_fov_tangents(cam_data, res_x, res_y)
+    placement = compute_camera_placement(
+        (float(lo.x), float(lo.y), float(lo.z)),
+        (float(hi.x), float(hi.y), float(hi.z)),
+        tan_h, tan_v,
+        yaw_deg=yaw_deg,
+        top_percent=top_percent,
+        bottom_percent=bottom_percent,
+        head_z=float(focus_hi if focus_hi is not None else hi.z),
+        feet_z=float(focus_lo if focus_lo is not None else lo.z),
+    )
 
-    # Waagerechte Blickrichtung (Kamera bleibt auf Augenhoehe des Motivs).
-    direction = Vector(camera_direction(yaw_deg)).normalized()
-    center = Vector((center_x, center_y, center_z))
-    forward = -direction
-    up = Vector((0.0, 0.0, 1.0))
-    right = forward.cross(up).normalized()
-
-    # Abstand aus dem senkrechten Ausschnitt ...
-    distance = (visible_h / 2.0) / max(1e-4, tan_v)
-    # ... und ggf. vergroessern, damit waagerecht nichts abgeschnitten wird.
-    needed = distance
-    for x in (lo.x, hi.x):
-        for y in (lo.y, hi.y):
-            for z in (lo.z, hi.z):
-                offset = Vector((x, y, z)) - center
-                r = abs(offset.dot(right))
-                depth = offset.dot(forward)
-                needed = max(needed, r / max(1e-4, tan_h) - depth)
-    if needed > distance + 1e-6:
-        log(f"Hinweis: Avatar ist breiter als der vorgegebene Bildausschnitt - "
-            f"Kamera wird von {distance:.2f} auf {needed:.2f} Einheiten "
-            f"zurueckgeschoben (die Prozentwerte oben/unten werden dadurch "
-            f"etwas groesser).")
-        distance = needed
-
-    cam.location = center + direction * distance
+    center = Vector(placement["center"])
+    cam.location = Vector(placement["cam_location"])
     cam.rotation_euler = (center - cam.location).to_track_quat("-Z", "Y").to_euler()
 
     radius = max(0.5, (hi - lo).length / 2.0)
-    log(f"Kamera: Drehung {yaw_deg:g}° | Bildhoehe {visible_h:.2f} Studs | "
-        f"oben {top:g} % / unten {bottom:g} % | Abstand {distance:.2f}")
+    log(f"Kamera: Drehung {yaw_deg:g}° | Abstand {placement['distance']:.2f} | "
+        f"oben {placement['kopf_prozent']:.1f} % / unten "
+        f"{placement['fuss_prozent']:.1f} % (gewuenscht {top_percent:g} / "
+        f"{bottom_percent:g})")
+    if placement["aufgezogen"]:
+        log("Hinweis: Accessoires ragen ueber Kopf/Fuesse hinaus - Bild wurde "
+            "aufgezogen, damit nichts abgeschnitten wird.")
+    if placement.get("abgeschnitten"):
+        log("WARNUNG: Ein Accessoire reicht sehr weit hinaus und ist nicht "
+            "komplett im Bild (Bild waere sonst winzig). Mit negativen "
+            "freiraum-Werten laesst sich der Ausschnitt bewusst enger setzen.")
     return cam, center, radius
 
 
