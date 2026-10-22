@@ -846,6 +846,118 @@ def camera_fov_tangents(cam_data, res_x: int, res_y: int):
     return math.tan(h_fov / 2.0), math.tan(v_fov / 2.0)
 
 
+def _world_to_view(cam, points):
+    """Projiziert Weltpunkte mit Blenders eigener Kamera-Mathematik.
+
+    Rueckgabe: Liste von (x, y) in 0..1 (Ursprung unten links). Das ist
+    exakt die Abbildung, die Blender rendert - unabhaengig davon, wie
+    Sensor-Fit und Seitenverhaeltnis intern gerechnet werden.
+    """
+    from bpy_extras.object_utils import world_to_camera_view
+
+    scene = bpy.context.scene
+    out = []
+    for p in points:
+        v = world_to_camera_view(scene, cam, Vector(p))
+        out.append((float(v.x), float(v.y)))
+    return out
+
+
+def fit_camera_with_blender(cam, focus_xy, head_z, feet_z, content_points,
+                            yaw_deg: float = 0.0,
+                            top_percent: float = 6.0,
+                            bottom_percent: float = 6.0,
+                            exact: bool = False,
+                            max_scale: float = 1.25):
+    """Justiert Abstand und Hoehe der Kamera mit Blenders Projektion.
+
+    Kopfoberkante (``head_z``) und Fuesse (``feet_z``) landen exakt auf den
+    gewuenschten Prozentwerten. Bei positiven Raendern geht die Kamera
+    zusaetzlich hoechstens ``max_scale`` weiter zurueck, damit Accessoires
+    nicht abgeschnitten werden.
+
+    Rueckgabe: dict mit ``kopf_prozent``, ``fuss_prozent``, ``aufgezogen``,
+    ``abgeschnitten`` und ``distance``.
+    """
+    target_top = 1.0 - top_percent / 100.0   # y-Koordinate (0 unten, 1 oben)
+    target_bottom = bottom_percent / 100.0
+
+    direction = Vector(camera_direction(yaw_deg)).normalized()
+    head_point = (focus_xy[0], focus_xy[1], head_z)
+    feet_point = (focus_xy[0], focus_xy[1], feet_z)
+    focus = Vector((focus_xy[0], focus_xy[1], 0.0))
+    body_span = max(0.2, abs(head_z - feet_z))
+
+    base = Vector((cam.location.x, cam.location.y, 0.0)) - focus
+    start_dist = max(0.2, base.length)
+
+    def place(dist: float, z: float):
+        loc = Vector((focus.x + direction.x * dist,
+                      focus.y + direction.y * dist, z))
+        cam.location = loc
+        target = Vector((focus.x, focus.y, z))
+        cam.rotation_euler = (target - loc).to_track_quat("-Z", "Y").to_euler()
+        (_, head_y), (_, feet_y) = _world_to_view(cam, [head_point, feet_point])
+        return head_y, feet_y
+
+    def solve(dist: float, z: float) -> tuple:
+        """Newton fuer (Abstand, Hoehe) auf (Kopf, Fuesse)."""
+        for _ in range(60):
+            head_y, feet_y = place(dist, z)
+            r1 = head_y - target_top
+            r2 = feet_y - target_bottom
+            if abs(r1) < 2e-4 and abs(r2) < 2e-4:
+                break
+            step_d = max(1e-4, 0.01 * dist)
+            step_z = max(1e-4, 0.01 * body_span)
+            head_d, feet_d = place(dist + step_d, z)
+            head_z2, feet_z2 = place(dist, z + step_z)
+            j11, j21 = (head_d - head_y) / step_d, (feet_d - feet_y) / step_d
+            j12, j22 = (head_z2 - head_y) / step_z, (feet_z2 - feet_y) / step_z
+            det = j11 * j22 - j12 * j21
+            if abs(det) < 1e-12:
+                break
+            d_dist = (-r1 * j22 + r2 * j12) / det
+            d_z = (-r2 * j11 + r1 * j21) / det
+            # gedämpft, damit das Verfahren stabil konvergiert
+            dist = max(0.2 * start_dist, dist + max(-0.5 * dist, min(0.5 * dist, d_dist)))
+            z += max(-0.5 * body_span, min(0.5 * body_span, d_z))
+        return dist, z
+
+    dist = start_dist
+    z = float(cam.location.z)
+    dist, z = solve(dist, z)
+
+    def content_inside() -> bool:
+        for x, y in _world_to_view(cam, content_points):
+            if y < -1e-6 or y > 1.0 + 1e-6:
+                return False
+            if not exact and (x < -1e-6 or x > 1.0 + 1e-6):
+                return False
+        return True
+
+    aufgezogen = False
+    abgeschnitten = False
+    if not exact and top_percent > 0 and bottom_percent > 0:
+        max_dist = dist * max_scale
+        while not content_inside():
+            if dist >= max_dist:
+                abgeschnitten = True
+                break
+            dist = min(max_dist, dist * 1.03)
+            dist, z = solve(dist, z)
+            aufgezogen = True
+
+    head_y, feet_y = place(dist, z)
+    return {
+        "kopf_prozent": (1.0 - head_y) * 100.0,
+        "fuss_prozent": feet_y * 100.0,
+        "aufgezogen": aufgezogen,
+        "abgeschnitten": abgeschnitten,
+        "distance": dist,
+    }
+
+
 def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
                  yaw_deg: float = 0.0, top_percent: float = 6.0,
                  bottom_percent: float = 6.0,
@@ -887,10 +999,50 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
         f"oben {placement['kopf_prozent']:.1f} % / unten "
         f"{placement['fuss_prozent']:.1f} % (gewuenscht {top_percent:g} / "
         f"{bottom_percent:g})")
-    if placement["aufgezogen"]:
+
+    # Mit Blenders eigener Projektion nachjustieren: garantiert, dass die
+    # Prozentwerte im fertigen Bild wirklich stimmen (Sensor-Fit, Perspektive).
+    refined = placement
+    try:
+        exact = top_percent < 0 or bottom_percent < 0
+        corners = [(x, y, z) for x in (float(lo.x), float(hi.x))
+                   for y in (float(lo.y), float(hi.y))
+                   for z in (float(lo.z), float(hi.z))]
+        refined = fit_camera_with_blender(
+            cam,
+            focus_xy=(float(lo.x + hi.x) / 2.0, float(lo.y + hi.y) / 2.0),
+            head_z=float(focus_hi if focus_hi is not None else hi.z),
+            feet_z=float(focus_lo if focus_lo is not None else lo.z),
+            content_points=corners,
+            yaw_deg=yaw_deg,
+            top_percent=top_percent,
+            bottom_percent=bottom_percent,
+            exact=exact,
+        )
+        # Sicherheitsnetz: unplausible Ergebnisse verwerfen.
+        plausible = (
+            math.isfinite(refined["kopf_prozent"])
+            and math.isfinite(refined["fuss_prozent"])
+            and -100.0 <= refined["kopf_prozent"] <= 100.0
+            and -100.0 <= refined["fuss_prozent"] <= 100.0
+            and 0.2 * placement["distance"] <= refined["distance"] <= 5.0 * placement["distance"]
+        )
+        if not plausible:
+            log("WARNUNG: Kamera-Nachjustierung uneindeutig - "
+                "Vorberechnung wird benutzt.")
+            refined = placement
+        else:
+            log(f"Kamera (Blender-Projektion): oben {refined['kopf_prozent']:.1f} % / "
+                f"unten {refined['fuss_prozent']:.1f} % | Abstand "
+                f"{refined['distance']:.2f}")
+    except Exception as exc:  # pragma: no cover - bpy_extras fehlt
+        log(f"WARNUNG: Kamera-Nachjustierung nicht moeglich ({exc}).")
+        refined = placement
+
+    if refined.get("aufgezogen"):
         log("Hinweis: Accessoires ragen ueber Kopf/Fuesse hinaus - Bild wurde "
-            "aufgezogen, damit nichts abgeschnitten wird.")
-    if placement.get("abgeschnitten"):
+            "etwas aufgezogen, damit nichts abgeschnitten wird.")
+    if refined.get("abgeschnitten"):
         log("Hinweis: Ein Accessoire reicht weit ueber Kopf/Fuesse hinaus und "
             "ist nicht komplett im Bild. Der Ausschnitt folgt wie eingestellt "
             "der Kopfoberkante; fuer mehr Platz freiraum_oben_prozent bzw. "
