@@ -78,7 +78,7 @@ Ergebnis im Build-Ordner: `manifest.json`, `parts/*.obj`, `textures/*`,
 | `username` | Roblox-Username (früher `username.txt`) |
 | `drehung_grad` | Seitliche Drehung `-90 … 90`; `0` = frontal, `90` = rechte Seite |
 | `pose` | `None` oder ein Name aus `Posen.toml` |
-| `freiraum_oben_prozent` | Freiraum über dem Kopf (ohne Accessoires), in % der Bildhöhe |
+| `freiraum_oben_prozent` | Freiraum über dem Kopf (ohne Accessoires), in % der Bildhöhe. Ragen Accessoires darüber hinaus, wird das Bild aufgezogen statt anzuschneiden |
 | `freiraum_unten_prozent` | Freiraum unter den Füßen; **negativ** schneidet an (z. B. `-40` = nur Torso) |
 | `render_bei_aenderung` | `true` = nach dem Push rendern (Workflow setzt danach auf `false`) |
 | `hintergrund_url` | Bild-URL/Pfad, `"hdri"` (Standard) oder `"transparent"` |

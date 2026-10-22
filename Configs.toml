@@ -67,6 +67,12 @@ pose = "None"
 #      -40  = nur der Torso ist zu sehen (Beine abgeschnitten)
 #  Oben + unten müssen zusammen unter 95 bleiben, sonst wäre kein Platz
 #  für den Avatar im Bild.
+#
+#  Accessoires (Hut, Krone, schwebender Halo …) zählen beim Messen nicht mit.
+#  Ragen sie trotzdem über den Kopf hinaus, wird das Bild automatisch so weit
+#  aufgezogen, dass nichts abgeschnitten wird (der Kopf sitzt dann etwas
+#  tiefer als eingestellt – die genauen Werte stehen im Render-Log). Bei
+#  negativen Werten wird bewusst angeschnitten, dort wird nichts korrigiert.
 freiraum_oben_prozent = 6
 freiraum_unten_prozent = 6
 
@@ -81,7 +87,7 @@ freiraum_unten_prozent = 6
 #  automatisch wieder auf false. So rendert es nicht bei jeder kleinen
 #  Änderung erneut – einfach auf true stellen, wenn ein neues Bild gewünscht
 #  ist.
-render_bei_aenderung = false
+render_bei_aenderung = true
 
 
 # -----------------------------------------------------------------------------

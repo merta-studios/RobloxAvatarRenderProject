@@ -556,3 +556,39 @@ def test_hintergrund_material_ist_matt_oder_glossy_wie_der_avatar(render, tmp_pa
     # Das Bild haengt als Textur am Material.
     node_types = [n.bl_idname for n in glossy.node_tree.nodes]
     assert "ShaderNodeTexImage" in node_types
+
+
+def test_accessoire_ueber_dem_kopf_wird_nicht_abgeschnitten(render):
+    # Headless-Avatar (Kopf geschaetzt bei 4.2), Halo-Accessoire bis 5.6
+    framing = render.compute_vertical_framing(
+        0.0, 4.2, 6.0, 6.0, content_hi=5.6, content_lo=0.0)
+    assert framing["angepasst"] is True
+    # Der Halo liegt komplett im Bild ...
+    assert framing["z_top"] > 5.6
+    assert framing["z_bottom"] < 0.0
+    # ... und der Avatar wird dabei nicht winzig (Bild bleibt < 2x Avatar).
+    assert framing["visible_h"] < 2.0 * 5.6
+    # Der Kopf sitzt dann tiefer als 6 % - das steht auch im Log.
+    assert framing["kopf_abstand_prozent"] > 6.0
+
+
+def test_ohne_ueberstehende_accessoires_bleiben_die_prozente_exakt(render):
+    framing = render.compute_vertical_framing(
+        0.0, 5.0, 6.0, 6.0, content_hi=5.02, content_lo=0.0)
+    assert framing["angepasst"] is False
+    assert framing["kopf_abstand_prozent"] == pytest.approx(6.0)
+    assert framing["fuss_abstand_prozent"] == pytest.approx(6.0)
+
+
+def test_negative_raender_schneiden_bewusst_an(render):
+    oben = render.compute_vertical_framing(
+        0.0, 5.0, -10.0, 6.0, content_hi=6.5, content_lo=0.0)
+    assert oben["angepasst"] is False
+    assert oben["kopf_abstand_prozent"] == pytest.approx(-10.0)
+
+    unten = render.compute_vertical_framing(
+        0.0, 5.0, 6.0, -40.0, content_hi=5.0, content_lo=0.0)
+    assert unten["angepasst"] is False
+    assert unten["fuss_abstand_prozent"] == pytest.approx(-40.0)
+    # Nur der obere Teil des Avatars ist im Bild (Torso-Ausschnitt).
+    assert unten["z_bottom"] > 0.0
