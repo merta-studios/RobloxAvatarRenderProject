@@ -130,6 +130,13 @@ jobs:
             cat build/summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: 5a) Blender-5.0-Cache wiederherstellen
+        id: blender-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/blender
+          key: blender-linux-x64-${{ env.BLENDER_VERSION }}
+
       - name: 5) Blender 5.0 installieren
         id: blender
         run: |
@@ -142,6 +149,13 @@ jobs:
             libxrender1 libxi6 libxxf86vm1 libxfixes3 \
             libsm6 libice6 libxkbcommon0 libx11-6 libxext6 libgomp1 \
             xvfb xz-utils
+
+          if [ -x "$HOME/blender/blender" ] && "$HOME/blender/blender" --version | head -n 1 | grep -q '^Blender 5\.0'; then
+            echo "Blender 5.0 aus Cache geladen."
+            "$HOME/blender/blender" --version | head -n 1 | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "bin=$HOME/blender/blender" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           if [ -x /usr/local/bin/blender ] && /usr/local/bin/blender --version | head -n 1 | grep -q '^Blender 5\.0'; then
             echo "Blender 5.0 ist bereits im Image vorhanden."
@@ -162,7 +176,7 @@ jobs:
               "https://ftp.nluug.nl/pub/graphics/blender/release/${BLENDER_SERIES}"
             do
               echo "Versuche $BASE/$CANDIDATE"
-              if curl -fsSL --retry 3 --retry-delay 2 --max-time 900 \
+              if curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 2 --max-time 900 \
                    -o "$HOME/blender/$CANDIDATE" "$BASE/$CANDIDATE"; then
                 TARBALL="$CANDIDATE"
                 DOWNLOADED=1
@@ -179,6 +193,7 @@ jobs:
           fi
 
           tar -xf "$HOME/blender/$TARBALL" -C "$HOME/blender" --strip-components=1
+          rm -f "$HOME/blender/$TARBALL"
           test -x "$HOME/blender/blender" || { echo "::error::Blender-Binary fehlt"; exit 1; }
           "$HOME/blender/blender" --version | head -n 1 | tee "$HOME/blender/version.txt"
           cat "$HOME/blender/version.txt" >> "$GITHUB_STEP_SUMMARY"
