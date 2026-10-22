@@ -28,6 +28,10 @@ on:
         description: "EEVEE-Samples (Default: 16)"
         required: false
         default: "16"
+      debug:
+        description: "Debug-Artefakt (manifest.json, summary.md, Blender-Log) auch bei Erfolg hochladen"
+        required: false
+        default: "false"
 
 # Nur ein Render pro Branch gleichzeitig; neue Pushes brechen den alten Lauf ab.
 concurrency:
@@ -381,8 +385,8 @@ jobs:
             exit 0
           fi
 
-      - name: 12) Debug-Daten hochladen (nur bei Problemen)
-        if: failure()
+      - name: 12) Debug-Daten hochladen (nur bei Problemen oder mit debug=true)
+        if: failure() || github.event.inputs.debug == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: render-debug
