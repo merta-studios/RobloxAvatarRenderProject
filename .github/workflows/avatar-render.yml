@@ -386,7 +386,7 @@ jobs:
           fi
 
       - name: 12) Debug-Daten hochladen (nur bei Problemen oder mit debug=true)
-        if: failure() || github.event.inputs.debug == 'true'
+        if: always()   # TEMPORAER: Diagnose eines Framing-Problems
         uses: actions/upload-artifact@v4
         with:
           name: render-debug

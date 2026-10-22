@@ -87,7 +87,7 @@ freiraum_unten_prozent = 6
 #  automatisch wieder auf false. So rendert es nicht bei jeder kleinen
 #  Änderung erneut – einfach auf true stellen, wenn ein neues Bild gewünscht
 #  ist.
-render_bei_aenderung = false
+render_bei_aenderung = true
 
 
 # -----------------------------------------------------------------------------
