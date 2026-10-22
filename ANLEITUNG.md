@@ -59,18 +59,23 @@ Weitere Hinweise:
 
 ## c) So startest du den Workflow
 
-**Variante 1 – über `username.txt` (der normale Weg)**
+**Variante 1 – über `Configs.toml` (der normale Weg)**
 
-1. Datei [`username.txt`](username.txt) öffnen.
-2. Usernamen hineinschreiben, z. B. `Builderman`.
+1. Datei [`Configs.toml`](Configs.toml) öffnen.
+2. Oben den Roblox-Usernamen eintragen, z. B. `username = "Builderman"`.
    Groß-/Kleinschreibung ist egal (`builderman` funktioniert genauso).
    Eine Profil-URL wie `https://www.roblox.com/users/12345/profile` wird
    ebenfalls akzeptiert.
-3. Committen und pushen (auf `main`).
-4. Tab **Actions** → Workflow **Avatar-Render (Glas)**.
-5. Warten, bis der gelbe Punkt grün wird (typisch 3–12 Minuten).
-6. Im Lauf nach unten scrollen zu **Artifacts** → **`avatar-render`** anklicken.
-   Die ZIP-Datei enthält `render_avatar.png`.
+3. Optional die weiteren Werte anpassen (Drehung, Pose, Bildausschnitt,
+   Hintergrund) – alle sind in der Datei ausführlich kommentiert.
+4. Committen und pushen (auf `main`). Ist `render_bei_aenderung = true`,
+   startet der Render direkt; der Workflow setzt den Schalter danach wieder
+   auf `false`.
+5. Tab **Actions** → Workflow **Avatar-Render (Glas)**.
+6. Warten, bis der gelbe Punkt grün wird (typisch 3–12 Minuten).
+7. Das Ergebnis steht als Bild in der **Step Summary**, im Branch `renders`
+   (`latest.png`) und im Release `avatar-render-latest`. Zusätzlich gibt es
+   das Artifact **`avatar-render`** (ZIP mit `render_avatar.png`).
 
 **Variante 2 – manuell**
 
@@ -80,9 +85,8 @@ einen Usernamen, die Auflösung (z. B. `960x540`) und die Sample-Zahl
 
 **Wo finde ich was?**
 
-* **Step Summary** der Lauf-Seite: das fertige Bild als **Inline-Vorschau**,
-  Username, UserId, Anzahl Teile/Accessoires, fehlgeschlagene Assets,
-  ignorierte Animationen, Renderdauer.
+* **Step Summary** der Lauf-Seite: das fertige Bild als **Inline-Vorschau**
+  plus Links zum Bild und zum Download (keine Analysedaten mehr).
 * **Branch `renders`** im Repository: `latest.png` (bzw. `<username>.png`) –
   wird bei jedem Lauf ersetzt und ist ohne Login-Download direkt anschaubar.
 * **Release `avatar-render-latest`**: `render_avatar.png` unter einer
@@ -90,7 +94,7 @@ einen Usernamen, die Auflösung (z. B. `960x540`) und die Sample-Zahl
   (`/releases/download/avatar-render-latest/render_avatar.png`).
 * **Artifact `avatar-render`** (ZIP mit `render_avatar.png`, 7 Tage gültig).
 * **Artifact `render-debug`** (nur bei Fehlern): `manifest.json`,
-  `summary.md`, Blender-Log.
+  `summary.md`, Blender-Log – reine Diagnose, nicht Teil des Ergebnisses.
 
 > **iPhone-Hinweis (about:blank → App → 404):** GitHub-Artifacts sind an
 > die Browser-Session gebunden. Die GitHub-App für iOS kann sie deshalb
@@ -101,7 +105,47 @@ einen Usernamen, die Auflösung (z. B. `960x540`) und die Sample-Zahl
 
 ---
 
-## d) Einschränkungen – bitte lesen
+## d) `Configs.toml` und `Posen.toml`
+
+Alle Render-Einstellungen stehen in [`Configs.toml`](Configs.toml), die Posen
+in [`Posen.toml`](Posen.toml). Beide Dateien sind komplett kommentiert; die
+Werte werden vor dem Render geprüft (`tools/render_config.py`,
+`tools/avatar_pose.py`) und bei Fehlern mit einer klaren Meldung abgelehnt.
+
+| Wert in `Configs.toml` | Bedeutung |
+| --- | --- |
+| `username` | Roblox-Username (früher `username.txt`) |
+| `drehung_grad` | Seitliche Drehung: `0` = frontal, `90` = rechte Seite, `-90` = linke Seite. Nur −90 … 90 ist erlaubt. |
+| `pose` | `None` = Stand-Pose, sonst ein Name aus `Posen.toml` (z. B. `Winken`) |
+| `freiraum_oben_prozent` | Freier Platz über der Kopfoberkante in Prozent der Bildhöhe. Accessoires zählen nicht mit. |
+| `freiraum_unten_prozent` | Freier Platz unter den Füßen in Prozent der Bildhöhe. **Negativ** schneidet an (z. B. `-40` → nur der Torso). |
+| `render_bei_aenderung` | `true` = nach diesem Push sofort rendern. Der Workflow setzt den Wert nach erfolgreichem Render automatisch auf `false`. |
+| `hintergrund_url` | URL (oder lokaler Pfad) zu einem Hintergrundbild, `"hdri"` für die HDRI-Umgebung (Standard) oder `"transparent"` für einen durchsichtigen Hintergrund. |
+| `hintergrund_glossy` | `true` = Hintergrund glänzt wie der Avatar, `false` = matt. |
+
+Das Hintergrundbild wird in Blender auf eine Fläche gelegt, die exakt hinter
+dem Avatar sitzt und bis zum Bildrand reicht.
+
+**Posen:** In `Posen.toml` bekommt jede Pose einen eigenen Abschnitt. Für jedes
+Körperteil lassen sich `rotation = [x, y, z]` (Grad) und
+`verschiebung = [x, y, z]` (Studs, max. ±5) angeben:
+
+```toml
+[Winken.rechter_oberarm]
+rotation = [0, 0, 105]
+verschiebung = [0, 0, 0]
+```
+
+Verfügbare Körperteile: oberer/unterer Torso, Kopf, linke/rechte Ober- und
+Unterarme, linke/rechte Hand, linke/rechte Ober- und Unterschenkel sowie
+linker/rechter Fuß. Nicht genannte Teile bleiben in der Stand-Pose.
+Accessoires und Kleidung werden automatisch passend mitgedreht und
+mitverschoben (Hut → Kopf, Gear → rechte Hand usw.). Als Beispiele sind
+`Winken`, `T_Pose`, `Laufen`, `Sitzen` und `Jubel` enthalten.
+
+---
+
+## e) Einschränkungen – bitte lesen
 
 * **Keine physische GPU.** GitHub-gehostete Runner sind reine CPU-Maschinen. Blender 5.0
   rendert EEVEE daher über Mesa Software-OpenGL/Vulkan (`llvmpipe` / `lavapipe`)
@@ -255,7 +299,8 @@ wird (PAT dort als Bypass eintragen).
 ## Aufbau des Repositories
 
 ```
-username.txt                     Roblox-Username (Trigger für den Render)
+Configs.toml                     Username + Drehung, Pose, Bildausschnitt, Hintergrund
+Posen.toml                       Posen (Grad pro Körperteil + leichte Verschiebungen)
 ANLEITUNG.md                     diese Anleitung
 .github/workflows/
   avatar-render.yml              Push/Manuell → Avatar rendern → Artifact
@@ -267,6 +312,8 @@ tools/
   roblox_api.py                  Web-APIs, Asset Delivery, BrickColor-Tabelle
   roblox_mesh.py                 FileMesh-Parser (v1–v7) → OBJ
   avatar_rig.py                  Stand-Pose-Rig + Accessoire-Platzierung
+  avatar_pose.py                 Posen laden/validieren und auf das Rig anwenden
+  render_config.py               Configs.toml lesen/prüfen (Grenzen, Schalter)
   brick_colors.json              208 Roblox-BrickColors (ID → RGB)
   tests/test_pipeline.py         Tests ohne Netzwerk/Blender
 ```
@@ -302,7 +349,7 @@ sofort, ob der Key fehlt (401) oder der Scope nicht reicht (403).
 | --- | --- |
 | `HTTP 403` bei Asset-Downloads | Key hat `legacy-asset:manage` nicht → Abschnitt b) |
 | `HTTP 401` bei Asset-Downloads | Secret fehlt oder ist leer → Abschnitt a) |
-| `username.txt ist leer` | Datei enthält nur Leerzeichen/Newline |
+| `'username' ist leer` | In `Configs.toml` fehlt der Benutzername |
 | `Username wurde nicht gefunden` | Tippfehler oder Account gelöscht; exakten Namen prüfen |
 | Render grün, aber Avatar „nackt“ | Downloads fehlgeschlagen → Lauf-Log und `skipped` im Manifest prüfen |
 | `0 Accessoires`, viele Assets „übersprungen“ | Accessoires/Körperteile kommen als RBXM-Modell → Abschnitt „RBXM“. Steht im Manifest „RBXM nicht lesbar“, fehlen vermutlich die Module `lz4`/`zstandard` (Workflow-Schritt 3 prüft das) |

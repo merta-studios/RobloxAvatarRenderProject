@@ -20,8 +20,11 @@ TOOLS = os.path.dirname(HERE)
 sys.path.insert(0, TOOLS)
 
 import build_avatar  # noqa: E402
+import render_config  # noqa: E402
 import roblox_api  # noqa: E402
 import roblox_mesh  # noqa: E402
+
+ROOT = os.path.dirname(TOOLS)
 
 
 def encode_v2(mesh: roblox_mesh.MeshData) -> bytes:
@@ -167,3 +170,41 @@ def test_build_meldet_unbekannten_username(tmp_path):
             build_avatar.build("gibtsnicht", str(tmp_path), verbose=False)
     finally:
         roblox_api.resolve_user_id = original
+
+
+def _pose_config(pose_name):
+    config = dict(render_config.DEFAULTS)
+    config.update({
+        "_pfad": os.path.join(ROOT, "Configs.toml"),
+        "_posen_pfad": os.path.join(ROOT, "Posen.toml"),
+        "pose": pose_name,
+    })
+    return config
+
+
+def _max_y(path):
+    top = 0.0
+    for line in open(path, encoding="utf-8"):
+        if line.startswith("v "):
+            top = max(top, float(line.split()[2]))
+    return top
+
+
+def test_pose_bewegt_koerper_und_accessoires(fake_api, tmp_path):
+    stand = build_avatar.build("Builderman", str(tmp_path / "stand"), verbose=False)
+    posed = build_avatar.build(
+        "Builderman", str(tmp_path / "posed"), verbose=False,
+        config=_pose_config("Sitzen"))
+
+    assert stand["render"]["pose"] == "None"
+    assert stand["render"]["pose_aktiv"] is False
+    assert posed["render"]["pose"] == "Sitzen"
+    assert posed["render"]["pose_aktiv"] is True
+
+    def hat_top(manifest, base):
+        hat = next(p for p in manifest["parts"] if "Freizeit-Hut" in p["name"])
+        return _max_y(os.path.join(base, hat["obj"]))
+
+    # "Sitzen" verschiebt den Unterkoerper (und damit alles darueber) nach
+    # unten: auch der Hut als Accessoire muss mitgehen.
+    assert hat_top(posed, tmp_path / "posed") < hat_top(stand, tmp_path / "stand") - 0.1

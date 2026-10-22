@@ -1,0 +1,117 @@
+# =============================================================================
+#  Configs.toml – alle Einstellungen für den Avatar-Render
+# =============================================================================
+#
+#  Diese Datei ersetzt die frühere username.txt. Werte ändern, committen,
+#  pushen – der Workflow „Avatar-Render (Glas)“ erledigt den Rest.
+#
+#  Kleine Schreibhilfe:
+#    * Texte stehen in "Anführungszeichen" – z. B. "MertaStudios".
+#    * Schalter sind true oder false (ohne Anführungszeichen).
+#    * Zahlen stehen ohne Anführungszeichen – z. B. 6, -40 oder -12.5.
+#    * Alles nach einem # ist Kommentar und wird ignoriert.
+#
+#  Geprüft werden die Werte automatisch (tools/render_config.py): falsche
+#  Werte (z. B. 120 Grad Drehung) führen zu einer klaren Fehlermeldung,
+#  statt einen kaputten Render zu erzeugen.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+#  1) Roblox-Benutzername
+# -----------------------------------------------------------------------------
+#  Der Name aus der Roblox-Profil-URL, z. B. "MertaStudios".
+#  (Ein "https://www.roblox.com/users/123456/profile"-Link funktioniert auch.)
+username = "MertaStudios"
+
+
+# -----------------------------------------------------------------------------
+#  2) Seitliche Drehung des Avatars
+# -----------------------------------------------------------------------------
+#  In Grad. Der Avatar wird für die Aufnahme seitlich gedreht (die Kamera
+#  kreist dafür um ihn herum):
+#      0    = frontal zur Kamera (direkt zur Mitte)
+#      90   = nach rechts gedreht  -> wir sehen die rechte Seite (Profil)
+#      -90   = nach links gedreht  -> wir sehen die linke Seite (Profil)
+#  Erlaubt ist nur -90 bis 90. Zwischenwerte wie 25 oder -40 sind ideal für
+#  eine schräge 3/4-Ansicht (früher war der Render fest auf ca. 27°).
+drehung_grad = 0
+
+
+# -----------------------------------------------------------------------------
+#  3) Pose
+# -----------------------------------------------------------------------------
+#  "None" = normale Stand-Pose (wie bisher).
+#  Sonst der Name einer Pose aus Posen.toml, z. B. "Winken", "T_Pose",
+#  "Laufen", "Sitzen" oder "Jubel".
+#  Dort stehen für jedes Körperteil die Drehungen (Grad) und leichten
+#  Verschiebungen (Studs). Accessoires, Kleidung usw. folgen automatisch.
+pose = "None"
+
+
+# -----------------------------------------------------------------------------
+#  4) Bildausschnitt: freier Abstand oben und unten
+# -----------------------------------------------------------------------------
+#  Beide Werte sind Prozent der Bildhöhe.
+#
+#  freiraum_oben_prozent:
+#      Freier Platz von der oberen Bildkante bis zur Oberkante des Kopfes.
+#      Accessoires (Hut, Haare, Krone …) zählen NICHT mit – der Wert bezieht
+#      sich nur auf den Kopf selbst.
+#
+#  freiraum_unten_prozent:
+#      Freier Platz von der Unterkante der Füße bis zur unteren Bildkante.
+#
+#  Negative Werte sind erlaubt und schneiden das Bild an:
+#      -20  = die Füße liegen 20 % unterhalb des Bildrands
+#      -40  = nur der Torso ist zu sehen (Beine abgeschnitten)
+#  Oben + unten müssen zusammen unter 95 bleiben, sonst wäre kein Platz
+#  für den Avatar im Bild.
+freiraum_oben_prozent = 6
+freiraum_unten_prozent = 6
+
+
+# -----------------------------------------------------------------------------
+#  5) Render nach dem Veröffentlichen starten?
+# -----------------------------------------------------------------------------
+#  true  = der Workflow rendert nach diesem Push sofort ein neues Bild.
+#  false = nur speichern/veröffentlichen, kein Render.
+#
+#  Wichtig: Der Workflow setzt diesen Schalter nach einem erfolgreichen Render
+#  automatisch wieder auf false. So rendert es nicht bei jeder kleinen
+#  Änderung erneut – einfach auf true stellen, wenn ein neues Bild gewünscht
+#  ist.
+render_bei_aenderung = true
+
+
+# -----------------------------------------------------------------------------
+#  6) Hintergrundbild
+# -----------------------------------------------------------------------------
+#  URL zu einem Bild (PNG/JPG/WEBP/BMP), das in Blender auf eine Fläche
+#  gelegt wird. Die Fläche sitzt exakt hinter dem Avatar und ist genau so
+#  groß, dass sie bis zum Bildrand reicht.
+#
+#  Sonderwerte:
+#      "hdri"        -> wie bisher: die HDRI-Umgebung
+#                       (sunset_jhbcentral_4k.exr) ist der Hintergrund
+#      "transparent" -> kein Hintergrundbild, das Bild wird durchsichtig
+#                       (PNG mit Alpha)
+#
+#  Beispiele:
+#      hintergrund_url = "https://example.com/wallpaper.jpg"
+#      hintergrund_url = "transparent"
+#      hintergrund_url = "hdri"
+#
+#  Kann das Bild nicht geladen werden (404, kein Netz), rendert die Pipeline
+#  trotzdem weiter und benutzt das HDRI als Hintergrund.
+hintergrund_url = "hdri"
+
+
+# -----------------------------------------------------------------------------
+#  7) Hintergrund: glänzend oder matt?
+# -----------------------------------------------------------------------------
+#  true  = der Hintergrund glänzt genau wie der Avatar (glossy: Rauheit 0,
+#          Metallic 0,2, Specular 1 – also mit Spiegelungen des HDRI).
+#  false = der Hintergrund ist matt (hohe Rauheit, kaum Spiegelung), damit
+#          das Bild ruhig und gut lesbar bleibt.
+hintergrund_glossy = false

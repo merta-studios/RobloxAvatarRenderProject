@@ -1,12 +1,15 @@
 name: Avatar-Render (Glas)
 
 # Auslöser:
-#   * Push, sobald sich username.txt, das HDRI oder die Pipeline selbst ändert
-#   * Manuell über "Run workflow" (optional mit eigenem Usernamen)
+#   * Push, sobald sich Configs.toml, Posen.toml, das HDRI oder die Pipeline
+#     selbst ändert. Ob wirklich gerendert wird, entscheidet der Schalter
+#     "render_bei_aenderung" in der Configs.toml.
+#   * Manuell über "Run workflow" (rendert immer, optional mit eigenem Usernamen)
 on:
   push:
     paths:
-      - "username.txt"
+      - "Configs.toml"
+      - "Posen.toml"
       - "sunset_jhbcentral_4k.exr"
       - "tools/**"
       - "blender/**"
@@ -14,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       username:
-        description: "Roblox-Username (leer lassen = username.txt verwenden)"
+        description: "Roblox-Username (leer lassen = Configs.toml verwenden)"
         required: false
         default: ""
       resolution:
@@ -44,8 +47,40 @@ env:
   PIPELINE_SAMPLES: ${{ github.event.inputs.samples || '16' }}
 
 jobs:
+  # Liest die Configs.toml und entscheidet, ob überhaupt gerendert wird.
+  # Der Schalter render_bei_aenderung wird nach einem erfolgreichen Render
+  # automatisch wieder auf false gesetzt (letzter Schritt des Render-Jobs).
+  config:
+    name: Configs.toml lesen
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      username: ${{ steps.config.outputs.username }}
+      render_jetzt: ${{ steps.config.outputs.render_jetzt }}
+    steps:
+      - name: 1) Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: 2) Configs.toml prüfen und Werte lesen
+        id: config
+        env:
+          INPUT_USERNAME: ${{ github.event.inputs.username }}
+        run: |
+          set -euo pipefail
+          python3 tools/render_config.py --config Configs.toml --github-output >> "$GITHUB_OUTPUT"
+          # Manuell eingegebener Username hat Vorrang (letzter Wert gewinnt).
+          if [ -n "${INPUT_USERNAME// /}" ]; then
+            USERNAME="$(printf '%s' "$INPUT_USERNAME" | tr -d '\r' | head -n 1 | xargs)"
+            echo "username=$USERNAME" >> "$GITHUB_OUTPUT"
+          fi
+
   render:
     name: Avatar rendern
+    needs: config
+    # Push: nur wenn render_bei_aenderung = true. Manuell: immer.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.config.outputs.render_jetzt == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -53,22 +88,20 @@ jobs:
       - name: 1) Repository auschecken
         uses: actions/checkout@v4
 
-      - name: 2) Username aus username.txt lesen
+      - name: 2) Username aus Configs.toml
         id: username
         env:
+          CFG_USERNAME: ${{ needs.config.outputs.username }}
           INPUT_USERNAME: ${{ github.event.inputs.username }}
         run: |
           set -euo pipefail
-          # workflow_dispatch-Eingabe hat Vorrang, sonst Datei lesen.
-          RAW="${INPUT_USERNAME:-}"
-          if [ -z "${RAW// /}" ]; then
-            RAW="$(cat username.txt 2>/dev/null || true)"
-          fi
+          # workflow_dispatch-Eingabe hat Vorrang, sonst Wert aus der Config.
+          RAW="${INPUT_USERNAME:-$CFG_USERNAME}"
           # BOM, Zeilenumbrüche und überflüssige Leerzeichen entfernen
           RAW="${RAW#$'\xef\xbb\xbf'}"
           USERNAME="$(printf '%s' "$RAW" | tr -d '\r' | head -n 1 | xargs || true)"
           if [ -z "$USERNAME" ]; then
-            echo "::error file=username.txt::username.txt ist leer. Bitte einen Roblox-Usernamen eintragen."
+            echo "::error file=Configs.toml::Kein Benutzername gefunden. Bitte 'username' in Configs.toml eintragen."
             exit 1
           fi
           # Falls jemand eine Profil-URL eingetragen hat
@@ -118,16 +151,12 @@ jobs:
         run: |
           set -uo pipefail
           echo "== Avatar-Daten und Meshes laden =="
-          if python3 tools/build_avatar.py --username "$USERNAME" --out build; then
+          if python3 tools/build_avatar.py --config Configs.toml --username "$USERNAME" --out build; then
             echo "build_mode=live" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::Live-Download fehlgeschlagen - es wird ein Platzhalter-Körper gerendert."
             echo "build_mode=fallback" >> "$GITHUB_OUTPUT"
-            python3 tools/build_avatar.py --dry-run --out build
-          fi
-          # Zusammenfassung für die Actions-Seite
-          if [ -f build/summary.md ]; then
-            cat build/summary.md >> "$GITHUB_STEP_SUMMARY"
+            python3 tools/build_avatar.py --config Configs.toml --dry-run --out build
           fi
 
       - name: 5a) Blender-5.0-Cache wiederherstellen
@@ -287,23 +316,9 @@ jobs:
           if [ -z "$SAFE_NAME" ]; then SAFE_NAME="avatar"; fi
 
           TMP="$(mktemp -d)"
+          # Ergebnis = nur das Bild. Keine Analyse-/Diagnosedateien mehr.
           cp render_avatar.png "$TMP/latest.png"
           cp render_avatar.png "$TMP/${SAFE_NAME}.png"
-          # Diagnose-Dateien mit ablegen (Teileliste, Skip-Gruende) -
-          # so ist jeder Lauf ohne Artifact-Download nachvollziehbar.
-          cp build/summary.md "$TMP/summary.md" 2>/dev/null || true
-          cp build/manifest.json "$TMP/manifest.json" 2>/dev/null || true
-          printf '%s\n' \
-            '# Avatar-Renders (automatisch erzeugt)' \
-            '' \
-            'Dieser Branch wird bei jedem Render-Lauf komplett ersetzt.' \
-            'Er existiert, damit das Bild auch auf dem Handy sichtbar ist' \
-            '(GitHub-Artifacts lassen sich in der iOS-App nicht laden).' \
-            '' \
-            '* `latest.png` – zuletzt gerenderter Avatar' \
-            '* `<username>.png` – gleiches Bild unter dem Roblox-Namen' \
-            '* `summary.md` / `manifest.json` – Teileliste und Diagnose des Laufs' \
-            > "$TMP/README.md"
 
           git -C "$TMP" init -q
           git -C "$TMP" checkout -q --orphan renders
@@ -331,23 +346,42 @@ jobs:
               --title "Avatar-Render (aktuell)" --notes "$NOTES"
           fi
 
-      - name: 10) Ergebnis in die Step Summary schreiben (Inline-Bild + Links)
+      - name: 10) Ergebnis in die Step Summary schreiben (nur das Bild)
         env:
           REPO: ${{ github.repository }}
         run: |
           {
-            echo "### Ergebnis ansehen (funktioniert auch auf dem Handy)"
-            echo ""
             echo "![Render](https://raw.githubusercontent.com/${REPO}/renders/latest.png?v=${GITHUB_RUN_ID})"
             echo ""
-            echo "* Bild im Datei-Viewer: https://github.com/${REPO}/blob/renders/latest.png"
-            echo "* Direkt-Download (Release): https://github.com/${REPO}/releases/download/avatar-render-latest/render_avatar.png"
-            echo "* Release-Seite: https://github.com/${REPO}/releases/tag/avatar-render-latest"
-            echo ""
-            echo "> iPhone-Hinweis: Der Artifact-Download weiter unten braucht eine Browser-Session und schlaegt in der iOS-App fehl (about:blank/404). Bild und Release oben gehen ueberall."
+            echo "[Bild groß ansehen](https://github.com/${REPO}/blob/renders/latest.png) · "
+            echo "[Download](https://github.com/${REPO}/releases/download/avatar-render-latest/render_avatar.png)"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 11) Debug-Daten hochladen (nur bei Problemen)
+      - name: 11) Render-Schalter in Configs.toml zurücksetzen
+        if: success()
+        env:
+          PUSH_TOKEN: ${{ secrets.AUTO_MERGE_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Nach dem erfolgreichen Render wieder auf false: true ist ein
+          # einmaliger "jetzt rendern"-Schalter.
+          python3 tools/render_config.py --config Configs.toml --reset-render-flag
+          if git diff --quiet -- Configs.toml; then
+            echo "render_bei_aenderung war bereits false."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Configs.toml
+          git commit -q -m "Configs: render_bei_aenderung nach Render zuruecksetzen (Run ${GITHUB_RUN_ID})"
+          if ! git push "https://x-access-token:${PUSH_TOKEN}@github.com/${REPO}.git" "HEAD:${BRANCH}"; then
+            echo "::warning::Render-Schalter konnte nicht zurückgesetzt werden (Branch-Schutz?). Bitte render_bei_aenderung manuell auf false setzen."
+            exit 0
+          fi
+
+      - name: 12) Debug-Daten hochladen (nur bei Problemen)
         if: failure()
         uses: actions/upload-artifact@v4
         with:

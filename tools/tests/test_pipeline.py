@@ -22,6 +22,7 @@ sys.path.insert(0, TOOLS)
 
 import avatar_rig  # noqa: E402
 import build_avatar  # noqa: E402
+import render_config  # noqa: E402
 import roblox_api  # noqa: E402
 import roblox_mesh  # noqa: E402
 
@@ -478,15 +479,15 @@ def test_dry_run_erzeugt_manifest_und_obj_dateien(tmp_path):
 
 
 def test_manifest_ohne_username_scheitert_sauber(tmp_path):
-    empty = tmp_path / "username.txt"
-    empty.write_text("\n")
+    empty = tmp_path / "Configs.toml"
+    empty.write_text('username = ""\n', encoding="utf-8")
     result = subprocess.run(
         [sys.executable, os.path.join(TOOLS, "build_avatar.py"),
-         "--username-file", str(empty), "--out", str(tmp_path / "b")],
+         "--config", str(empty), "--out", str(tmp_path / "b")],
         capture_output=True, text=True, timeout=60,
     )
     assert result.returncode == 2
-    assert "username.txt" in result.stderr
+    assert "Benutzernamen" in result.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -495,17 +496,23 @@ def test_manifest_ohne_username_scheitert_sauber(tmp_path):
 
 
 def test_wichtige_dateien_existieren():
-    for rel in ("username.txt", ".github/workflows/avatar-render.yml",
+    for rel in ("Configs.toml", "Posen.toml", ".github/workflows/avatar-render.yml",
                 ".github/workflows/auto-merge.yml", "blender/render_glass.py",
                 "tools/build_avatar.py", "tools/roblox_api.py",
                 "tools/roblox_mesh.py", "tools/avatar_rig.py", "tools/diagnose.py",
+                "tools/render_config.py", "tools/avatar_pose.py",
                 ".github/workflows/diagnose.yml", "AGENTS.md", "ANLEITUNG.md"):
         assert (ROOT / rel).exists(), rel
 
 
-def test_username_txt_ist_gueltig():
-    content = (ROOT / "username.txt").read_text(encoding="utf-8-sig")
-    assert roblox_api.normalize_username(content)
+def test_configs_toml_ist_gueltig():
+    config = render_config.load_config(str(ROOT / "Configs.toml"))
+    assert roblox_api.normalize_username(config["username"])
+    for key in ("drehung_grad", "pose", "freiraum_oben_prozent",
+                "freiraum_unten_prozent", "render_bei_aenderung",
+                "hintergrund_url", "hintergrund_glossy"):
+        assert key in config
+    assert -90 <= config["drehung_grad"] <= 90
 
 
 def test_workflows_sind_gueltiges_yaml():
@@ -576,7 +583,7 @@ def test_render_workflow_hat_artifact_und_secret():
     data = yaml.safe_load(text)
     steps = data["jobs"]["render"]["steps"]
     names = [s.get("name", "") for s in steps]
-    assert any("username.txt" in n for n in names)
+    assert any("Configs.toml" in n for n in names)
     uploads = [s for s in steps if s.get("uses", "").startswith("actions/upload-artifact")]
     assert uploads, "upload-artifact fehlt"
     main_upload = uploads[0]
@@ -603,12 +610,32 @@ def test_render_workflow_veroeffentlicht_renders_branch_und_release():
     # Pfad-Filter bleibt eng, damit der renders-Push keine Schleife ausloest
     triggers = data.get("on", data.get(True))
     paths = triggers["push"]["paths"]
-    assert "username.txt" in paths
+    assert "Configs.toml" in paths
+    assert "Posen.toml" in paths
     assert not any("png" in p for p in paths)
+
+
+def test_render_workflow_nutzt_den_render_schalter_aus_der_config():
+    yaml = pytest.importorskip("yaml")
+    text = (ROOT / ".github/workflows/avatar-render.yml").read_text()
+    data = yaml.safe_load(text)
+    assert "config" in data["jobs"]
+    outputs = data["jobs"]["config"]["outputs"]
+    assert "render_jetzt" in outputs
+    render_job = data["jobs"]["render"]
+    assert "needs" in render_job
+    assert "render_jetzt" in render_job["if"]
+    # Der Schalter wird nach dem Render wieder ausgeschaltet.
+    assert "--reset-render-flag" in text
+    # Ergebnis = nur das Bild (keine Analyse-Dateien im renders-Branch).
+    assert 'cp build/summary.md "$TMP' not in text
+    assert 'cp build/manifest.json "$TMP' not in text
+    assert 'cp render_avatar.png "$TMP/latest.png"' in text
 
 
 def test_anleitung_ist_deutsch_und_vollstaendig():
     text = (ROOT / "ANLEITUNG.md").read_text(encoding="utf-8")
-    for needle in ("ROBLOX_OPEN_CLOUD_API_KEY", "legacy-asset:manage", "username.txt",
-                   "Actions", "Artifacts", "artifact", "GPU", "Nutzungsbedingungen"):
+    for needle in ("ROBLOX_OPEN_CLOUD_API_KEY", "legacy-asset:manage", "Configs.toml",
+                   "Posen.toml", "Actions", "Artifacts", "artifact", "GPU",
+                   "Nutzungsbedingungen"):
         assert needle.lower() in text.lower(), needle

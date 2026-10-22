@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       username:
-        description: "Roblox-Username zum Testen (leer = username.txt)"
+        description: "Roblox-Username zum Testen (leer = Configs.toml)"
         required: false
         default: ""
 
@@ -29,7 +29,7 @@ jobs:
         run: |
           set -euo pipefail
           RAW="${INPUT_USERNAME:-}"
-          [ -n "${RAW// /}" ] || RAW="$(cat username.txt 2>/dev/null || echo Builderman)"
+          [ -n "${RAW// /}" ] || RAW="$(python3 tools/render_config.py --config Configs.toml --get username 2>/dev/null || echo Builderman)"
           echo "username=$(printf '%s' "$RAW" | tr -d '\r' | head -n 1 | xargs)" >> "$GITHUB_OUTPUT"
 
       - name: Diagnose ausführen

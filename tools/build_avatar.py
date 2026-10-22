@@ -6,11 +6,15 @@ Beispiel:
     python3 tools/build_avatar.py --dry-run --out build   # ohne Netzwerk
 
 Ergebnis (im Ausgabeordner):
-    manifest.json    Beschreibung der Szene (Parts, Farben, Texturen)
+    manifest.json    Beschreibung der Szene (Parts, Farben, Texturen, Render)
     parts/*.obj      Geometrie (Koerper + echte Roblox-Accessoire-Meshes)
     textures/*       heruntergeladene Texturen (PNG/JPG)
     avatar.json      Rohdaten der Avatar-API (zum Debuggen)
-    summary.md       Kurzbericht (fuer GitHub Step Summary)
+    summary.md       Kurzbericht (nur fuer Debug-Artefakte)
+    hintergrund.*    Hintergrundbild aus der Configs.toml (optional)
+
+Alle Render-Einstellungen (Username, Drehung, Pose, Bildausschnitt,
+Hintergrund) stehen in ``Configs.toml``; die Posen in ``Posen.toml``.
 
 Accessoires und die getragenen Koerperteile liefert Roblox als
 RBXM-Modelle aus; die Mesh-/Textur-IDs werden mit tools/rbxm.py aus dem
@@ -26,13 +30,15 @@ import datetime as _dt
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import avatar_pose  # noqa: E402
 import avatar_rig  # noqa: E402
 import avatar_uv  # noqa: E402
 import rbxm  # noqa: E402
+import render_config  # noqa: E402
 import roblox_api as api  # noqa: E402
 import roblox_mesh  # noqa: E402
 
@@ -331,12 +337,180 @@ def sanity_check(mesh: roblox_mesh.MeshData, target_max: float, label: str,
 
 
 # ---------------------------------------------------------------------------
+# Hintergrundbild aus der Configs.toml
+# ---------------------------------------------------------------------------
+
+MAX_BACKGROUND_BYTES = 30 * 1024 * 1024
+BACKGROUND_SIGNATURES = (
+    (b"\x89PNG\r\n\x1a\n", ".png"),
+    (b"\xff\xd8\xff", ".jpg"),
+    (b"BM", ".bmp"),
+    (b"RIFF", ".webp"),
+)
+
+
+def _background_extension(url: str, data: bytes) -> str:
+    """Dateiendung aus Signatur bzw. URL bestimmen (Blender braucht sie)."""
+    for signature, suffix in BACKGROUND_SIGNATURES:
+        if data.startswith(signature):
+            if suffix == ".webp" and data[8:12] != b"WEBP":
+                continue
+            return suffix
+    lower = (url or "").lower().split("?")[0]
+    for suffix in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
+        if lower.endswith(suffix):
+            return ".jpg" if suffix == ".jpeg" else suffix
+    return ".png"
+
+
+def fetch_background(config: Dict[str, Any], out_dir: str,
+                     warnings: List[str], dry_run: bool = False) -> Dict[str, Any]:
+    """Laedt das Hintergrundbild und legt es neben das Manifest.
+
+    ``hintergrund_url`` ist entweder eine URL/ein Dateipfad, ``"transparent"``
+    (Film wird durchsichtig) oder ``"hdri"`` (World-HDRI wie frueher).
+    Schlaegt der Download fehl, wird weiter das HDRI benutzt - der Render
+    bricht dadurch nicht ab.
+    """
+    url = str(config.get("hintergrund_url") or "").strip()
+    glossy = bool(config.get("hintergrund_glossy"))
+    info: Dict[str, Any] = {"url": url, "datei": "", "transparent": False,
+                            "glossy": glossy}
+    lowered = url.strip().lower()
+    if lowered == "transparent":
+        # Ausnahme: durchsichtiger Hintergrund (PNG mit Alpha).
+        info["transparent"] = True
+        return info
+    if not lowered or lowered in ("hdri", "hdr", "environment", "env"):
+        # Wie frueher: das World-HDRI bleibt als Hintergrund sichtbar.
+        return info
+
+    data: Optional[bytes] = None
+    try:
+        if url.lower().startswith(("http://", "https://")):
+            if dry_run:
+                warnings.append(
+                    "Dry-Run: Hintergrundbild wird nicht heruntergeladen, "
+                    "es wird das HDRI benutzt.")
+                return info
+            import urllib.request
+
+            request = urllib.request.Request(
+                url,
+                headers={"User-Agent": "RobloxAvatarRenderPipeline/1.0"},
+            )
+            with urllib.request.urlopen(request, timeout=60) as response:
+                data = response.read(MAX_BACKGROUND_BYTES + 1)
+        else:
+            with open(url, "rb") as fh:
+                data = fh.read(MAX_BACKGROUND_BYTES + 1)
+    except Exception as exc:  # Netzwerk, 404, Rechte, kaputte Datei ...
+        warnings.append(
+            f"Hintergrundbild '{url}' konnte nicht geladen werden ({exc}) - "
+            "es wird das HDRI als Hintergrund benutzt.")
+        return info
+
+    if data is None or not data:
+        warnings.append(
+            f"Hintergrundbild '{url}' ist leer - es wird das HDRI benutzt.")
+        return info
+    if len(data) > MAX_BACKGROUND_BYTES:
+        warnings.append(
+            f"Hintergrundbild '{url}' ist groesser als "
+            f"{MAX_BACKGROUND_BYTES // (1024 * 1024)} MB - es wird das HDRI benutzt.")
+        return info
+
+    suffix = _background_extension(url, data)
+    fname = f"hintergrund{suffix}"
+    with open(os.path.join(out_dir, fname), "wb") as fh:
+        fh.write(data)
+    info["datei"] = fname
+    log(f"      -> Hintergrundbild geladen: {url} ({fmt_de(len(data) / 1024, 0)} KB)")
+    return info
+
+
+# ---------------------------------------------------------------------------
+# Pose
+# ---------------------------------------------------------------------------
+
+
+def setup_pose(config: Dict[str, Any],
+               body_parts: List[avatar_rig.Part],
+               metrics: avatar_rig.BodyMetrics,
+               rig_avatar: Optional[avatar_rig.RiggedAvatar],
+               use_r15_rig: bool,
+               warnings: List[str]) -> Tuple[Optional[avatar_pose.PoseContext], Dict[str, Any]]:
+    """Baut den Pose-Kontext (None = Stand-Pose) aus der Configs.toml.
+
+    Die Pose wird bewusst **nach** dem fertigen Rig angewendet: Avatar laden,
+    RBXM parsen und Gelenke setzen bleiben unveraendert, erst danach werden
+    die Vertices um die Gelenkpunkte gedreht.
+    """
+    pose_name = str((config or {}).get("pose") or "None").strip()
+    info: Dict[str, Any] = {"name": pose_name or "None", "aktiv": False,
+                            "details": ""}
+    if not pose_name or pose_name.lower() == "none":
+        return None, info
+
+    poses_path = (config or {}).get("_posen_pfad") or os.path.join(
+        os.path.dirname(os.path.abspath((config or {}).get("_pfad", "Configs.toml"))),
+        render_config.POSES_FILENAME,
+    )
+    try:
+        poses = avatar_pose.load_poses(poses_path)
+    except avatar_pose.PoseError as exc:
+        warnings.append(
+            f"Pose '{pose_name}' konnte nicht geladen werden ({exc}) - "
+            "es wird die Stand-Pose gerendert.")
+        return None, info
+
+    entry = poses.get(pose_name)
+    if entry is None:
+        warnings.append(
+            f"Pose '{pose_name}' steht nicht in {poses_path} - es wird die "
+            "Stand-Pose gerendert. Verfuegbar: " + ", ".join(sorted(poses)))
+        return None, info
+
+    part_meshes = {part.name: part.mesh for part in body_parts}
+    joints = avatar_pose.joints_from_parts(part_meshes, metrics)
+    if use_r15_rig and rig_avatar is not None:
+        # Exakte R15-Gelenke aus den *RigAttachment-Daten haben Vorrang.
+        joints.update(rig_avatar.joint_positions)
+
+    context = avatar_pose.PoseContext(entry["teile"], joints)
+    info["aktiv"] = context.active
+    info["details"] = avatar_pose.pose_summary(context.pose)
+    log(f"      Pose '{pose_name}': {info['details']}")
+    return context, info
+
+
+def apply_body_pose(context: Optional[avatar_pose.PoseContext], name: str,
+                    mesh: roblox_mesh.MeshData) -> roblox_mesh.MeshData:
+    if context is None or not context.active:
+        return mesh
+    return context.apply_body(name, mesh)
+
+
+def apply_accessory_pose(context: Optional[avatar_pose.PoseContext],
+                         mesh: roblox_mesh.MeshData,
+                         asset_type_id: int) -> roblox_mesh.MeshData:
+    if context is None or not context.active:
+        return mesh
+    anchor = ""
+    layout = avatar_rig.ACCESSORY_LAYOUT.get(int(asset_type_id))
+    if layout:
+        anchor = str(layout.get("anchor") or "")
+    return context.apply_accessory(mesh, anchor)
+
+
+# ---------------------------------------------------------------------------
 # Hauptablauf
 # ---------------------------------------------------------------------------
 
 
 def build(username_raw: str, out_dir: str, dry_run: bool = False,
-          max_assets: int = 80, verbose: bool = True) -> Dict[str, Any]:
+          max_assets: int = 80, verbose: bool = True,
+          config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     os.makedirs(out_dir, exist_ok=True)
     parts_dir = os.path.join(out_dir, "parts")
     textures_dir = os.path.join(out_dir, "textures")
@@ -352,6 +526,25 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     mesh_parts: List[Dict[str, Any]] = []
     texture_bytes_by_rel: Dict[str, bytes] = {}
     headless = {"active": False, "label": "", "reason": "", "info": ""}
+
+    # Render-Einstellungen (Configs.toml). Ohne Config gelten die Defaults -
+    # so bleiben direkte Aufrufe/Tests ohne Config-Datei lauffaehig.
+    render_cfg: Dict[str, Any] = dict(render_config.DEFAULTS)
+    if config:
+        for key in render_config.KNOWN_KEYS:
+            if key in config:
+                render_cfg[key] = config[key]
+        warnings.extend(config.get("_warnungen") or [])
+
+    def config_flag(name: str, default: bool = False) -> bool:
+        value = render_cfg.get(name, default)
+        return bool(value) if isinstance(value, bool) else default
+
+    def config_number(name: str, default: float) -> float:
+        try:
+            return float(render_cfg.get(name, default))
+        except (TypeError, ValueError):
+            return default
 
     def set_headless(label: str, reason: str = "", info: str = "") -> None:
         if not headless["active"]:
@@ -892,6 +1085,13 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                     f"Torso {fmt_de(metrics.torso_width)} breit) - "
                     "keine achsweise Streckung der Koerperteile mehr.")
 
+    # ---- Pose -------------------------------------------------------------
+    # Erst nach dem fertigen Rig: die exakten R15-Gelenke (bzw. die aus den
+    # Mesh-Massen abgeleiteten Gelenke) sind die Drehpunkte. Avatar-Laden,
+    # RBXM-Parsing und Rig-Aufbau bleiben davon komplett unberuehrt.
+    pose_ctx, pose_info = setup_pose(config or {}, body_parts, metrics,
+                                     rig_avatar, use_r15_rig, warnings)
+
     body_parts_from_mesh = 0
     for part in body_parts:
         if part.name == "kopf":
@@ -908,6 +1108,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                     c = placed.center()
                     placed = placed.transform(1.0, (-c[0], metrics.head_center_y - c[1], -c[2]))
                     placed = sanity_check(placed, target, "Kopf", warnings)
+                placed = apply_body_pose(pose_ctx, "kopf", placed)
                 fname = "kopf_mesh.obj"
                 placed.write_obj(os.path.join(parts_dir, fname))
                 head_texture = (head_mesh.get("texture_file")
@@ -944,6 +1145,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                                                      uniform=False)
                 placed = sanity_check(placed, max(hi[i] - lo[i] for i in range(3)),
                                       part.name, warnings)
+            placed = apply_body_pose(pose_ctx, part.name, placed)
             fname = f"{part.name}.obj"
             placed.write_obj(os.path.join(parts_dir, fname))
             body_texture = (replacement.get("texture_file")
@@ -965,8 +1167,9 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             body_parts_from_mesh += 1
             continue
 
+        placed = apply_body_pose(pose_ctx, part.name, part.mesh)
         fname = f"{part.name}.obj"
-        part.mesh.write_obj(os.path.join(parts_dir, fname))
+        placed.write_obj(os.path.join(parts_dir, fname))
         parts.append({
             "name": part.name,
             "obj": f"parts/{fname}",
@@ -1048,6 +1251,10 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             mesh_part["label"] or mesh_part["type_name"],
             warnings,
         )
+        # Accessoires/Kleidung werden mitgedreht und mitverschoben: starre
+        # Zuordnung zum passenden Knochen (Hut -> Kopf, Gear -> rechte Hand,
+        # Rucksack -> oberer Torso ...).
+        placed = apply_accessory_pose(pose_ctx, placed, int(mesh_part["type_id"]))
 
         acc_tex = mesh_part.get("texture_file")
         acc_tex_kind = None
@@ -1107,6 +1314,10 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     if bounds_lo[0] > bounds_hi[0]:
         bounds_lo, bounds_hi = [-1, 0, -1], [1, 5, 1]
 
+    # Hintergrundbild (Configs.toml) neben das Manifest legen, damit der
+    # Blender-Schritt es ohne Netzwerk laden kann.
+    background_info = fetch_background(render_cfg, out_dir, warnings, dry_run=dry_run)
+
     manifest = {
         "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
         "username": username,
@@ -1115,6 +1326,17 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         "avatar_source": avatar_raw.get("_source", ""),
         "dry_run": dry_run,
         "scales": scales,
+        # Alles, was der Blender-Schritt fuer Bildausschnitt/Hintergrund braucht.
+        "render": {
+            "drehung_grad": config_number("drehung_grad", 0.0),
+            "pose": pose_info["name"],
+            "pose_aktiv": bool(pose_info["aktiv"]),
+            "pose_details": pose_info["details"],
+            "freiraum_oben_prozent": config_number("freiraum_oben_prozent", 6.0),
+            "freiraum_unten_prozent": config_number("freiraum_unten_prozent", 6.0),
+            "render_bei_aenderung": config_flag("render_bei_aenderung", False),
+            "hintergrund": background_info,
+        },
         "body_colors": body_colors,
         "metrics": {
             "height": round(metrics.height, 3),
@@ -1180,6 +1402,9 @@ def write_summary(path: str, manifest: Dict[str, Any]) -> None:
         f"Texturen: {s['textures']}, fehlgeschlagen: {s.get('failed', s['skipped'])}, "
         f"Animationen ignoriert: {s.get('ignored_animations', 0)})",
         f"* Höhe: {height_de} Studs (typisch 5–6)",
+        f"* Pose: **{manifest.get('render', {}).get('pose', 'None')}**"
+        + (f" ({manifest['render'].get('pose_details', '')})"
+           if manifest.get("render", {}).get("pose_aktiv") else ""),
         "",
         "## Teile",
         "",
@@ -1208,19 +1433,42 @@ def write_summary(path: str, manifest: Dict[str, Any]) -> None:
         fh.write("\n".join(lines) + "\n")
 
 
-def read_username_file(path: str) -> str:
-    try:
-        with open(path, "r", encoding="utf-8-sig") as fh:
-            return fh.read().strip()
-    except OSError:
-        return ""
+def load_config_or_defaults(path: str,
+                            username_override: Optional[str] = None,
+                            dry_run: bool = False) -> Tuple[Optional[Dict[str, Any]], str, int]:
+    """Laedt die Configs.toml. Rueckgabe: (config, username, Exitcode)."""
+    config: Dict[str, Any] = dict(render_config.DEFAULTS)
+    config["_pfad"] = os.path.abspath(path)
+    config["_posen_pfad"] = os.path.join(
+        os.path.dirname(config["_pfad"]), render_config.POSES_FILENAME)
+    config["_warnungen"] = []
+    config["_transparent"] = True
+
+    if os.path.isfile(path):
+        try:
+            config = render_config.load_config(path, require_username=False)
+        except render_config.ConfigError as exc:
+            print(f"FEHLER: {exc}", file=sys.stderr)
+            return None, "", 2
+    elif not username_override and not dry_run:
+        print(f"FEHLER: {path} fehlt. Bitte die Config-Datei im "
+              "Repository-Root anlegen.", file=sys.stderr)
+        return None, "", 2
+
+    username = (username_override or config.get("username") or "").strip()
+    if not username and not dry_run:
+        print(f"FEHLER: kein Username uebergeben und '{path}' enthaelt keinen "
+              "Benutzernamen.", file=sys.stderr)
+        return None, "", 2
+    return config, username, 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Roblox-Avatar -> Blender-Szene")
+    parser.add_argument("--config", default=render_config.CONFIG_FILENAME,
+                        help=f"Pfad zur Config-Datei (Default: {render_config.CONFIG_FILENAME})")
     parser.add_argument("--username", default=None,
-                        help="Roblox-Username (sonst username.txt)")
-    parser.add_argument("--username-file", default="username.txt")
+                        help="Roblox-Username (ueberschreibt den Wert aus der Config)")
     parser.add_argument("--out", default="build", help="Ausgabeordner (Default: build)")
     parser.add_argument("--dry-run", action="store_true",
                         help="ohne Netzwerk: nur Koerper mit Standardfarben bauen")
@@ -1228,14 +1476,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
 
-    username = args.username or read_username_file(args.username_file)
-    if not username and not args.dry_run:
-        print("FEHLER: kein Username uebergeben und username.txt ist leer.", file=sys.stderr)
-        return 2
+    config, username, code = load_config_or_defaults(
+        args.config, args.username, args.dry_run)
+    if config is None:
+        return code
 
     try:
         build(username, args.out, dry_run=args.dry_run, max_assets=args.max_assets,
-              verbose=not args.quiet)
+              verbose=not args.quiet, config=config)
     except api.RobloxError as exc:
         print(f"FEHLER: {exc}", file=sys.stderr)
         return 1
