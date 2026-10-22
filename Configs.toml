@@ -35,7 +35,7 @@ username = "MertaStudios"
 #      -90   = nach links gedreht  -> wir sehen die linke Seite (Profil)
 #  Erlaubt ist nur -90 bis 90. Zwischenwerte wie 25 oder -40 sind ideal für
 #  eine schräge 3/4-Ansicht (früher war der Render fest auf ca. 27°).
-drehung_grad = 20
+drehung_grad = 0
 
 
 # -----------------------------------------------------------------------------
@@ -76,7 +76,7 @@ pose = "None"
 #  bewusst nicht eingepasst – dafür freiraum_oben_prozent erhöhen.
 #  Bei negativen Werten wird bewusst angeschnitten, dort wird nichts korrigiert.
 freiraum_oben_prozent = 6
-freiraum_unten_prozent = -35
+freiraum_unten_prozent = 6
 
 
 # -----------------------------------------------------------------------------
@@ -107,12 +107,12 @@ render_bei_aenderung = true
 #
 #  Beispiele:
 #      hintergrund_url = "https://example.com/wallpaper.jpg"
-#      hintergrund_url = "transparent"
-#      hintergrund_url = "transparent"
+#      hintergrund_url = "hdri"
+#      hintergrund_url = "hdri"
 #
 #  Kann das Bild nicht geladen werden (404, kein Netz), rendert die Pipeline
 #  trotzdem weiter und benutzt das HDRI als Hintergrund.
-hintergrund_url = "transparent"
+hintergrund_url = "hdri"
 
 
 # -----------------------------------------------------------------------------
