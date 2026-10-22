@@ -275,13 +275,14 @@ def test_koerpersegmente_werden_gestapelt(monkeypatch, tmp_path):
     # 0.6 = 1.612) und nicht die 2 Studs der Standard-Box.
     assert hi[1] - lo[1] == pytest.approx(1.612, abs=0.02)
     # Kein Diagonalversatz: obere und untere Haelfte sind beide mittig
-    # (Zentrum x = Torso 1 + Armhälfte 0.5 + gap = 1.512). Vorher driftete
-    # die Hand nach innen (Diagonale der Bind-Pose).
+    # (Zentrum x = Torso 1 + Armhälfte 0.5 + arm_gap = 1.555). Vorher driftete
+    # die Hand nach innen (Diagonale der Bind-Pose). arm_gap 0.055 statt 0.012
+    # verhindert, dass Arme in den Torso ragen.
     upper = [p for p in _obj_points(tmp_path / arm["obj"]) if p[1] > 3.0]
     lower = [p for p in _obj_points(tmp_path / arm["obj"]) if p[1] < 3.0]
     for band in (upper, lower):
         xs = [p[0] for p in band]
-        assert (min(xs) + max(xs)) / 2 == pytest.approx(1.512, abs=0.05)
+        assert (min(xs) + max(xs)) / 2 == pytest.approx(1.555, abs=0.05)
 
 
 def test_r15_segment_reihenfolge_obersegment_zuerst():

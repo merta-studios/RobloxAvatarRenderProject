@@ -144,6 +144,7 @@ def build_body(body_colors: Dict[str, Any], scales: Dict[str, Any]) -> Tuple[Lis
 
     parts: List[Part] = []
     gap = 0.012  # minimale Luft, damit keine Flaechen exakt aufeinander liegen
+    arm_gap = 0.055  # etwas mehr Luft zwischen Torso und Armen (sonst wirken Arme „im Koerper“)
 
     # Beine (stehen auf y=0)
     leg_x = leg_w / 2 + gap * 0.5
@@ -160,8 +161,8 @@ def build_body(body_colors: Dict[str, Any], scales: Dict[str, Any]) -> Tuple[Lis
         make_box(torso_w, torso_h, torso_d, (0.0, torso_y, 0.0))),
         colors["torso"], "body"))
 
-    # Arme (haengen seitlich herab)
-    arm_x = torso_w / 2 + arm_w / 2 + gap
+    # Arme (haengen seitlich herab) - mit arm_gap statt gap, damit sie nicht in den Torso ragen
+    arm_x = torso_w / 2 + arm_w / 2 + arm_gap
     arm_y = torso_y
     parts.append(Part("rechts_arm", apply_limb_box_uvs(
         make_box(arm_w, arm_h, arm_d, (arm_x, arm_y, 0.0))),
@@ -231,6 +232,7 @@ def relayout_body(default_parts: List[Part], metrics: BodyMetrics,
     d = _clamp(scales.get("depth"), 0.75, 1.30)
     hs = _clamp(scales.get("head"), 0.75, 1.40)
     gap = 0.012
+    arm_gap = 0.055  # mehr Luft seitlich fuer Arme (fix: Arme ragten leicht in Torso)
 
     def fallback_size(name: str) -> Tuple[float, float, float]:
         part = next((p for p in default_parts if p.name == name), None)
@@ -299,10 +301,10 @@ def relayout_body(default_parts: List[Part], metrics: BodyMetrics,
         make_box(torso_w, torso_h, torso_d, (0.0, torso_bottom + torso_h / 2, 0.0))),
         color("torso"), "body"))
     # Arme: Oberkante je Arm an der Schulterhoehe, seitlich buendig am Torso
-    right_arm_offset = torso_w / 2 + sizes["rechts_arm"][0] / 2 + gap
+    right_arm_offset = torso_w / 2 + sizes["rechts_arm"][0] / 2 + arm_gap
     for name, sign in (("rechts_arm", 1.0), ("links_arm", -1.0)):
         sx, sy, sz = sizes[name]
-        arm_offset = torso_w / 2 + sx / 2 + gap
+        arm_offset = torso_w / 2 + sx / 2 + arm_gap
         center_y = torso_top - sy / 2
         parts.append(Part(name, apply_limb_box_uvs(
             make_box(sx, sy, sz, (sign * arm_offset, center_y, 0.0))),
@@ -819,7 +821,7 @@ def assemble_r15_rig(
         else:
             aw, ah, ad = 1.0 * sw, 2.0 * sh, 1.0 * sd
             torso_half_w = torso_mesh.size()[0] / 2.0
-            cx = sign * (max(abs(shoulder_w[0]), torso_half_w) + aw / 2.0 + 0.012)
+            cx = sign * (max(abs(shoulder_w[0]), torso_half_w) + aw / 2.0 + 0.055)
             cy = shoulder_w[1] + 0.4 * sh - ah / 2.0
             cz = shoulder_w[2]
             body_meshes[part_name] = apply_limb_box_uvs(make_box(aw, ah, ad, (cx, cy, cz)))
