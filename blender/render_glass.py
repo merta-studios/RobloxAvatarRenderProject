@@ -18,6 +18,14 @@ direkt aus der Blender-GUI (Texteditor -> Run Script) starten kann:
       - Metallic = 0.2 (0..1)
       - Specular IOR Level (IQR/IOR Level) = 1.0 (0..1)
       - Transmission = 0.0 (deckend hochglaenzend wie Standard-Principled-BSDF)
+
+Der Bildausschnitt und der Hintergrund kommen aus dem Manifest (Block
+``render``), das ``tools/build_avatar.py`` aus der ``Configs.toml`` schreibt:
+
+  * ``drehung_grad``             seitliche Drehung (-90 .. 90, 0 = frontal)
+  * ``freiraum_oben_prozent``    freier Abstand ueber dem Kopf (ohne Accessoires)
+  * ``freiraum_unten_prozent``   freier Abstand unter den Fuessen (negativ = anschneiden)
+  * ``hintergrund``              Bild-URL/-Datei, ``transparent``, ``glossy``
 """
 
 from __future__ import annotations
@@ -91,6 +99,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--env-color", default="#3f4d5c")
     parser.add_argument("--denoise", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-blend", default="", help="optional .blend speichern")
+    # Optionales Ueberschreiben der Werte aus dem Manifest (Configs.toml).
+    parser.add_argument("--yaw", type=float, default=None,
+                        help="Seitliche Drehung in Grad (-90..90); Default: Manifest/Configs.toml")
+    parser.add_argument("--margin-top", type=float, default=None,
+                        help="Freiraum ueber dem Kopf in Prozent; Default: Manifest")
+    parser.add_argument("--margin-bottom", type=float, default=None,
+                        help="Freiraum unter den Fuessen in Prozent; Default: Manifest")
+    parser.add_argument("--background-image", default="",
+                        help="Hintergrundbild (Pfad); Default: Manifest/Configs.toml")
+    parser.add_argument("--background-glossy", action="store_true",
+                        help="Hintergrund wie den Avatar glaenzen lassen")
     return parser.parse_args(argv)
 
 
@@ -612,10 +631,91 @@ def scene_bounds(objects):
     return lo, hi
 
 
-def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int):
-    center = (lo + hi) / 2.0
-    size = hi - lo
-    radius = max(0.5, (size.length) / 2.0)
+def compute_vertical_framing(feet: float, head_top: float,
+                             top_percent: float, bottom_percent: float):
+    """Bildausschnitt in Studs aus den Prozentwerten (reine Zahlen, testbar).
+
+    ``freiraum_oben_prozent`` ist der freie Platz zwischen Kopfoberkante und
+    oberer Bildkante (Anteil der Bildhoehe), ``freiraum_unten_prozent`` der
+    Platz zwischen Fuessen und unterer Bildkante. Negative Werte schneiden
+    das Bild an. Rueckgabe: dict mit ``visible_h``, ``z_top``, ``z_bottom``,
+    ``center_z``, ``top`` und ``bottom``.
+    """
+    feet = float(feet)
+    head_top = float(head_top)
+    if head_top < feet:
+        feet, head_top = head_top, feet
+    body_span = max(1e-3, head_top - feet)
+
+    top = max(-100.0, min(95.0, float(top_percent)))
+    bottom = max(-100.0, min(95.0, float(bottom_percent)))
+    if top + bottom > 95.0:  # Sicherheitsnetz (die Config prueft das schon)
+        factor = 95.0 / (top + bottom)
+        top *= factor
+        bottom *= factor
+
+    visible_h = body_span / max(0.05, 1.0 - (top + bottom) / 100.0)
+    z_top = head_top + top / 100.0 * visible_h
+    z_bottom = z_top - visible_h
+    return {
+        "visible_h": visible_h,
+        "z_top": z_top,
+        "z_bottom": z_bottom,
+        "center_z": (z_top + z_bottom) / 2.0,
+        "top": top,
+        "bottom": bottom,
+    }
+
+
+def camera_direction(yaw_deg: float):
+    """Blickrichtung der Kamera zum Avatar: 0 = frontal (+Y), 90 = rechts (+X)."""
+    yaw = math.radians(max(-90.0, min(90.0, float(yaw_deg))))
+    return (math.sin(yaw), math.cos(yaw), 0.0)
+
+
+def camera_fov_tangents(cam_data, res_x: int, res_y: int):
+    """tan(halber horizontaler Winkel), tan(halber vertikaler Winkel)."""
+    base_fov = cam_data.angle
+    if res_x >= res_y:
+        h_fov = base_fov
+        v_fov = 2.0 * math.atan(math.tan(h_fov / 2.0) * (res_y / res_x))
+    else:
+        v_fov = base_fov
+        h_fov = 2.0 * math.atan(math.tan(v_fov / 2.0) * (res_x / res_y))
+    return math.tan(h_fov / 2.0), math.tan(v_fov / 2.0)
+
+
+def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
+                 yaw_deg: float = 0.0, top_percent: float = 6.0,
+                 bottom_percent: float = 6.0,
+                 focus_lo=None, focus_hi=None):
+    """Kamera exakt nach Configs.toml ausrichten.
+
+    * ``yaw_deg``: 0 = frontal (Avatar schaut zur Kamera), 90 = rechte Seite,
+      -90 = linke Seite. Die Kamera kreist dabei waagerecht um den Avatar.
+    * ``top_percent`` / ``bottom_percent``: freier Platz in Prozent der
+      Bildhoehe oberhalb der Kopfoberkante (``focus_hi``, ohne Accessoires)
+      bzw. unterhalb der Fuesse (``focus_lo``). Negative Werte schneiden das
+      Bild an (z. B. unten -40 -> nur der Torso ist sichtbar).
+    * Waagerecht wird so weit aufgezogen, dass Accessoires nicht abgeschnitten
+      werden. Ist der Avatar samt Accessoires breiter als das durch die
+      Prozentwerte vorgegebene Bild, wird die Kamera etwas weiter weg
+      geschoben (die Prozentwerte gelten dann fuer die Hoehe nur noch
+      naeherungsweise - das steht im Log).
+    """
+    center_x = (lo.x + hi.x) / 2.0
+    center_y = (lo.y + hi.y) / 2.0
+
+    framing = compute_vertical_framing(
+        focus_lo if focus_lo is not None else lo.z,
+        focus_hi if focus_hi is not None else hi.z,
+        top_percent,
+        bottom_percent,
+    )
+    visible_h = framing["visible_h"]
+    center_z = framing["center_z"]
+    top = framing["top"]
+    bottom = framing["bottom"]
 
     cam_data = bpy.data.cameras.new("Kamera")
     cam_data.lens = 55.0
@@ -624,43 +724,133 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int):
     bpy.context.scene.collection.objects.link(cam)
     bpy.context.scene.camera = cam
 
-    # Klassische 3/4-Vorderansicht: `obj_import(..., forward_axis='NEGATIVE_Z', up_axis='Y')`
-    # dreht Roblox -Z (Vorne) auf Blender +Y!
-    direction = Vector((-0.52, 1.0, 0.24)).normalized()
+    tan_h, tan_v = camera_fov_tangents(cam_data, res_x, res_y)
 
-    # Exakte Perspektiv-Einpassung aller 8 BBox-Ecken fuer beliebige Seitenverhaeltnisse
-    # (inkl. 2000x2000 Quadrat), damit weder Hoerner/Kronen oben noch Schuhe unten
-    # angeschnitten werden.
-    base_fov = cam_data.angle
-    if res_x >= res_y:
-        h_fov = base_fov
-        v_fov = 2.0 * math.atan(math.tan(h_fov / 2.0) * (res_y / res_x))
-    else:
-        v_fov = base_fov
-        h_fov = 2.0 * math.atan(math.tan(v_fov / 2.0) * (res_x / res_y))
-
-    fill = 0.86
-    tan_h = max(1e-4, math.tan(h_fov / 2.0) * fill)
-    tan_v = max(1e-4, math.tan(v_fov / 2.0) * fill)
-
+    # Waagerechte Blickrichtung (Kamera bleibt auf Augenhoehe des Motivs).
+    direction = Vector(camera_direction(yaw_deg)).normalized()
+    center = Vector((center_x, center_y, center_z))
     forward = -direction
-    world_up = Vector((0.0, 0.0, 1.0))
-    right = forward.cross(world_up).normalized()
-    up = right.cross(forward).normalized()
+    up = Vector((0.0, 0.0, 1.0))
+    right = forward.cross(up).normalized()
 
-    distance = radius
+    # Abstand aus dem senkrechten Ausschnitt ...
+    distance = (visible_h / 2.0) / max(1e-4, tan_v)
+    # ... und ggf. vergroessern, damit waagerecht nichts abgeschnitten wird.
+    needed = distance
     for x in (lo.x, hi.x):
         for y in (lo.y, hi.y):
             for z in (lo.z, hi.z):
                 offset = Vector((x, y, z)) - center
-                zf = offset.dot(forward)
-                xr = abs(offset.dot(right))
-                yu = abs(offset.dot(up))
-                distance = max(distance, xr / tan_h - zf, yu / tan_v - zf)
+                r = abs(offset.dot(right))
+                depth = offset.dot(forward)
+                needed = max(needed, r / max(1e-4, tan_h) - depth)
+    if needed > distance + 1e-6:
+        log(f"Hinweis: Avatar ist breiter als der vorgegebene Bildausschnitt - "
+            f"Kamera wird von {distance:.2f} auf {needed:.2f} Einheiten "
+            f"zurueckgeschoben (die Prozentwerte oben/unten werden dadurch "
+            f"etwas groesser).")
+        distance = needed
 
     cam.location = center + direction * distance
     cam.rotation_euler = (center - cam.location).to_track_quat("-Z", "Y").to_euler()
+
+    radius = max(0.5, (hi - lo).length / 2.0)
+    log(f"Kamera: Drehung {yaw_deg:g}° | Bildhoehe {visible_h:.2f} Studs | "
+        f"oben {top:g} % / unten {bottom:g} % | Abstand {distance:.2f}")
     return cam, center, radius
+
+
+# ---------------------------------------------------------------------------
+# Hintergrundbild: Flaeche exakt hinter dem Avatar, bis zum Bildrand
+# ---------------------------------------------------------------------------
+
+def background_plane_geometry(cam_location, forward, tan_h: float, tan_v: float,
+                              points, margin: float = 0.08):
+    """Position und Groesse der Hintergrundflaeche (reine Zahlen, testbar).
+
+    Die Flaeche steht senkrecht zur Blickrichtung, hinter dem gesamten Avatar,
+    und ist so gross, dass sie den kompletten Bildausschnitt fuellt.
+
+    Rueckgabe: ``(location, width, height)``
+    """
+    fx, fy, fz = float(forward[0]), float(forward[1]), float(forward[2])
+    cx, cy, cz = (float(cam_location[0]), float(cam_location[1]),
+                  float(cam_location[2]))
+    depth = 0.0
+    for p in points:
+        d = ((float(p[0]) - cx) * fx + (float(p[1]) - cy) * fy
+             + (float(p[2]) - cz) * fz)
+        depth = max(depth, d)
+    # Ein Stueck hinter dem hintersten Punkt, damit die Flaeche nirgends
+    # den Avatar schneidet.
+    distance = depth + max(0.05, 0.02 * abs(depth))
+    width = 2.0 * distance * tan_h * (1.0 + margin)
+    height = 2.0 * distance * tan_v * (1.0 + margin)
+    location = (cx + fx * distance, cy + fy * distance, cz + fz * distance)
+    return location, width, height
+
+
+def make_background_material(name: str, image_path: str, glossy: bool,
+                             roughness: float, metallic: float,
+                             specular_level: float, ior: float = 1.5):
+    """Material fuer die Hintergrundflaeche (Bild als Base Color).
+
+    ``glossy=True`` benutzt exakt die Avatar-Werte (Rauheit, Metallic,
+    Specular IOR Level), ``glossy=False`` macht die Flaeche matt.
+    """
+    mat = bpy.data.materials.new(name)
+    _ensure_use_nodes(mat)
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    bsdf = nodes.get("Principled BSDF")
+    output = nodes.get("Material Output") or nodes.new("ShaderNodeOutputMaterial")
+    if bsdf is None:
+        bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    for link in list(links):
+        if link.to_node is output and link.to_socket.name == "Surface":
+            links.remove(link)
+    links.new(bsdf.outputs[0], output.inputs["Surface"])
+
+    tex = nodes.new("ShaderNodeTexImage")
+    tex.location = (-380, 300)
+    tex.extension = "EXTEND"
+    image = bpy.data.images.load(image_path, check_existing=True)
+    try:
+        image.colorspace_settings.name = "sRGB"
+    except (AttributeError, TypeError):
+        pass
+    tex.image = image
+    links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    set_input(bsdf, "Base Color", (1.0, 1.0, 1.0, 1.0))
+    if glossy:
+        set_input(bsdf, "Roughness", roughness)
+        set_input(bsdf, "Metallic", metallic)
+        set_input(bsdf, "Specular IOR Level", specular_level)
+    else:
+        set_input(bsdf, "Roughness", 0.92)
+        set_input(bsdf, "Metallic", 0.0)
+        set_input(bsdf, "Specular IOR Level", 0.15)
+    set_input(bsdf, "IOR", ior)
+    set_input(bsdf, "Transmission Weight", 0.0)
+    return mat
+
+
+def add_background_plane(cam, location, width: float, height: float,
+                         image_path: str, glossy: bool, roughness: float,
+                         metallic: float, specular_level: float,
+                         ior: float = 1.5):
+    """Erzeugt die Bildflaeche hinter dem Avatar (Ausrichtung wie die Kamera)."""
+    bpy.ops.mesh.primitive_plane_add(size=1.0, location=location)
+    plane = bpy.context.active_object
+    plane.name = "Hintergrund"
+    plane.rotation_euler = cam.rotation_euler
+    plane.scale = (width, height, 1.0)
+    plane.data.materials.append(make_background_material(
+        "Hintergrund-Material", image_path, glossy,
+        roughness=roughness, metallic=metallic,
+        specular_level=specular_level, ior=ior))
+    log(f"Hintergrundbild: {image_path} auf Flaeche "
+        f"{width:.2f}x{height:.2f} {'(glossy)' if glossy else '(matt)'}")
+    return plane
 
 
 # ---------------------------------------------------------------------------
@@ -773,6 +963,30 @@ def main() -> int:
     base_dir = os.path.dirname(os.path.abspath(args.manifest))
     res_x, res_y = (int(v) for v in args.resolution.lower().split("x"))
 
+    # ---- Werte aus Configs.toml (Manifest-Block "render") -----------------
+    render_cfg = manifest.get("render") or {}
+    yaw_deg = (args.yaw if args.yaw is not None
+               else float(render_cfg.get("drehung_grad") or 0.0))
+    top_percent = (args.margin_top if args.margin_top is not None
+                   else float(render_cfg.get("freiraum_oben_prozent", 6.0)))
+    bottom_percent = (args.margin_bottom if args.margin_bottom is not None
+                      else float(render_cfg.get("freiraum_unten_prozent", 6.0)))
+
+    background_cfg = render_cfg.get("hintergrund") or {}
+    background_path = ""
+    if args.background_image:
+        background_path = args.background_image
+    elif background_cfg.get("datei"):
+        candidate = os.path.join(base_dir, background_cfg["datei"])
+        if os.path.isfile(candidate):
+            background_path = candidate
+        else:
+            log(f"WARNUNG: Hintergrundbild {candidate} fehlt - HDRI wird benutzt.")
+    background_glossy = bool(background_cfg.get("glossy")) or args.background_glossy
+    transparent = bool(background_cfg.get("transparent")) or args.transparent
+    if background_path:
+        transparent = False
+
     reset_scene()
     scene = bpy.context.scene
     active_engine = setup_render(
@@ -783,8 +997,13 @@ def main() -> int:
         engine=args.engine,
         max_bounces=args.max_bounces,
         denoise=args.denoise,
-        transparent=args.transparent,
+        transparent=transparent,
     )
+    log(f"Bildausschnitt: Drehung {yaw_deg:g}°, Freiraum oben {top_percent:g} %, "
+        f"unten {bottom_percent:g} % | Hintergrund: "
+        + ("transparent" if transparent else
+           (os.path.basename(background_path) + (" (glossy)" if background_glossy else " (matt)"))
+           if background_path else "HDRI"))
     loaded_exr = setup_world(
         env_texture_path=args.env_texture,
         env_strength=args.env_strength,
@@ -803,6 +1022,7 @@ def main() -> int:
         f"World EXR={'aktiv' if loaded_exr else 'Fallback'}")
 
     imported = []
+    imported_parts = []  # (Blender-Objekt, Manifest-Eintrag)
     material_cache = {}
     height_hint = float(manifest.get("metrics", {}).get("height") or 5.5)
     for part in manifest.get("parts", []):
@@ -898,6 +1118,7 @@ def main() -> int:
         bevel_width = 0.045 * (height_hint / 5.5) if is_generated_box else 0.0
         add_bevel(obj, width=bevel_width, segments=2)
         imported.append(obj)
+        imported_parts.append((obj, part))
 
     if not imported:
         log("FEHLER: keine Geometrie importiert - Abbruch.")
@@ -905,7 +1126,44 @@ def main() -> int:
 
     lo, hi = scene_bounds(imported)
     height = max(hi.z - lo.z, 0.5)
-    cam, center, radius = setup_camera(lo, hi, res_x, res_y)
+
+    # Fuer die Prozentwerte zaehlen nur Koerperteile: die Oberkante des
+    # Kopfes (nicht der Hut/Haare) und die Unterkante der Fuesse.
+    body_z = []
+    head_z = []
+    for obj, part in imported_parts:
+        if (part or {}).get("kind") != "body":
+            continue
+        for corner in obj.bound_box:
+            world = obj.matrix_world @ Vector(corner)
+            body_z.append(world.z)
+            if (part or {}).get("name") in ("kopf", "kopf_mesh"):
+                head_z.append(world.z)
+    focus_lo = min(body_z) if body_z else lo.z
+    focus_hi = max(head_z) if head_z else (max(body_z) if body_z else hi.z)
+
+    cam, center, radius = setup_camera(
+        lo, hi, res_x, res_y,
+        yaw_deg=yaw_deg,
+        top_percent=top_percent,
+        bottom_percent=bottom_percent,
+        focus_lo=focus_lo,
+        focus_hi=focus_hi,
+    )
+
+    # Hintergrundbild auf eine Flaeche exakt hinter dem Avatar legen.
+    background_plane = None
+    if background_path and not transparent:
+        forward = (center - cam.location).normalized()
+        tan_h, tan_v = camera_fov_tangents(cam.data, res_x, res_y)
+        corners = [(x, y, z) for x in (lo.x, hi.x)
+                   for y in (lo.y, hi.y) for z in (lo.z, hi.z)]
+        location, plane_width, plane_height = background_plane_geometry(
+            tuple(cam.location), tuple(forward), tan_h, tan_v, corners)
+        background_plane = add_background_plane(
+            cam, location, plane_width, plane_height, background_path, background_glossy,
+            roughness=args.roughness, metallic=args.metallic,
+            specular_level=args.specular_level, ior=args.ior)
 
     # Standardmaessig reine Beleuchtung & Spiegelungen ueber sunset_jhbcentral_4k.exr
     if args.studio_lights:
@@ -932,7 +1190,7 @@ def main() -> int:
         bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(args.save_blend))
         log(f"Blend-Datei gespeichert: {args.save_blend}")
 
-    _ = cam
+    _ = (cam, background_plane)
     return 0
 
 

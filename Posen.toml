@@ -1,0 +1,214 @@
+# =============================================================================
+#  Posen.toml – Posen für den Avatar-Render
+# =============================================================================
+#
+#  In der Configs.toml wird unter "pose" ein Name aus dieser Datei eingetragen
+#  (oder "None" für die normale Stand-Pose).
+#
+#  Aufbau einer Pose
+#  -----------------
+#      [Posenname]
+#      beschreibung = "Kurze Beschreibung (optional)"
+#
+#      [Posenname.koerperteil]
+#      rotation = [x, y, z]       # Drehung in Grad, alle drei Achsen
+#      verschiebung = [x, y, z]   # leichte Verschiebung in Studs (optional)
+#
+#  Nicht genannte Körperteile bleiben in der Stand-Pose. Beide Zeilen sind
+#  optional, fehlende Achsen/Werte sind 0.
+#
+#  Verfügbare Körperteile (genau so schreiben):
+#      oberer_torso        unterer_torso
+#      kopf
+#      linker_oberarm      linker_unterarm     linke_hand
+#      rechter_oberarm     rechter_unterarm    rechte_hand
+#      linkes_oberbein     linkes_unterbein    linker_fuss
+#      rechtes_oberbein    rechtes_unterbein   rechter_fuss
+#
+#  Achsen (Roblox-Koordinaten: X = rechts, Y = hoch, Z = hinten)
+#  -------------------------------------------------------------
+#      X: kippt nach vorne/hinten. Positiv = nach vorne (Richtung Gesicht).
+#         Beine: positiv = Schritt nach vorne. Kopf: positiv = nicken.
+#      Y: dreht um die Hochachse. Positiv = nach links drehen.
+#      Z: spreizt seitlich ab. Positiv = zur rechten Körperseite.
+#         Rechter Arm: positiv = Arm hebt sich nach außen.
+#         Linker Arm:  negativ = Arm hebt sich nach außen.
+#
+#  Wichtig
+#  -------
+#  * Drehungen sind relativ zur Stand-Pose und wirken wie bei einem Skelett:
+#    Dreht sich der Oberarm, folgen Unterarm und Hand automatisch mit.
+#  * "verschiebung" ist für kleine Korrekturen gedacht (max. ±5 Studs).
+#  * Der Hals wird automatisch zwischen Oberkörper und Kopf überblendet.
+#  * Accessoires, Kleidung, Hüte usw. werden passend mitgedreht/mitverschoben
+#    (Hut -> Kopf, Gear -> rechte Hand, Rucksack -> oberer Torso …).
+#  * Maximal ±180° pro Achse.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+#  Winken – rechter Arm erhoben, Unterarm winkt, Kopf dreht sich zum Arm
+# -----------------------------------------------------------------------------
+[Winken]
+beschreibung = "Rechter Arm ist erhoben und winkt"
+
+[Winken.rechter_oberarm]
+rotation = [0, 0, 105]
+verschiebung = [0, 0, 0]
+
+[Winken.rechter_unterarm]
+rotation = [0, 0, 30]
+verschiebung = [0, 0, 0]
+
+[Winken.rechte_hand]
+rotation = [0, 0, 0]
+verschiebung = [0, 0, 0]
+
+[Winken.kopf]
+rotation = [0, -15, 0]
+verschiebung = [0, 0, 0]
+
+
+# -----------------------------------------------------------------------------
+#  T_Pose – beide Arme waagerecht zur Seite gestreckt
+# -----------------------------------------------------------------------------
+[T_Pose]
+beschreibung = "Beide Arme waagerecht ausgestreckt (T-Pose)"
+
+[T_Pose.rechter_oberarm]
+rotation = [0, 0, 90]
+verschiebung = [0, 0, 0]
+
+[T_Pose.linker_oberarm]
+rotation = [0, 0, -90]
+verschiebung = [0, 0, 0]
+
+
+# -----------------------------------------------------------------------------
+#  Laufen – Schrittstellung mit Armschwung
+# -----------------------------------------------------------------------------
+[Laufen]
+beschreibung = "Laufende Schrittstellung"
+
+[Laufen.oberer_torso]
+rotation = [4, 8, 0]
+verschiebung = [0, 0, 0]
+
+[Laufen.kopf]
+rotation = [0, -8, 0]
+verschiebung = [0, 0, 0]
+
+[Laufen.linkes_oberbein]
+rotation = [35, 0, 0]
+verschiebung = [0, 0, 0]
+
+[Laufen.linkes_unterbein]
+rotation = [-30, 0, 0]
+verschiebung = [0, 0, 0]
+
+[Laufen.rechtes_oberbein]
+rotation = [-25, 0, 0]
+verschiebung = [0, 0, 0]
+
+[Laufen.rechtes_unterbein]
+rotation = [-20, 0, 0]
+verschiebung = [0, 0, 0]
+
+[Laufen.linker_oberarm]
+rotation = [30, 0, 0]
+verschiebung = [0, 0, 0]
+
+[Laufen.linker_unterarm]
+rotation = [35, 0, 0]
+verschiebung = [0, 0, 0]
+
+[Laufen.rechter_oberarm]
+rotation = [-35, 0, 0]
+verschiebung = [0, 0, 0]
+
+[Laufen.rechter_unterarm]
+rotation = [-30, 0, 0]
+verschiebung = [0, 0, 0]
+
+
+# -----------------------------------------------------------------------------
+#  Sitzen – Oberschenkel nach vorne, Unterschenkel nach unten
+#  (ohne Stuhl: der Avatar schwebt in Sitzhaltung)
+# -----------------------------------------------------------------------------
+[Sitzen]
+beschreibung = "Sitzhaltung (Oberschenkel waagerecht)"
+
+[Sitzen.unterer_torso]
+rotation = [0, 0, 0]
+verschiebung = [0, -0.25, 0]
+
+[Sitzen.oberer_torso]
+rotation = [8, 0, 0]
+verschiebung = [0, 0, 0]
+
+[Sitzen.linkes_oberbein]
+rotation = [85, 0, -4]
+verschiebung = [0, 0, 0]
+
+[Sitzen.linkes_unterbein]
+rotation = [-85, 0, 0]
+verschiebung = [0, 0, 0]
+
+[Sitzen.rechtes_oberbein]
+rotation = [85, 0, 4]
+verschiebung = [0, 0, 0]
+
+[Sitzen.rechtes_unterbein]
+rotation = [-85, 0, 0]
+verschiebung = [0, 0, 0]
+
+[Sitzen.linker_oberarm]
+rotation = [12, 0, -6]
+verschiebung = [0, 0, 0]
+
+[Sitzen.rechter_oberarm]
+rotation = [12, 0, 6]
+verschiebung = [0, 0, 0]
+
+[Sitzen.linker_unterarm]
+rotation = [25, 0, 0]
+verschiebung = [0, 0, 0]
+
+[Sitzen.rechter_unterarm]
+rotation = [25, 0, 0]
+verschiebung = [0, 0, 0]
+
+
+# -----------------------------------------------------------------------------
+#  Jubel – beide Arme nach oben, Kopf leicht im Nacken
+# -----------------------------------------------------------------------------
+[Jubel]
+beschreibung = "Beide Arme hoch, Kopf im Nacken"
+
+[Jubel.rechter_oberarm]
+rotation = [0, 0, 165]
+verschiebung = [0, 0, 0]
+
+[Jubel.linker_oberarm]
+rotation = [0, 0, -165]
+verschiebung = [0, 0, 0]
+
+[Jubel.rechter_unterarm]
+rotation = [0, 0, 8]
+verschiebung = [0, 0, 0]
+
+[Jubel.linker_unterarm]
+rotation = [0, 0, -8]
+verschiebung = [0, 0, 0]
+
+[Jubel.kopf]
+rotation = [-10, 0, 0]
+verschiebung = [0, 0.1, 0]
+
+[Jubel.linkes_oberbein]
+rotation = [0, 0, -6]
+verschiebung = [0, 0, 0]
+
+[Jubel.rechtes_oberbein]
+rotation = [0, 0, 6]
+verschiebung = [0, 0, 0]

@@ -1,15 +1,18 @@
 # Roblox Avatar Render Pipeline
 
-Usernamen in [`username.txt`](username.txt) eintragen, pushen, warten – und nach
-wenigen Minuten liegt ein gläserner Avatar-Render als GitHub-Actions-Artifact bereit.
+Werte in [`Configs.toml`](Configs.toml) eintragen (Username, Drehung, Pose,
+Bildausschnitt, Hintergrund), pushen, warten – und nach wenigen Minuten liegt
+ein gläserner Avatar-Render als GitHub-Actions-Artifact bereit.
 
 ```
-username.txt  ──►  UserId  ──►  Avatar-Definition  ──►  Assets
-                                                           │
-                                        RBXM-Modelle parsen (Mesh-/Textur-IDs)
-                                                           │
-                             render_avatar.png  ◄──  Blender 5.0 EEVEE (2000×2000, 16 Samples)
-                                Artifact + Branch "renders" + Release
+Configs.toml ──► UserId ──► Avatar-Definition ──► Assets
+Posen.toml   ──► Rig-Pose (Grad pro Körperteil)     │
+                                                    ▼
+                                    RBXM-Modelle parsen (Mesh-/Textur-IDs)
+                                                    │
+                                                    ▼
+                 render_avatar.png ◄── Blender 5.0 EEVEE (2000×2000, 16 Samples)
+                    Artifact + Branch "renders" + Release
 ```
 
 Accessoires und getragene Körperteile liefert Roblox als RBXM-**Modelle**
@@ -30,7 +33,8 @@ Vorher/Nachher am echten Avatar (`MertaStudios`):
 
 1. **Secret hinterlegen:** Settings → Secrets and variables → Actions →
    `ROBLOX_OPEN_CLOUD_API_KEY` (Details und nötige Berechtigungen: **[ANLEITUNG.md](ANLEITUNG.md)**).
-2. `username.txt` öffnen, Roblox-Usernamen eintragen, committen, pushen.
+2. `Configs.toml` öffnen, Roblox-Usernamen eintragen (optional Drehung, Pose,
+   Bildausschnitt und Hintergrund anpassen), committen, pushen.
 3. Tab **Actions** → Lauf *Avatar-Render (Glas)* abwarten, bis der Punkt grün ist.
 4. Ergebnis ansehen: Inline-Bild in der **Step Summary** des Laufs (geht auch
    auf dem Handy), im Branch [`renders`](../../blob/renders/latest.png)
@@ -39,6 +43,11 @@ Vorher/Nachher am echten Avatar (`MertaStudios`):
    Alternativ unter **Artifacts** → `avatar-render` herunterladen
    (ZIP mit `render_avatar.png`; funktioniert nur im Browser, nicht in der
    iOS-App – Artifacts sind session-gebunden).
+
+Der Schalter `render_bei_aenderung` in der `Configs.toml` entscheidet, ob ein
+Push sofort rendert; nach einem erfolgreichen Render setzt der Workflow ihn
+automatisch wieder auf `false`. Das Ergebnis des Workflows ist nur noch das
+Bild – Analyse-/Diagnosedaten gibt es nur im Fehlerfall.
 
 Ohne Secret läuft die Pipeline weiter, aber die Mesh-/Textur-Downloads schlagen
 vermutlich fehl (401) – es wird dann ein Platzhalter-Körper gerendert.
@@ -53,12 +62,31 @@ vermutlich fehl (401) – es wird dann ein Platzhalter-Körper gerendert.
 | 4 | `tools/rbxm.py` | RBXM-/RBXMX-Parser: Mesh-/Textur-IDs aus Modellen |
 | 5 | `tools/roblox_mesh.py` | Roblox-`.mesh`-Parser (v1.00–v7.00) → OBJ |
 | 6 | `tools/avatar_rig.py` | Stand-Pose-Rig, Accessoire-Platzierung |
-| 7 | `blender/render_glass.py` | Blender-5.0-EEVEE-Glossy-Material, World-HDRI (`sunset_jhbcentral_4k.exr`), Kamera, Render |
-| 8 | `.github/workflows/avatar-render.yml` | Veröffentlichen: Artifact + Branch `renders` + Release |
+| 7 | `tools/avatar_pose.py` | Posen aus `Posen.toml` auf das Rig anwenden |
+| 8 | `tools/render_config.py` | `Configs.toml` lesen/prüfen (Grenzen, Render-Schalter) |
+| 9 | `blender/render_glass.py` | Blender-5.0-EEVEE-Glossy-Material, World-HDRI (`sunset_jhbcentral_4k.exr`), Kamera mit Drehung/Bildausschnitt, Hintergrundbild, Render |
+| 10 | `.github/workflows/avatar-render.yml` | Veröffentlichen: Artifact + Branch `renders` + Release |
 | – | `tools/diagnose.py` | prüft Endpunkte/Key-Rechte (Workflow *Roblox-Diagnose*) |
 
 Ergebnis im Build-Ordner: `manifest.json`, `parts/*.obj`, `textures/*`,
-`summary.md` (landet in der GitHub-Step-Summary).
+`summary.md` (nur Debug). Veröffentlicht wird ausschließlich das Bild.
+
+## Einstellungen: `Configs.toml` und `Posen.toml`
+
+| Wert | Bedeutung |
+| --- | --- |
+| `username` | Roblox-Username (früher `username.txt`) |
+| `drehung_grad` | Seitliche Drehung `-90 … 90`; `0` = frontal, `90` = rechte Seite |
+| `pose` | `None` oder ein Name aus `Posen.toml` |
+| `freiraum_oben_prozent` | Freiraum über dem Kopf (ohne Accessoires), in % der Bildhöhe |
+| `freiraum_unten_prozent` | Freiraum unter den Füßen; **negativ** schneidet an (z. B. `-40` = nur Torso) |
+| `render_bei_aenderung` | `true` = nach dem Push rendern (Workflow setzt danach auf `false`) |
+| `hintergrund_url` | Bild-URL/Pfad, `"hdri"` (Standard) oder `"transparent"` |
+| `hintergrund_glossy` | `true` = glänzend wie der Avatar, `false` = matt |
+
+In `Posen.toml` lassen sich für jedes Körperteil `rotation = [x, y, z]` (Grad)
+und `verschiebung = [x, y, z]` (Studs) angeben; Accessoires folgen automatisch.
+Beispiele: `Winken`, `T_Pose`, `Laufen`, `Sitzen`, `Jubel`.
 
 ## Änderungen landen ohne Pull Request in `main`
 
@@ -71,12 +99,12 @@ wurde, ist die Quelle (`agent-changes`, `arena/<session-id>-…`, …). Es wird
 ## Lokal ausprobieren
 
 ```bash
-# nur den Körper bauen, ohne Netzwerk
+# nur den Körper bauen, ohne Netzwerk (nutzt Configs.toml)
 python3 tools/build_avatar.py --dry-run --out build
 
 # echten Avatar laden (Key optional, aber empfohlen)
 export ROBLOX_OPEN_CLOUD_API_KEY="..."
-python3 tools/build_avatar.py --username Builderman --out build
+python3 tools/build_avatar.py --config Configs.toml --username Builderman --out build
 
 # rendern (Blender 5.0 muss installiert sein)
 blender -b --factory-startup --python blender/render_glass.py -- \

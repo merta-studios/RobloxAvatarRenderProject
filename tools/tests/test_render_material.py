@@ -477,3 +477,82 @@ def test_kein_multiply_von_grellem_blau_ueber_die_textur():
     text = open(SCRIPT, encoding="utf-8").read()
     assert 'blend_type = "MULTIPLY"' not in text
     assert "make_metal_material" not in text
+
+
+# ---------------------------------------------------------------------------
+# Bildausschnitt (Configs.toml) und Hintergrundflaeche
+# ---------------------------------------------------------------------------
+
+def test_bildausschnitt_haelt_die_prozentwerte_exakt_ein(render):
+    framing = render.compute_vertical_framing(0.0, 5.0, 6.0, 6.0)
+    # 5 Studs Avatar + je 6 % Rand -> 5 / 0.88
+    assert framing["visible_h"] == pytest.approx(5.0 / 0.88)
+    # Oberkante des Kopfes liegt exakt 6 % unter der Bildoberkante.
+    head_margin = framing["z_top"] - 5.0
+    assert head_margin / framing["visible_h"] == pytest.approx(0.06)
+    # Unterkante der Fuesse liegt exakt 6 % ueber der Bildunterkante.
+    foot_margin = 0.0 - framing["z_bottom"]
+    assert foot_margin / framing["visible_h"] == pytest.approx(0.06)
+
+
+def test_negativer_unterer_rand_schneidet_das_bild_an(render):
+    framing = render.compute_vertical_framing(0.0, 5.0, 6.0, -40.0)
+    # Die Fuesse liegen jetzt 40 % der Bildhoehe *unterhalb* des Bildrands.
+    assert framing["z_bottom"] > 0.0
+    assert (0.0 - framing["z_bottom"]) / framing["visible_h"] == pytest.approx(-0.40)
+
+
+def test_kamera_drehung_0_ist_frontal_und_90_rechts(render):
+    assert render.camera_direction(0) == pytest.approx((0.0, 1.0, 0.0))
+    x, y, z = render.camera_direction(90)
+    assert (x, y, z) == pytest.approx((1.0, 0.0, 0.0))
+    x, y, z = render.camera_direction(-90)
+    assert (x, y, z) == pytest.approx((-1.0, 0.0, 0.0))
+    # Ausserhalb des erlaubten Bereichs wird geklemmt.
+    assert render.camera_direction(400) == pytest.approx(render.camera_direction(90))
+
+
+def test_hintergrundflaeche_liegt_hinter_dem_avatar_und_fuellt_das_bild(render):
+    cam = (0.0, -10.0, 0.0)
+    forward = (0.0, 1.0, 0.0)
+    tan_h = tan_v = 0.5
+    points = [(x, y, z) for x in (-2.0, 2.0) for y in (-1.0, 1.0)
+              for z in (-1.0, 5.0)]
+    location, width, height = render.background_plane_geometry(
+        cam, forward, tan_h, tan_v, points)
+
+    # Flaeche liegt hinter dem hintersten Punkt des Avatars (y = 1).
+    assert location[1] > 1.0
+    distance = location[1] - cam[1]
+    # ... und deckt den kompletten Bildausschnitt ab (inkl. Sicherheitsrand).
+    assert width >= 2.0 * distance * tan_h
+    assert height >= 2.0 * distance * tan_v
+
+
+def test_hintergrund_material_ist_matt_oder_glossy_wie_der_avatar(render, tmp_path):
+    image = tmp_path / "bg.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    sys.modules["bpy"] = render._fake_bpy
+    try:
+        matte = render.make_background_material(
+            "Matt", str(image), False, roughness=0.0, metallic=0.2,
+            specular_level=1.0)
+        glossy = render.make_background_material(
+            "Glossy", str(image), True, roughness=0.0, metallic=0.2,
+            specular_level=1.0)
+    finally:
+        sys.modules.pop("bpy", None)
+
+    def values(mat):
+        bsdf = next(n for n in mat.node_tree.nodes
+                    if n.bl_idname == "ShaderNodeBsdfPrincipled")
+        return (bsdf.inputs["Roughness"].default_value,
+                bsdf.inputs["Metallic"].default_value,
+                bsdf.inputs["Specular IOR Level"].default_value)
+
+    assert values(matte)[0] > 0.5
+    assert values(glossy) == pytest.approx((0.0, 0.2, 1.0))
+    # Das Bild haengt als Textur am Material.
+    node_types = [n.bl_idname for n in glossy.node_tree.nodes]
+    assert "ShaderNodeTexImage" in node_types
