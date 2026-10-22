@@ -46,7 +46,7 @@ drehung_grad = 0
 #  "Laufen", "Sitzen" oder "Jubel".
 #  Dort stehen für jedes Körperteil die Drehungen (Grad) und leichten
 #  Verschiebungen (Studs). Accessoires, Kleidung usw. folgen automatisch.
-pose = "None"
+pose = "Winken"
 
 
 # -----------------------------------------------------------------------------
@@ -76,7 +76,7 @@ pose = "None"
 #  bewusst nicht eingepasst – dafür freiraum_oben_prozent erhöhen.
 #  Bei negativen Werten wird bewusst angeschnitten, dort wird nichts korrigiert.
 freiraum_oben_prozent = 6
-freiraum_unten_prozent = 6
+freiraum_unten_prozent = -20
 
 
 # -----------------------------------------------------------------------------
@@ -89,7 +89,7 @@ freiraum_unten_prozent = 6
 #  automatisch wieder auf false. So rendert es nicht bei jeder kleinen
 #  Änderung erneut – einfach auf true stellen, wenn ein neues Bild gewünscht
 #  ist.
-render_bei_aenderung = false
+render_bei_aenderung = true
 
 
 # -----------------------------------------------------------------------------
@@ -112,7 +112,7 @@ render_bei_aenderung = false
 #
 #  Kann das Bild nicht geladen werden (404, kein Netz), rendert die Pipeline
 #  trotzdem weiter und benutzt das HDRI als Hintergrund.
-hintergrund_url = "hdri"
+hintergrund_url = "https://images-wixmp-ed30a86b8c4ca887773594c2.wixmp.com/f/a5613351-3a61-4da2-89ef-7e1a422a868c/dht8zwh-02101b1e-0a99-4b77-8df5-11eeb0dd58cd.png/v1/fit/w_500,h_500,q_70,strp/blue_background_for_roblox_gfxs_free_to_use__by_nancyrbx_dht8zwh-375w-2x.jpg?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1cm46YXBwOjdlMGQxODg5ODIyNjQzNzNhNWYwZDQxNWVhMGQyNmUwIiwiaXNzIjoidXJuOmFwcDo3ZTBkMTg4OTgyMjY0MzczYTVmMGQ0MTVlYTBkMjZlMCIsIm9iaiI6W1t7ImhlaWdodCI6Ijw9NTAwIiwicGF0aCI6Ii9mL2E1NjEzMzUxLTNhNjEtNGRhMi04OWVmLTdlMWE0MjJhODY4Yy9kaHQ4endoLTAyMTAxYjFlLTBhOTktNGI3Ny04ZGY1LTExZWViMGRkNThjZC5wbmciLCJ3aWR0aCI6Ijw9NTAwIn1dXSwiYXVkIjpbInVybjpzZXJ2aWNlOmltYWdlLm9wZXJhdGlvbnMiXX0.Xa1JOgULxtYeaepHYJ3r3qBG0PE2xQOYzauOob3EIXQ"
 
 
 # -----------------------------------------------------------------------------
@@ -122,4 +122,4 @@ hintergrund_url = "hdri"
 #          Metallic 0,2, Specular 1 – also mit Spiegelungen des HDRI).
 #  false = der Hintergrund ist matt (hohe Rauheit, kaum Spiegelung), damit
 #          das Bild ruhig und gut lesbar bleibt.
-hintergrund_glossy = false
+hintergrund_glossy = true
