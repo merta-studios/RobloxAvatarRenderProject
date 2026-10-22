@@ -395,14 +395,14 @@ def tup(v):
 
 
 def make_accent_material(name: str, color_rgb, texture_path: str = "",
-                         roughness: float = 0.22, transmission: float = 0.10,
+                         roughness: float = 0.0, transmission: float = 0.65,
+                         metallic: float = 0.2, specular_level: float = 0.8,
                          texture_strength: float = 1.0, texture_kind: str = ""):
     """Material fuer Accessoires (Huete, Badges, ...).
 
-    Frueher war das pures Metall (Metallic 0.95) in Hellblau - dadurch
-    waren Huete nur weisse/blaue Silhouetten und ihre Texturen unsichtbar.
-    Jetzt: glaenzend, leicht metallisch, mit der echten Textur als
-    Base Color, damit man Huete und Abzeichen erkennt.
+    GLAENEND GLASIG (nicht matt!) — gleiche Parameter wie make_glass_material.
+    Accessoires sollen wie Glas aussehen, nicht wie mattes Plastik oder Metall.
+    Mit Textur: Textur bleibt sichtbar, aber glossy (Roughness 0.0).
     """
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
@@ -412,12 +412,13 @@ def make_accent_material(name: str, color_rgb, texture_path: str = "",
 
     c = srgb_to_linear(tup(color_rgb))
     set_input(bsdf, "Base Color", (c[0], c[1], c[2], 1.0))
-    set_input(bsdf, "Metallic", 0.35)
-    set_input(bsdf, "Roughness", roughness)
+    set_input(bsdf, "Metallic", metallic)
+    set_input(bsdf, "Roughness", roughness)  # 0.0 = glossy
     set_input(bsdf, "IOR", 1.45)
     set_input(bsdf, ("Transmission Weight", "Transmission"), transmission)
-    set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.3)
-    set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.05)
+    set_input(bsdf, ("Specular IOR Level", "Specular"), specular_level)  # hoher Glanz
+    set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.40)
+    set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.0)
 
     tex = _load_texture_node(nodes, texture_path)
     if tex is not None:
@@ -436,21 +437,17 @@ def make_accent_material(name: str, color_rgb, texture_path: str = "",
         links.new(alpha, strength.inputs[0])
         links.new(strength.outputs["Value"], mix_color.inputs["Fac"])
         links.new(mix_color.outputs["Color"], bsdf.inputs["Base Color"])
-        # Texturierte Accessoires (Stoff, Haare, Rosen, Krone, Abzeichen):
-        # seidiger statt spiegelnder Glanz, damit dunkle Motive nicht unter
-        # weissen Clearcoat-Spiegelstreifen verschwinden.
-        ramp = _texture_detail_nodes(nodes, links, tex,
-                                     low=max(0.32, roughness + 0.25),
-                                     high=min(0.85, roughness + 0.55))
-        links.new(ramp.outputs["Color"], bsdf.inputs["Roughness"])
-        set_input(bsdf, "Metallic", 0.05)
-        set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.04)
-        set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.25)
+        # Texturierte Accessoires: GLOSSY (nicht matt!)
+        # Roughness bleibt 0.0, Texturen sind sichtbar aber glaenzend
+        set_input(bsdf, "Roughness", 0.0)
+        set_input(bsdf, "Metallic", 0.0)  # Texturen nicht metallisch
+        set_input(bsdf, ("Coat Weight", "Clearcoat"), 0.3)
+        set_input(bsdf, ("Coat Roughness", "Clearcoat Roughness"), 0.0)
         return mat
 
-    # Ohne Textur bleibt ein sauberer, leicht metallischer Akzent
-    set_input(bsdf, "Metallic", 0.85)
-    set_input(bsdf, "Roughness", min(0.5, roughness))
+    # Ohne Textur: glaenzendes Glas
+    set_input(bsdf, "Metallic", metallic)
+    set_input(bsdf, "Roughness", roughness)
     return mat
 
 
@@ -556,7 +553,7 @@ def setup_world(color_hex: str, strength: float = 1.3,
             links.new(env_bg.outputs["Background"], output.inputs["Surface"])
         return
 
-    # --- Sonnenuntergang ---
+    # --- Sonnenuntergang (subtil, färbt Avatar NICHT braun) ---
     # Den alten flachen Background-Node entfernen
     if bg:
         nodes.remove(bg)
@@ -578,32 +575,29 @@ def setup_world(color_hex: str, strength: float = 1.3,
     links.new(tex_coord.outputs["Normal"], mapping.inputs["Vector"])
     links.new(mapping.outputs["Vector"], separate.inputs["Vector"])
 
-    # ColorRamp: Horizont (Y=0) = warmes Orange, oben (Y>0) = tiefblau,
-    # unten (Y<0) = dunkelrot (unter dem Horizont)
+    # ColorRamp: Abendhimmel - Blau/Lila, NICHT orange (sonst wird Avatar braun)
+    # Nur als REFLEXION auf Glas sichtbar, nicht als Beleuchtung
     color_ramp = nodes.new("ShaderNodeValToRGB")
     color_ramp.location = (-400, 200)
-    # Stop 0: unterer Himmel = tiefrot/dunkelorange (Y=0 → unten)
+    # Stop 0: unten = dunkelblau/violett (Y=0 → Horizont)
     color_ramp.color_ramp.elements[0].position = 0.0
-    color_ramp.color_ramp.elements[0].color = srgb_to_linear((0.15, 0.04, 0.02, 1.0))  # dunkelrot unten
-    # Stop 1: oberer Himmel = tiefblau
+    color_ramp.color_ramp.elements[0].color = srgb_to_linear((0.08, 0.05, 0.15, 1.0))  # dunkelviolett
+    # Stop 1: oben = tiefblau
     color_ramp.color_ramp.elements[1].position = 1.0
-    color_ramp.color_ramp.elements[1].color = srgb_to_linear((0.04, 0.08, 0.22, 1.0))  # tiefblau oben
-    # Zusätzliche Stops für den warmen Horizont
-    mid1 = color_ramp.color_ramp.elements.new(0.42)
-    mid1.color = srgb_to_linear((1.0, 0.55, 0.18, 1.0))  # warmes Orange-Gelb am Horizont
-    mid2 = color_ramp.color_ramp.elements.new(0.52)
-    mid2.color = srgb_to_linear((0.95, 0.35, 0.12, 1.0))  # warmes Orange-Rot
+    color_ramp.color_ramp.elements[1].color = srgb_to_linear((0.05, 0.10, 0.30, 1.0))  # tiefblau oben
+    # Subtiler warmer Akzent am Horizont (nicht zu orange!)
+    mid1 = color_ramp.color_ramp.elements.new(0.45)
+    mid1.color = srgb_to_linear((0.25, 0.15, 0.20, 1.0))  # dezent warm am Horizont
 
     links.new(separate.outputs["Y"], color_ramp.inputs["Fac"])
 
-    # Hintergrund-Shader: Sonnenuntergang mit Stärke
+    # Hintergrund-Shader: Sonnenuntergang NUR für Reflexionen, schwach
     sunset_bg = nodes.new("ShaderNodeBackground")
     sunset_bg.location = (-140, 200)
-    sunset_bg.inputs["Strength"].default_value = strength * 0.8
+    sunset_bg.inputs["Strength"].default_value = strength * 0.5  # schwach, färbt nicht
     links.new(color_ramp.outputs["Color"], sunset_bg.inputs["Color"])
 
-    # Kamera-Strahlen: leicht aufgehellte Basis-Farbe (color_hex) statt Sonnenuntergang
-    # damit der Hintergrund im Bild nicht zu dunkel wird
+    # Kamera-Strahlen: neutraler heller Hintergrund (color_hex) - Avatar wird NICHT gefärbt
     backdrop = srgb_to_linear(hex_to_rgb(color_hex))
     cam_bg = nodes.new("ShaderNodeBackground")
     cam_bg.location = (-140, -60)
@@ -804,9 +798,7 @@ def main() -> int:
             texture = candidate if os.path.exists(candidate) else ""
 
         if part.get("kind") == "accessory" and not args.mono_glass:
-            # Accessoires glaenzen, sind aber nicht mehr pures Weiss-Metall:
-            # mit Textur zeigt der Hut sein Motiv, ohne Textur bleibt ein
-            # heller, leicht metallischer Akzent.
+            # Accessoires GLAENZEND GLASIG wie die Koerperteile (nicht matt!)
             texture_kind = part.get("texture_kind") or ""
             key = ("accent", texture, tuple(round(c, 3) for c in color),
                    texture_kind)
@@ -815,7 +807,10 @@ def main() -> int:
                 mat = make_accent_material(
                     f"Akzent {part.get('name')}",
                     color if texture else metal_tint,
-                    texture, roughness=args.roughness + 0.08,
+                    texture, roughness=args.roughness,
+                    transmission=args.transmission * 0.85,  # etwas weniger Transmission fuer Accessoires
+                    metallic=args.metallic,
+                    specular_level=args.specular_level,
                     texture_strength=args.texture_strength,
                     texture_kind=texture_kind)
                 material_cache[key] = mat
@@ -867,15 +862,15 @@ def main() -> int:
     height = max(hi.z - lo.z, 0.5)
     cam, center, radius = setup_camera(lo, hi, res_x, res_y)
 
-    # Studio-Dreipunktlicht - gedimmt damit Sonnenuntergang-Env dominiert.
-    # Warme Farben passend zum Sonnenuntergang.
+    # Studio-Dreipunktlicht - NEUTRAL damit Avatar nicht braun gefärbt wird.
+    # Sonnenuntergang ist nur in Reflexionen sichtbar, nicht als Beleuchtung.
     s = height / 5.5
     key = add_area_light("Key", (center.x - 5.5 * s, center.y + 6.5 * s, center.z + 7.0 * s),
-                         energy=220 * s * s, size=5.0 * s, color=(1.0, 0.85, 0.65), target=center)  # warm orange
+                         energy=350 * s * s, size=5.0 * s, color=(1.0, 0.98, 0.95), target=center)  # neutral warm
     fill = add_area_light("Fill", (center.x + 6.5 * s, center.y + 5.0 * s, center.z + 3.0 * s),
-                          energy=100 * s * s, size=6.0 * s, color=(1.0, 0.80, 0.55), target=center)  # warm fill
+                          energy=180 * s * s, size=6.0 * s, color=(0.95, 0.97, 1.0), target=center)  # neutral cool
     rim = add_area_light("Rim", (center.x + 2.0 * s, center.y - 7.5 * s, center.z + 6.0 * s),
-                         energy=160 * s * s, size=4.0 * s, color=(1.0, 0.60, 0.30), target=center)  # sunset rim
+                         energy=250 * s * s, size=4.0 * s, color=(0.98, 0.95, 1.0), target=center)  # neutral
 
     if not args.no_floor:
         add_floor(radius, z=lo.z)
