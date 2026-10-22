@@ -152,8 +152,9 @@ def test_ohne_deckendes_feld_keine_beschneidung(render):
 
 def test_defaults_lassen_texturen_lesbar(render):
     """Regression: Transmission 1.0 / Roughness 0.05 hat alles zugekleistert.
-    Nach User-Wunsch: Roughness 0.0 (perfekt glatt) und Metallic 0.2 fuer staerkeren Glas-Effekt,
-    Texturen bleiben durch separate Textur-Ebene (Alpha-Mix) trotzdem voll sichtbar."""
+    Nach User-Wunsch: Roughness 0.0 (perfekt glatt), Metallic 0.2, Specular-Level 0.8
+    fuer staerkeren Glas-Effekt (wie in Blender). Texturen bleiben durch separate
+    Textur-Ebene (Alpha-Mix) trotzdem voll sichtbar, aber glossy (nicht matt)."""
     argv = sys.argv
     sys.argv = [argv[0], "--"]
     try:
@@ -161,8 +162,9 @@ def test_defaults_lassen_texturen_lesbar(render):
     finally:
         sys.argv = argv
     assert 0.3 <= args.transmission <= 0.85
-    assert 0.0 <= args.roughness <= 0.25   # 0.0 = perfekt glatt (User-Wunsch), trotzdem Texturen sichtbar
+    assert 0.0 <= args.roughness <= 0.25   # 0.0 = perfekt glatt (User-Wunsch)
     assert 0.0 <= args.metallic <= 0.5     # 0.2 fuer Glas-Effekt
+    assert 0.5 <= args.specular_level <= 1.0  # 0.8 = hoher Glanz (IOR Level)
     assert args.tint_strength <= 0.25      # kaum Blau ueber die Textur
     assert args.texture_strength >= 0.8    # Textur darf nicht ausblenden
     assert args.ior <= 1.45
