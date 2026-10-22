@@ -794,12 +794,13 @@ def compute_camera_placement(lo, hi, tan_h: float, tan_v: float,
         return fits_vertical and fits_horizontal, cam
 
     abgeschnitten = False
-    # Aufziehen bringt nur etwas, wenn oben und unten Platz vorgesehen ist
-    # (bei 0 % beruehrt Kopf bzw. Fuss direkt den Bildrand - dann ist ein
-    # Accessoire zwangslaeufig ausserhalb).
+    # Der eingestellte Abstand gilt bis zur Kopfoberkante (ohne Accessoires).
+    # Damit ein normaler Hut/eine Krone trotzdem nicht angeschnitten wird,
+    # darf die Kamera etwas weiter zurueck (max. 25 %). Reicht das fuer ein
+    # weit schwebendes Accessoire (Halo o. Ae.) nicht, bleibt der Ausschnitt
+    # wie eingestellt - dann wird geloggt, wie man es ins Bild bekommt.
     if not exact and top > 0.0 and bottom > 0.0:
-        # Nichts abschneiden: nur so weit aufziehen wie noetig (max. 2x).
-        max_distance = base_distance * 2.0
+        max_distance = base_distance * 1.25
         for _ in range(80):
             fits, cam = content_fits(distance)
             if fits:
@@ -890,9 +891,10 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
         log("Hinweis: Accessoires ragen ueber Kopf/Fuesse hinaus - Bild wurde "
             "aufgezogen, damit nichts abgeschnitten wird.")
     if placement.get("abgeschnitten"):
-        log("WARNUNG: Ein Accessoire reicht sehr weit hinaus und ist nicht "
-            "komplett im Bild (Bild waere sonst winzig). Mit negativen "
-            "freiraum-Werten laesst sich der Ausschnitt bewusst enger setzen.")
+        log("Hinweis: Ein Accessoire reicht weit ueber Kopf/Fuesse hinaus und "
+            "ist nicht komplett im Bild. Der Ausschnitt folgt wie eingestellt "
+            "der Kopfoberkante; fuer mehr Platz freiraum_oben_prozent bzw. "
+            "freiraum_unten_prozent erhoehen.")
     return cam, center, radius
 
 
