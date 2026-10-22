@@ -22,7 +22,7 @@
 # -----------------------------------------------------------------------------
 #  Der Name aus der Roblox-Profil-URL, z. B. "MertaStudios".
 #  (Ein "https://www.roblox.com/users/123456/profile"-Link funktioniert auch.)
-username = "MertaStudios"
+username = "SunsetSiya
 
 
 # -----------------------------------------------------------------------------
@@ -35,7 +35,7 @@ username = "MertaStudios"
 #      -90   = nach links gedreht  -> wir sehen die linke Seite (Profil)
 #  Erlaubt ist nur -90 bis 90. Zwischenwerte wie 25 oder -40 sind ideal für
 #  eine schräge 3/4-Ansicht (früher war der Render fest auf ca. 27°).
-drehung_grad = 0
+drehung_grad = 5
 
 
 # -----------------------------------------------------------------------------
@@ -46,7 +46,7 @@ drehung_grad = 0
 #  "Laufen", "Sitzen" oder "Jubel".
 #  Dort stehen für jedes Körperteil die Drehungen (Grad) und leichten
 #  Verschiebungen (Studs). Accessoires, Kleidung usw. folgen automatisch.
-pose = "Winken"
+pose = "Laufen"
 
 
 # -----------------------------------------------------------------------------
@@ -76,7 +76,7 @@ pose = "Winken"
 #  bewusst nicht eingepasst – dafür freiraum_oben_prozent erhöhen.
 #  Bei negativen Werten wird bewusst angeschnitten, dort wird nichts korrigiert.
 freiraum_oben_prozent = 6
-freiraum_unten_prozent = -20
+freiraum_unten_prozent = 6
 
 
 # -----------------------------------------------------------------------------
@@ -89,7 +89,7 @@ freiraum_unten_prozent = -20
 #  automatisch wieder auf false. So rendert es nicht bei jeder kleinen
 #  Änderung erneut – einfach auf true stellen, wenn ein neues Bild gewünscht
 #  ist.
-render_bei_aenderung = false
+render_bei_aenderung = true
 
 
 # -----------------------------------------------------------------------------
@@ -122,4 +122,4 @@ hintergrund_url = "https://images-wixmp-ed30a86b8c4ca887773594c2.wixmp.com/f/a56
 #          Metallic 0,2, Specular 1 – also mit Spiegelungen des HDRI).
 #  false = der Hintergrund ist matt (hohe Rauheit, kaum Spiegelung), damit
 #          das Bild ruhig und gut lesbar bleibt.
-hintergrund_glossy = true
+hintergrund_glossy = false
