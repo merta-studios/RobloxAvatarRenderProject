@@ -340,9 +340,17 @@ def test_weld_accessory_respektiert_180_grad_attachment_rotation_und_uniform_sca
 
 def test_kamera_zeigt_auf_vorderseite_des_avatars():
     """Nach `obj_import(..., forward_axis='NEGATIVE_Z', up_axis='Y')` zeigt die
-    Vorderseite des Roblox-Avatars (-Z) in Richtung Blender +Y."""
+    Vorderseite des Roblox-Avatars (-Z) in Richtung Blender +Y.
+
+    Die Kamera ist seit der Configs.toml frei drehbar: 0 Grad = frontal auf
+    die Vorderseite (+Y), 90 Grad = rechte Seite (+X), -90 = linke Seite.
+    """
     render = load_render_module()
     source = open(render.__file__, encoding="utf-8").read()
-    assert "Vector((-0.52, 1.0, 0.24))" in source
+    assert render.camera_direction(0) == pytest.approx((0.0, 1.0, 0.0))
+    assert render.camera_direction(90) == pytest.approx((1.0, 0.0, 0.0))
+    assert render.camera_direction(-90) == pytest.approx((-1.0, 0.0, 0.0))
+    # Ausserhalb von -90..90 wird geklemmt (mehr ist nicht erlaubt).
+    assert render.camera_direction(120) == pytest.approx((1.0, 0.0, 0.0), abs=1e-6)
     assert 'alpha_mode = "CHANNEL_PACKED"' in source
     assert 'tex.extension = "REPEAT"' in source
