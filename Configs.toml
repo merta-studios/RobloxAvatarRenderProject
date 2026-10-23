@@ -47,7 +47,7 @@ drehung_grad = 0
 #  Jede Pose bringt ihren eigenen Bildausschnitt (sichtbar oben/unten),
 #  Kamera-Abstand und ihre Körperhaltung mit. Accessoires folgen automatisch
 #  (Ausrüstung/Gear wird nie mit geladen).
-pose = "Siegerfaust"
+pose = "None"
 
 
 # -----------------------------------------------------------------------------
