@@ -72,7 +72,7 @@ pose = "Siegerfaust"
 #  automatisch wieder auf false. So rendert es nicht bei jeder kleinen
 #  Änderung erneut – einfach auf true stellen, wenn ein neues Bild gewünscht
 #  ist.
-render_bei_aenderung = true
+render_bei_aenderung = false
 
 
 # -----------------------------------------------------------------------------
