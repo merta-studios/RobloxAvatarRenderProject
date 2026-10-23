@@ -861,6 +861,17 @@ def _world_to_view(cam, points):
     from bpy_extras.object_utils import world_to_camera_view
 
     scene = bpy.context.scene
+    # WICHTIG: cam.location/rotation_euler wurden gerade erst gesetzt -
+    # matrix_world ist ohne Depsgraph-Update veraltet und
+    # world_to_camera_view wuerde fuer jeden Punkt dieselbe (alte)
+    # Projektion liefern. Dann "konvergiert" jeder Kamera-Solver gegen
+    # einen Phantom-Fehler und schiebt die Kamera ins Leere
+    # (komplett transparentes Bild). Deshalb vor dem Projizieren
+    # die View-Layer einmal aktualisieren.
+    try:
+        bpy.context.view_layer.update()
+    except Exception:
+        pass
     out = []
     for p in points:
         v = world_to_camera_view(scene, cam, Vector(p))
@@ -936,14 +947,24 @@ def fit_camera_with_blender(cam, focus_xy, head_z, feet_z, content_points,
     if distance_offset_studs:
         # Abstand aus der Pose fest vorgeben: nur noch die Hoehe so
         # nachfuehren, dass die Mitte zwischen Kopf/Fuessen stimmt.
+        # Gedaempft, geclampt und mit Bestwert-Sicherung: selbst wenn die
+        # Projektion einmal nicht reagiert, kann die Kamera so nicht
+        # Schritt fuer Schritt aus dem Bild wandern (leeres Bild!).
         dist = max(0.2, dist + float(distance_offset_studs))
         target_mid = (target_top + target_bottom) / 2.0
-        for _ in range(40):
+        z_start = z
+        best_z, best_err = z, float("inf")
+        for _ in range(24):
             head_y, feet_y = place(dist, z)
             error = (head_y + feet_y) / 2.0 - target_mid
+            if abs(error) < best_err:
+                best_z, best_err = z, abs(error)
             if abs(error) < 2e-4:
                 break
-            z += error * body_span
+            z = max(z_start - body_span, min(z_start + body_span,
+                                             z + error * body_span * 0.7))
+        z = best_z
+        place(dist, z)
 
     def content_inside() -> bool:
         for x, y in _world_to_view(cam, content_points):
@@ -1010,8 +1031,13 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
     )
 
     center = Vector(placement["center"])
-    cam.location = Vector(placement["cam_location"])
-    cam.rotation_euler = (center - cam.location).to_track_quat("-Z", "Y").to_euler()
+
+    def apply_placement() -> None:
+        """Kamera exakt auf die (reine Mathematik-)Vorberechnung setzen."""
+        cam.location = Vector(placement["cam_location"])
+        cam.rotation_euler = (center - cam.location).to_track_quat("-Z", "Y").to_euler()
+
+    apply_placement()
 
     radius = max(0.5, (hi - lo).length / 2.0)
     log(f"Kamera: Drehung {yaw_deg:g}° | Abstand {placement['distance']:.2f} | "
@@ -1051,13 +1077,35 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
             log("WARNUNG: Kamera-Nachjustierung uneindeutig - "
                 "Vorberechnung wird benutzt.")
             refined = placement
+            # Die Nachjustierung hat die Kamera bereits verstellt - ohne
+            # Zuruecksetzen bliebe sie auf der verworfenen Position stehen
+            # und der Avatar waere gar nicht im Bild (leeres Bild!).
+            apply_placement()
         else:
-            log(f"Kamera (Blender-Projektion): oben {refined['kopf_prozent']:.1f} % / "
-                f"unten {refined['fuss_prozent']:.1f} % | Abstand "
-                f"{refined['distance']:.2f}")
+            # Endkontrolle mit frischer Projektion: Kopf/Fuesse muessen
+            # grob im Bild sein, sonst lieber die Vorberechnung nehmen.
+            focus_xy = (float(lo.x + hi.x) / 2.0, float(lo.y + hi.y) / 2.0)
+            (_, head_y), (_, feet_y) = _world_to_view(cam, [
+                (focus_xy[0], focus_xy[1],
+                 float(focus_hi if focus_hi is not None else hi.z)),
+                (focus_xy[0], focus_xy[1],
+                 float(focus_lo if focus_lo is not None else lo.z)),
+            ])
+            if not (-0.6 <= head_y <= 1.6 and -0.6 <= feet_y <= 1.6
+                    and head_y > feet_y):
+                log("WARNUNG: Kamera-Endkontrolle fehlgeschlagen "
+                    f"(Kopf y={head_y:.2f}, Fuesse y={feet_y:.2f}) - "
+                    "Vorberechnung wird benutzt.")
+                refined = placement
+                apply_placement()
+            else:
+                log(f"Kamera (Blender-Projektion): oben {refined['kopf_prozent']:.1f} % / "
+                    f"unten {refined['fuss_prozent']:.1f} % | Abstand "
+                    f"{refined['distance']:.2f}")
     except Exception as exc:  # pragma: no cover - bpy_extras fehlt
         log(f"WARNUNG: Kamera-Nachjustierung nicht moeglich ({exc}).")
         refined = placement
+        apply_placement()
 
     if refined.get("aufgezogen"):
         log("Hinweis: Accessoires ragen ueber Kopf/Fuesse hinaus - Bild wurde "
