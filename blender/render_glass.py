@@ -41,6 +41,11 @@ import time
 import bpy
 from mathutils import Vector
 
+try:  # im echten Blender immer da; Fake-bpy in Tests hat evtl. nur Vector
+    from mathutils import Matrix
+except ImportError:  # pragma: no cover
+    Matrix = None  # type: ignore[assignment]
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
 DEFAULT_ENV_TEXTURE = os.path.join(REPO_ROOT, "sunset_jhbcentral_4k.exr")
@@ -862,14 +867,19 @@ def _world_to_view(cam, points):
 
     scene = bpy.context.scene
     # WICHTIG: cam.location/rotation_euler wurden gerade erst gesetzt -
-    # matrix_world ist ohne Depsgraph-Update veraltet und
+    # matrix_world waere ohne Depsgraph-Update veraltet und
     # world_to_camera_view wuerde fuer jeden Punkt dieselbe (alte)
-    # Projektion liefern. Dann "konvergiert" jeder Kamera-Solver gegen
-    # einen Phantom-Fehler und schiebt die Kamera ins Leere
-    # (komplett transparentes Bild). Deshalb vor dem Projizieren
-    # die View-Layer einmal aktualisieren.
+    # Projektion liefern (Phantom-Fehler -> Kamera ins Leere -> leeres
+    # Bild). Ein view_layer.update() pro Projektion waere korrekt, ist
+    # aber viel zu langsam (loest die komplette Szenen-Auswertung aus -
+    # der Solver ruft das hier dutzendfach auf). Stattdessen setzt
+    # place() die matrix_world direkt; hier nur noch als Notnagel
+    # aktualisieren, falls sie offensichtlich nicht zur Position passt.
     try:
-        bpy.context.view_layer.update()
+        mw = cam.matrix_world
+        loc = mw.translation
+        if (Vector(cam.location) - loc).length > 1e-6:
+            bpy.context.view_layer.update()
     except Exception:
         pass
     out = []
@@ -913,13 +923,23 @@ def fit_camera_with_blender(cam, focus_xy, head_z, feet_z, content_points,
                       focus.y + direction.y * dist, z))
         cam.location = loc
         target = Vector((focus.x, focus.y, z))
-        cam.rotation_euler = (target - loc).to_track_quat("-Z", "Y").to_euler()
+        quat = (target - loc).to_track_quat("-Z", "Y")
+        cam.rotation_euler = quat.to_euler()
+        # matrix_world sofort selbst setzen statt auf das (teure)
+        # Depsgraph-/View-Layer-Update zu warten - sonst projiziert
+        # _world_to_view mit der veralteten Matrix (s. dort).
+        try:
+            if Matrix is not None:
+                cam.matrix_world = Matrix.LocRotScale(
+                    loc, quat, Vector((1.0, 1.0, 1.0)))
+        except Exception:
+            pass
         (_, head_y), (_, feet_y) = _world_to_view(cam, [head_point, feet_point])
         return head_y, feet_y
 
     def solve(dist: float, z: float) -> tuple:
         """Newton fuer (Abstand, Hoehe) auf (Kopf, Fuesse)."""
-        for _ in range(60):
+        for _ in range(30):
             head_y, feet_y = place(dist, z)
             r1 = head_y - target_top
             r2 = feet_y - target_bottom
@@ -1276,6 +1296,18 @@ def setup_render(
             eevee.use_shadows = True
         if hasattr(eevee, "use_raytracing"):
             eevee.use_raytracing = True
+        # Raytracing nur in Viertel-Aufloesung: Auf den GitHub-Runnern
+        # rendert EEVEE per Software (llvmpipe/lavapipe, keine GPU) -
+        # Raytracing in voller Aufloesung ist dort der mit Abstand
+        # teuerste Schritt und liess Schritt 6 ins Job-Timeout laufen.
+        # Viertel-Aufloesung behaelt die Spiegelungen, ist aber um
+        # Groessenordnungen schneller.
+        ray_options = getattr(eevee, "ray_tracing_options", None)
+        if ray_options is not None:
+            try:
+                ray_options.resolution_scale = "1/4"
+            except (TypeError, AttributeError):
+                pass
 
     scene.render.resolution_x = res_x
     scene.render.resolution_y = res_y

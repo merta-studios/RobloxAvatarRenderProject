@@ -650,3 +650,19 @@ def test_kamera_solver_aktualisiert_view_layer_und_stellt_wieder_her():
     assert "Kamera-Endkontrolle" in text
     assert text.count("apply_placement()") >= 3
     assert "best_z, best_err" in text
+
+
+def test_raytracing_nur_viertel_aufloesung_wegen_software_rendering():
+    # EEVEE laeuft auf den Runnern per Software (llvmpipe/lavapipe) -
+    # Raytracing in voller Aufloesung liess Schritt 6 ins Timeout laufen.
+    text = open(SCRIPT, encoding="utf-8").read()
+    assert 'resolution_scale = "1/4"' in text
+
+
+def test_kamera_solver_setzt_matrix_world_statt_depsgraph_update():
+    # matrix_world direkt setzen ist sofort gueltig und schnell; ein
+    # view_layer.update() pro Projektion wuerde dutzendfach die ganze
+    # Szene auswerten. Das Update darf nur Notnagel bei Abweichung sein.
+    text = open(SCRIPT, encoding="utf-8").read()
+    assert "Matrix.LocRotScale" in text
+    assert "view_layer.update()" in text  # nur noch als Fallback vorhanden

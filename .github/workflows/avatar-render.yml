@@ -86,7 +86,10 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       needs.config.outputs.render_jetzt == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Ziel: ~10 Minuten gesamt. Frueher 45 - ein haengender Render-Schritt
+    # wurde erst dann abgebrochen ("The operation was canceled").
+    # Schritt 6 hat sein eigenes, kleineres Budget (siehe dort).
+    timeout-minutes: 25
 
     steps:
       - name: 1) Repository auschecken
@@ -209,7 +212,7 @@ jobs:
               "https://ftp.nluug.nl/pub/graphics/blender/release/${BLENDER_SERIES}"
             do
               echo "Versuche $BASE/$CANDIDATE"
-              if curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 2 --max-time 900 \
+              if curl -fsSL --connect-timeout 15 --retry 2 --retry-delay 2 --max-time 240 --speed-time 30 --speed-limit 10240 \
                    -o "$HOME/blender/$CANDIDATE" "$BASE/$CANDIDATE"; then
                 TARBALL="$CANDIDATE"
                 DOWNLOADED=1
@@ -234,12 +237,21 @@ jobs:
 
       - name: 6) Glossy-Render mit Blender 5.0 (EEVEE)
         id: render
+        # Hartes Limit fuer den ganzen Schritt: frueher liefen bis zu drei
+        # komplette Render-Versuche ohne jedes Timeout hintereinander -
+        # ein haengender Software-GL-Kontext hat so den Job bis zum
+        # 45-Minuten-Job-Timeout blockiert ("The operation was canceled").
+        timeout-minutes: 12
         run: |
           set -o pipefail
           BLENDER_BIN="${{ steps.blender.outputs.bin }}"
           echo "== Rendern (EEVEE): ${PIPELINE_RESOLUTION}, ${PIPELINE_SAMPLES} Samples =="
           mkdir -p build/logs
           START=$(date +%s)
+          # Gesamtbudget fuer alle Versuche zusammen: 9 Minuten. Jeder
+          # Versuch bekommt zusaetzlich sein eigenes Timeout - ein
+          # haengender Versuch frisst so nie mehr den ganzen Lauf.
+          DEADLINE=$(( START + 540 ))
           RENDER_ARGS=(
             --manifest build/manifest.json
             --out render_avatar.png
@@ -249,31 +261,44 @@ jobs:
             --save-blend build/avatar.blend
           )
 
+          RC=1
+          run_attempt() {
+            local name="$1" max_s="$2"
+            shift 2
+            local remaining=$(( DEADLINE - $(date +%s) ))
+            if [ "$remaining" -lt 90 ]; then
+              echo "::warning::Zeitbudget aufgebraucht - Versuch '$name' wird übersprungen."
+              return 1
+            fi
+            local budget="$max_s"
+            [ "$budget" -gt "$remaining" ] && budget="$remaining"
+            echo "== Versuch: $name (Timeout ${budget}s, Restbudget ${remaining}s) =="
+            rm -f render_avatar.png
+            timeout --signal=TERM --kill-after=20s "${budget}s" "$@" \
+              2>&1 | tee -a build/logs/blender.log
+            local rc=${PIPESTATUS[0]}
+            if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+              echo "::warning::$name wurde nach ${budget}s per Timeout abgebrochen - nächster Versuch."
+            fi
+            if [ "$rc" -eq 0 ] && [ -s render_avatar.png ]; then
+              RC=0
+              return 0
+            fi
+            echo "::warning::$name lieferte Exit $rc bzw. kein Bild."
+            return 1
+          }
+
           set +e
-          rm -f render_avatar.png
-          LIBGL_ALWAYS_SOFTWARE=1 "$BLENDER_BIN" -b --factory-startup --gpu-backend opengl \
-            --python blender/render_glass.py -- "${RENDER_ARGS[@]}" \
-            2>&1 | tee build/logs/blender.log
-          RC=${PIPESTATUS[0]}
-
-          if [ "$RC" -ne 0 ] || [ ! -s render_avatar.png ]; then
-            echo "::warning::OpenGL-Headless-Kontext lieferte Exit $RC – versuche Vulkan (lavapipe)..."
-            rm -f render_avatar.png
-            "$BLENDER_BIN" -b --factory-startup --gpu-backend vulkan \
-              --python blender/render_glass.py -- "${RENDER_ARGS[@]}" \
-              2>&1 | tee -a build/logs/blender.log
-            RC=${PIPESTATUS[0]}
-          fi
-
-          if [ "$RC" -ne 0 ] || [ ! -s render_avatar.png ]; then
-            echo "::warning::Vulkan-Headless lieferte Exit $RC – versuche Xvfb + Software-OpenGL..."
-            rm -f render_avatar.png
-            LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX +render -noreset" \
+          run_attempt "OpenGL (llvmpipe)" 300 \
+            env LIBGL_ALWAYS_SOFTWARE=1 "$BLENDER_BIN" -b --factory-startup \
+              --gpu-backend opengl --python blender/render_glass.py -- "${RENDER_ARGS[@]}" \
+          || run_attempt "Vulkan (lavapipe)" 300 \
+            "$BLENDER_BIN" -b --factory-startup \
+              --gpu-backend vulkan --python blender/render_glass.py -- "${RENDER_ARGS[@]}" \
+          || run_attempt "Xvfb + Software-OpenGL" 240 \
+            env LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX +render -noreset" \
               "$BLENDER_BIN" -b --factory-startup --gpu-backend opengl \
-              --python blender/render_glass.py -- "${RENDER_ARGS[@]}" \
-              2>&1 | tee -a build/logs/blender.log
-            RC=${PIPESTATUS[0]}
-          fi
+              --python blender/render_glass.py -- "${RENDER_ARGS[@]}"
           set -e
 
           DURATION=$(( $(date +%s) - START ))
