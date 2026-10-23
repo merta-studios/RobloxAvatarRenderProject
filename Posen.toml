@@ -1,214 +1,634 @@
 # =============================================================================
-#  Posen.toml – Posen für den Avatar-Render
+#  Posen.toml – GFX-Posen für den Avatar-Render
 # =============================================================================
 #
-#  In der Configs.toml wird unter "pose" ein Name aus dieser Datei eingetragen
-#  (oder "None" für die normale Stand-Pose).
+#  In Configs.toml steht unter "pose" nur noch der Name (oder "None").
+#  ALLES andere – Bildausschnitt, Kamera-Abstand, Avatar-Höhe und die
+#  Körperhaltung – definiert jede Pose hier selbst.
 #
-#  Aufbau einer Pose
-#  -----------------
-#      [Posenname]
-#      beschreibung = "Kurze Beschreibung (optional)"
+#  Pose-weite Werte (kommen an den Anfang jeder Pose)
+#  --------------------------------------------------
+#      sichtbar_oben_prozent   Freier Platz über der Kopfoberkante in % der
+#                              Bildhöhe. Negativ = Kopf ragt oben raus.
+#      sichtbar_unten_prozent  Freier Platz unter den Füßen in %.
+#                              Negativ schneidet an: -35 zeigt z. B. nur
+#                              etwa ab der Hüfte aufwärts (Bust-/GFX-Schnitt).
+#                              Oben + unten müssen zusammen unter 95 bleiben.
+#      kamera_abstand_studs    Zusätzlicher Abstand der Kamera in Studs:
+#                              0 = exakt passend zu den sichtbar_*-Werten,
+#                              +2 = weiter weg (Avatar kleiner, mehr Luft),
+#                              -1 = näher dran (größer, dramatischer).
+#      avatar_hoch_studs       Ganzen Avatar anheben (+) oder absenken (-),
+#                              z. B. für Sprünge (+) oder Landungen (-).
 #
-#      [Posenname.koerperteil]
-#      rotation = [x, y, z]       # Drehung in Grad, alle drei Achsen
-#      verschiebung = [x, y, z]   # leichte Verschiebung in Studs (optional)
+#  Körperteile – nur Delta-Werte zur Stand-Pose
+#  --------------------------------------------
+#  Keine exakten Positionen/Rotationen mehr! Jeder Wert sagt, wie sich das
+#  Gelenk gegenüber der Stand-Pose WEITER verändert. Nicht genannte Teile
+#  und Felder bleiben neutral (0). Drehung immer um das echte Gelenk
+#  (Schulter, Ellbogen, Hüfte, Knie … aus den RigAttachments des Avatars).
 #
-#  Nicht genannte Körperteile bleiben in der Stand-Pose. Beide Zeilen sind
-#  optional, fehlende Achsen/Werte sind 0.
+#      Oberer/unterer Torso, Kopf:
+#          nach_vorne_beugen_grad / nicken_grad (Kopf)  + = nach vorn
+#          nach_links_drehen_grad                      + = Blick nach links
+#          nach_rechts_neigen_grad                     + = zur rechten Seite
+#          hoch_studs / vor_studs / nach_rechts_studs  Positions-Delta
 #
-#  Verfügbare Körperteile (genau so schreiben):
-#      oberer_torso        unterer_torso
-#      kopf
-#      linker_oberarm      linker_unterarm     linke_hand
-#      rechter_oberarm     rechter_unterarm    rechte_hand
-#      linkes_oberbein     linkes_unterbein    linker_fuss
-#      rechtes_oberbein    rechtes_unterbein   rechter_fuss
+#      Oberarm / Oberbein:
+#          vor_hoch_schwingen_grad   0 = hängt, 90 = waagerecht vorn, 180 = oben
+#          vom_koerper_weg_grad      + = seitlich vom Körper weg (beide Seiten!)
+#          laengs_drehung_grad       Drehung um die eigene Glied-Achse
 #
-#  Achsen (Roblox-Koordinaten: X = rechts, Y = hoch, Z = hinten)
-#  -------------------------------------------------------------
-#      X: kippt nach vorne/hinten. Positiv = nach vorne (Richtung Gesicht).
-#         Beine: positiv = Schritt nach vorne. Kopf: positiv = nicken.
-#      Y: dreht um die Hochachse. Positiv = nach links drehen.
-#      Z: spreizt seitlich ab. Positiv = zur rechten Körperseite.
-#         Rechter Arm: positiv = Arm hebt sich nach außen.
-#         Linker Arm:  negativ = Arm hebt sich nach außen.
+#      Unterarm:  ellbogen_beugen_grad (+ = Unterarm klappt nach vorn)
+#      Hand:      handgelenk_vor_beugen_grad, handgelenk_nach_aussen_grad
+#      Unterbein: knie_beugen_grad (+ = Unterschenkel klappt nach hinten)
+#      Fuß:       spitze_senken_grad, fuss_nach_aussen_drehen_grad
 #
-#  Wichtig
-#  -------
-#  * Drehungen sind relativ zur Stand-Pose und wirken wie bei einem Skelett:
-#    Dreht sich der Oberarm, folgen Unterarm und Hand automatisch mit.
-#  * "verschiebung" ist für kleine Korrekturen gedacht (max. ±5 Studs).
-#  * Der Hals wird automatisch zwischen Oberkörper und Kopf überblendet.
-#  * Accessoires, Kleidung, Hüte usw. werden passend mitgedreht/mitverschoben
-#    (Hut -> Kopf, Gear -> rechte Hand, Rucksack -> oberer Torso …).
-#  * Maximal ±180° pro Achse.
+#      Alle Glieder außerdem: hoch_studs, vor_studs,
+#      seitlich_nach_aussen_studs (kleine Positions-Deltas, max. ±2 Studs).
+#
+#  Erlaubte Körperteile: oberer_torso, unterer_torso, kopf,
+#  linker_oberarm, linker_unterarm, linke_hand, rechter_oberarm,
+#  rechter_unterarm, rechte_hand, linkes_oberbein, linkes_unterbein,
+#  linker_fuss, rechtes_oberbein, rechtes_unterbein, rechter_fuss.
+#
+#  Accessoires folgen automatisch ihrem Körperteil (Hut -> Kopf,
+#  Halskette -> Torso …). Ausrüstung (Gear) wird nie mit geladen.
 # =============================================================================
 
 
 # -----------------------------------------------------------------------------
-#  Winken – rechter Arm erhoben, Unterarm winkt, Kopf dreht sich zum Arm
+#  Helden_Pose – breiter Stand, Brust raus, Faust geballt (Standard für GFX)
+#  Sichtbar: ganzer Körper, 5 % Luft über dem Kopf, 4 % unter den Füßen.
+# -----------------------------------------------------------------------------
+[Helden_Pose]
+beschreibung = "Breiter Helden-Stand, Brust raus, Blick leicht von oben"
+sichtbar_oben_prozent = 5
+sichtbar_unten_prozent = 4
+kamera_abstand_studs = 0.5
+avatar_hoch_studs = 0
+
+[Helden_Pose.unterer_torso]
+nach_rechts_neigen_grad = 2
+
+[Helden_Pose.oberer_torso]
+nach_vorne_beugen_grad = -4
+nach_links_drehen_grad = 6
+
+[Helden_Pose.kopf]
+nicken_grad = -7
+nach_links_drehen_grad = -8
+
+[Helden_Pose.linkes_oberbein]
+vom_koerper_weg_grad = 7
+
+[Helden_Pose.rechtes_oberbein]
+vom_koerper_weg_grad = 9
+vor_hoch_schwingen_grad = 4
+
+[Helden_Pose.linkes_unterbein]
+knie_beugen_grad = 4
+
+[Helden_Pose.rechter_oberarm]
+vom_koerper_weg_grad = 16
+vor_hoch_schwingen_grad = 8
+
+[Helden_Pose.rechter_unterarm]
+ellbogen_beugen_grad = 28
+
+[Helden_Pose.rechte_hand]
+handgelenk_vor_beugen_grad = 12
+
+[Helden_Pose.linker_oberarm]
+vom_koerper_weg_grad = 12
+vor_hoch_schwingen_grad = -4
+
+[Helden_Pose.linker_unterarm]
+ellbogen_beugen_grad = 18
+
+
+# -----------------------------------------------------------------------------
+#  Siegerfaust – eine Faust in den Himmel, anderer Arm an der Hüfte
+#  Sichtbar: ganzer Körper plus Platz über der erhobenen Faust (9 % oben).
+# -----------------------------------------------------------------------------
+[Siegerfaust]
+beschreibung = "Eine Faust jubelt in den Himmel, Kopf im Nacken"
+sichtbar_oben_prozent = 9
+sichtbar_unten_prozent = 5
+kamera_abstand_studs = 1
+avatar_hoch_studs = 0
+
+[Siegerfaust.oberer_torso]
+nach_vorne_beugen_grad = -6
+nach_rechts_neigen_grad = -5
+
+[Siegerfaust.kopf]
+nicken_grad = -16
+
+[Siegerfaust.rechter_oberarm]
+vor_hoch_schwingen_grad = 168
+vom_koerper_weg_grad = 14
+
+[Siegerfaust.rechter_unterarm]
+ellbogen_beugen_grad = 12
+
+[Siegerfaust.linker_oberarm]
+vom_koerper_weg_grad = 22
+vor_hoch_schwingen_grad = 6
+
+[Siegerfaust.linker_unterarm]
+ellbogen_beugen_grad = 62
+
+[Siegerfaust.linkes_oberbein]
+vom_koerper_weg_grad = 6
+
+[Siegerfaust.rechtes_oberbein]
+vom_koerper_weg_grad = 6
+
+
+# -----------------------------------------------------------------------------
+#  Kampfstellung – seitlich gedreht, Fäuste oben, ein Bein vorn
+#  Sichtbar: ganzer Körper, nah dran (-1 Stud) für mehr Druck.
+# -----------------------------------------------------------------------------
+[Kampfstellung]
+beschreibung = "Kampfbereit: Fäuste oben, Schrittstellung, Torso eingedreht"
+sichtbar_oben_prozent = 6
+sichtbar_unten_prozent = 5
+kamera_abstand_studs = -1
+avatar_hoch_studs = -0.15
+
+[Kampfstellung.unterer_torso]
+nach_links_drehen_grad = 22
+hoch_studs = -0.15
+
+[Kampfstellung.oberer_torso]
+nach_vorne_beugen_grad = 10
+nach_links_drehen_grad = 14
+
+[Kampfstellung.kopf]
+nicken_grad = 6
+nach_links_drehen_grad = -30
+
+[Kampfstellung.rechtes_oberbein]
+vor_hoch_schwingen_grad = 38
+vom_koerper_weg_grad = 6
+
+[Kampfstellung.rechtes_unterbein]
+knie_beugen_grad = 18
+
+[Kampfstellung.rechter_fuss]
+spitze_senken_grad = 10
+
+[Kampfstellung.linkes_oberbein]
+vor_hoch_schwingen_grad = -22
+vom_koerper_weg_grad = 8
+
+[Kampfstellung.linkes_unterbein]
+knie_beugen_grad = 26
+
+[Kampfstellung.rechter_oberarm]
+vor_hoch_schwingen_grad = 62
+vom_koerper_weg_grad = 18
+
+[Kampfstellung.rechter_unterarm]
+ellbogen_beugen_grad = 92
+
+[Kampfstellung.linker_oberarm]
+vor_hoch_schwingen_grad = 48
+vom_koerper_weg_grad = 14
+
+[Kampfstellung.linker_unterarm]
+ellbogen_beugen_grad = 105
+
+
+# -----------------------------------------------------------------------------
+#  Superhelden_Landung – ein Knie am Boden, Faust stützt ab, Kopf hebt sich
+#  Sichtbar: ganzer Körper knapp über dem Boden, 10 % unten für "Bodenwirkung".
+# -----------------------------------------------------------------------------
+[Superhelden_Landung]
+beschreibung = "Superhelden-Landung: ein Knie unten, Faust am Boden, Blick hoch"
+sichtbar_oben_prozent = 8
+sichtbar_unten_prozent = 10
+kamera_abstand_studs = 0.5
+avatar_hoch_studs = -0.85
+
+[Superhelden_Landung.unterer_torso]
+hoch_studs = -0.55
+nach_vorne_beugen_grad = 6
+
+[Superhelden_Landung.oberer_torso]
+nach_vorne_beugen_grad = 20
+nach_links_drehen_grad = 10
+
+[Superhelden_Landung.kopf]
+nicken_grad = -20
+nach_links_drehen_grad = -12
+
+[Superhelden_Landung.rechtes_oberbein]
+vor_hoch_schwingen_grad = 78
+vom_koerper_weg_grad = 10
+
+[Superhelden_Landung.rechtes_unterbein]
+knie_beugen_grad = 82
+
+[Superhelden_Landung.linkes_oberbein]
+vor_hoch_schwingen_grad = -8
+
+[Superhelden_Landung.linkes_unterbein]
+knie_beugen_grad = 96
+
+[Superhelden_Landung.linker_fuss]
+spitze_senken_grad = 42
+
+[Superhelden_Landung.rechter_oberarm]
+vor_hoch_schwingen_grad = 46
+vom_koerper_weg_grad = 10
+
+[Superhelden_Landung.rechter_unterarm]
+ellbogen_beugen_grad = 8
+
+[Superhelden_Landung.linker_oberarm]
+vor_hoch_schwingen_grad = -28
+vom_koerper_weg_grad = 24
+
+[Superhelden_Landung.linker_unterarm]
+ellbogen_beugen_grad = 34
+
+
+# -----------------------------------------------------------------------------
+#  Sprung_Action – mitten im Sprung, Beine angewinkelt, Arme reißen hoch
+#  Sichtbar: ganzer Körper in der Luft (Avatar +1,3 Studs), viel Luft unten.
+# -----------------------------------------------------------------------------
+[Sprung_Action]
+beschreibung = "Mitten im Sprung: Knie angezogen, Arme reißen mit hoch"
+sichtbar_oben_prozent = 7
+sichtbar_unten_prozent = 14
+kamera_abstand_studs = 1
+avatar_hoch_studs = 1.3
+
+[Sprung_Action.oberer_torso]
+nach_vorne_beugen_grad = -5
+
+[Sprung_Action.kopf]
+nicken_grad = -10
+
+[Sprung_Action.rechtes_oberbein]
+vor_hoch_schwingen_grad = 62
+vom_koerper_weg_grad = 8
+
+[Sprung_Action.rechtes_unterbein]
+knie_beugen_grad = 68
+
+[Sprung_Action.rechter_fuss]
+spitze_senken_grad = 30
+
+[Sprung_Action.linkes_oberbein]
+vor_hoch_schwingen_grad = 24
+vom_koerper_weg_grad = 12
+
+[Sprung_Action.linkes_unterbein]
+knie_beugen_grad = 92
+
+[Sprung_Action.linker_fuss]
+spitze_senken_grad = 36
+
+[Sprung_Action.rechter_oberarm]
+vor_hoch_schwingen_grad = 148
+vom_koerper_weg_grad = 20
+
+[Sprung_Action.rechter_unterarm]
+ellbogen_beugen_grad = 24
+
+[Sprung_Action.linker_oberarm]
+vor_hoch_schwingen_grad = 96
+vom_koerper_weg_grad = 30
+
+[Sprung_Action.linker_unterarm]
+ellbogen_beugen_grad = 48
+
+
+# -----------------------------------------------------------------------------
+#  Laessig_Entspannt – Gewicht auf einem Bein, Hand locker in Hüft-Höhe
+#  Sichtbar: ganzer Körper, entspannt mit etwas mehr Luft um den Avatar.
+# -----------------------------------------------------------------------------
+[Laessig_Entspannt]
+beschreibung = "Lässig: Gewicht verlagert, Schultern locker, Blick zur Seite"
+sichtbar_oben_prozent = 6
+sichtbar_unten_prozent = 6
+kamera_abstand_studs = 1.5
+avatar_hoch_studs = 0
+
+[Laessig_Entspannt.unterer_torso]
+nach_rechts_neigen_grad = 5
+nach_rechts_studs = 0.08
+
+[Laessig_Entspannt.oberer_torso]
+nach_rechts_neigen_grad = -4
+nach_links_drehen_grad = -8
+
+[Laessig_Entspannt.kopf]
+nach_rechts_neigen_grad = 7
+nach_links_drehen_grad = 18
+nicken_grad = 3
+
+[Laessig_Entspannt.rechtes_oberbein]
+vom_koerper_weg_grad = 4
+
+[Laessig_Entspannt.rechtes_unterbein]
+knie_beugen_grad = 3
+
+[Laessig_Entspannt.linkes_oberbein]
+vor_hoch_schwingen_grad = 10
+vom_koerper_weg_grad = 10
+
+[Laessig_Entspannt.linkes_unterbein]
+knie_beugen_grad = 14
+
+[Laessig_Entspannt.linker_fuss]
+fuss_nach_aussen_drehen_grad = 16
+
+[Laessig_Entspannt.rechter_oberarm]
+vom_koerper_weg_grad = 10
+
+[Laessig_Entspannt.rechter_unterarm]
+ellbogen_beugen_grad = 52
+
+[Laessig_Entspannt.linker_oberarm]
+vom_koerper_weg_grad = 18
+vor_hoch_schwingen_grad = -6
+
+[Laessig_Entspannt.linker_unterarm]
+ellbogen_beugen_grad = 20
+
+
+# -----------------------------------------------------------------------------
+#  Arme_Verschraenkt – selbstbewusst, Arme vor der Brust verschränkt
+#  Sichtbar: ab etwa den Knien aufwärts geschnitten (unten -18 %) – GFX-Büste.
+# -----------------------------------------------------------------------------
+[Arme_Verschraenkt]
+beschreibung = "Arme vor der Brust verschränkt, Kinn hoch, GFX-Ausschnitt"
+sichtbar_oben_prozent = 7
+sichtbar_unten_prozent = -18
+kamera_abstand_studs = -0.5
+avatar_hoch_studs = 0
+
+[Arme_Verschraenkt.oberer_torso]
+nach_vorne_beugen_grad = -3
+
+[Arme_Verschraenkt.kopf]
+nicken_grad = -6
+nach_rechts_neigen_grad = 3
+
+[Arme_Verschraenkt.rechter_oberarm]
+vor_hoch_schwingen_grad = 52
+vom_koerper_weg_grad = 6
+laengs_drehung_grad = 18
+
+[Arme_Verschraenkt.rechter_unterarm]
+ellbogen_beugen_grad = 118
+laengs_drehung_grad = -24
+
+[Arme_Verschraenkt.linker_oberarm]
+vor_hoch_schwingen_grad = 52
+vom_koerper_weg_grad = 6
+laengs_drehung_grad = -18
+
+[Arme_Verschraenkt.linker_unterarm]
+ellbogen_beugen_grad = 122
+laengs_drehung_grad = 24
+
+[Arme_Verschraenkt.linkes_oberbein]
+vom_koerper_weg_grad = 5
+
+[Arme_Verschraenkt.rechtes_oberbein]
+vom_koerper_weg_grad = 5
+
+
+# -----------------------------------------------------------------------------
+#  Denker – sitzt gedanklich auf unsichtbarer Kante, Hand am Kinn
+#  Sichtbar: ganzer Körper, abgesenkt (Avatar -0,7 Studs) wie auf einer Kante.
+# -----------------------------------------------------------------------------
+[Denker]
+beschreibung = "Nachdenklich: ein Arm stützt, Hand Richtung Kinn, Blick abgewandt"
+sichtbar_oben_prozent = 7
+sichtbar_unten_prozent = 8
+kamera_abstand_studs = 0.5
+avatar_hoch_studs = -0.7
+
+[Denker.unterer_torso]
+hoch_studs = -0.45
+
+[Denker.oberer_torso]
+nach_vorne_beugen_grad = 14
+nach_links_drehen_grad = 8
+
+[Denker.kopf]
+nicken_grad = 14
+nach_links_drehen_grad = 22
+
+[Denker.linkes_oberbein]
+vor_hoch_schwingen_grad = 82
+vom_koerper_weg_grad = 6
+
+[Denker.linkes_unterbein]
+knie_beugen_grad = 84
+
+[Denker.rechtes_oberbein]
+vor_hoch_schwingen_grad = 82
+vom_koerper_weg_grad = 6
+
+[Denker.rechtes_unterbein]
+knie_beugen_grad = 88
+
+[Denker.rechter_oberarm]
+vor_hoch_schwingen_grad = 34
+vom_koerper_weg_grad = 12
+
+[Denker.rechter_unterarm]
+ellbogen_beugen_grad = 128
+
+[Denker.rechte_hand]
+handgelenk_vor_beugen_grad = 20
+
+[Denker.linker_oberarm]
+vor_hoch_schwingen_grad = 44
+vom_koerper_weg_grad = 8
+
+[Denker.linker_unterarm]
+ellbogen_beugen_grad = 96
+
+
+# -----------------------------------------------------------------------------
+#  Winken – freundlich: ein Arm oben winkt, Kopf neigt sich zum Arm
+#  Sichtbar: ganzer Körper, 8 % oben, damit die winkende Hand Platz hat.
 # -----------------------------------------------------------------------------
 [Winken]
-beschreibung = "Rechter Arm ist erhoben und winkt"
+beschreibung = "Freundliches Winken mit erhobenem rechtem Arm"
+sichtbar_oben_prozent = 8
+sichtbar_unten_prozent = 5
+kamera_abstand_studs = 0.5
+avatar_hoch_studs = 0
 
 [Winken.rechter_oberarm]
-rotation = [0, 0, 105]
-verschiebung = [0, 0, 0]
+vor_hoch_schwingen_grad = 158
+vom_koerper_weg_grad = 22
 
 [Winken.rechter_unterarm]
-rotation = [0, 0, 30]
-verschiebung = [0, 0, 0]
+ellbogen_beugen_grad = 18
+laengs_drehung_grad = 14
 
 [Winken.rechte_hand]
-rotation = [0, 0, 0]
-verschiebung = [0, 0, 0]
+handgelenk_nach_aussen_grad = 18
 
 [Winken.kopf]
-rotation = [0, -15, 0]
-verschiebung = [0, 0, 0]
+nach_rechts_neigen_grad = -8
+nicken_grad = -4
+
+[Winken.linker_oberarm]
+vom_koerper_weg_grad = 10
+
+[Winken.linker_unterarm]
+ellbogen_beugen_grad = 14
 
 
 # -----------------------------------------------------------------------------
-#  T_Pose – beide Arme waagerecht zur Seite gestreckt
+#  Peace_Pose – zwei Finger Richtung Kamera geht nicht, dafür Arm hoch + Peace-Haltung
+#  Sichtbar: Oberkörper betont (unten -28 %), nah dran – klassisches GFX-Porträt.
 # -----------------------------------------------------------------------------
-[T_Pose]
-beschreibung = "Beide Arme waagerecht ausgestreckt (T-Pose)"
+[Peace_Pose]
+beschreibung = "GFX-Porträt: Arm hoch angewinkelt, Kopf schräg, nah dran"
+sichtbar_oben_prozent = 8
+sichtbar_unten_prozent = -28
+kamera_abstand_studs = -1
+avatar_hoch_studs = 0
 
-[T_Pose.rechter_oberarm]
-rotation = [0, 0, 90]
-verschiebung = [0, 0, 0]
+[Peace_Pose.oberer_torso]
+nach_links_drehen_grad = 10
+nach_vorne_beugen_grad = 4
 
-[T_Pose.linker_oberarm]
-rotation = [0, 0, -90]
-verschiebung = [0, 0, 0]
+[Peace_Pose.kopf]
+nach_rechts_neigen_grad = 10
+nicken_grad = 4
+nach_links_drehen_grad = -14
 
+[Peace_Pose.rechter_oberarm]
+vor_hoch_schwingen_grad = 128
+vom_koerper_weg_grad = 26
 
-# -----------------------------------------------------------------------------
-#  Laufen – Schrittstellung mit Armschwung
-# -----------------------------------------------------------------------------
-[Laufen]
-beschreibung = "Laufende Schrittstellung"
+[Peace_Pose.rechter_unterarm]
+ellbogen_beugen_grad = 68
 
-[Laufen.oberer_torso]
-rotation = [4, 8, 0]
-verschiebung = [0, 0, 0]
+[Peace_Pose.rechte_hand]
+handgelenk_nach_aussen_grad = 14
 
-[Laufen.kopf]
-rotation = [0, -8, 0]
-verschiebung = [0, 0, 0]
+[Peace_Pose.linker_oberarm]
+vom_koerper_weg_grad = 14
 
-[Laufen.linkes_oberbein]
-rotation = [35, 0, 0]
-verschiebung = [0, 0, 0]
-
-[Laufen.linkes_unterbein]
-rotation = [-30, 0, 0]
-verschiebung = [0, 0, 0]
-
-[Laufen.rechtes_oberbein]
-rotation = [-25, 0, 0]
-verschiebung = [0, 0, 0]
-
-[Laufen.rechtes_unterbein]
-rotation = [-20, 0, 0]
-verschiebung = [0, 0, 0]
-
-[Laufen.linker_oberarm]
-rotation = [30, 0, 0]
-verschiebung = [0, 0, 0]
-
-[Laufen.linker_unterarm]
-rotation = [35, 0, 0]
-verschiebung = [0, 0, 0]
-
-[Laufen.rechter_oberarm]
-rotation = [-35, 0, 0]
-verschiebung = [0, 0, 0]
-
-[Laufen.rechter_unterarm]
-rotation = [-30, 0, 0]
-verschiebung = [0, 0, 0]
+[Peace_Pose.linker_unterarm]
+ellbogen_beugen_grad = 38
 
 
 # -----------------------------------------------------------------------------
-#  Sitzen – Oberschenkel nach vorne, Unterschenkel nach unten
-#  (ohne Stuhl: der Avatar schwebt in Sitzhaltung)
+#  Tanz_Freeze – eingefrorene Tanzfigur: Standbein, Spielbein, Arme diagonal
+#  Sichtbar: ganzer Körper mit Luft an allen Seiten (Kamera +2 Studs).
 # -----------------------------------------------------------------------------
-[Sitzen]
-beschreibung = "Sitzhaltung (Oberschenkel waagerecht)"
+[Tanz_Freeze]
+beschreibung = "Eingefrorene Tanzfigur: Arme diagonal, ein Bein angehoben"
+sichtbar_oben_prozent = 8
+sichtbar_unten_prozent = 8
+kamera_abstand_studs = 2
+avatar_hoch_studs = 0.25
 
-[Sitzen.unterer_torso]
-rotation = [0, 0, 0]
-verschiebung = [0, -0.25, 0]
+[Tanz_Freeze.unterer_torso]
+nach_rechts_neigen_grad = 6
+nach_links_drehen_grad = 12
 
-[Sitzen.oberer_torso]
-rotation = [8, 0, 0]
-verschiebung = [0, 0, 0]
+[Tanz_Freeze.oberer_torso]
+nach_rechts_neigen_grad = -8
+nach_vorne_beugen_grad = -4
 
-[Sitzen.linkes_oberbein]
-rotation = [85, 0, -4]
-verschiebung = [0, 0, 0]
+[Tanz_Freeze.kopf]
+nach_rechts_neigen_grad = 8
+nicken_grad = -8
 
-[Sitzen.linkes_unterbein]
-rotation = [-85, 0, 0]
-verschiebung = [0, 0, 0]
+[Tanz_Freeze.rechtes_oberbein]
+vor_hoch_schwingen_grad = 48
+vom_koerper_weg_grad = 14
 
-[Sitzen.rechtes_oberbein]
-rotation = [85, 0, 4]
-verschiebung = [0, 0, 0]
+[Tanz_Freeze.rechtes_unterbein]
+knie_beugen_grad = 54
 
-[Sitzen.rechtes_unterbein]
-rotation = [-85, 0, 0]
-verschiebung = [0, 0, 0]
+[Tanz_Freeze.rechter_fuss]
+spitze_senken_grad = 38
 
-[Sitzen.linker_oberarm]
-rotation = [12, 0, -6]
-verschiebung = [0, 0, 0]
+[Tanz_Freeze.linkes_oberbein]
+vom_koerper_weg_grad = 6
 
-[Sitzen.rechter_oberarm]
-rotation = [12, 0, 6]
-verschiebung = [0, 0, 0]
+[Tanz_Freeze.rechter_oberarm]
+vor_hoch_schwingen_grad = 152
+vom_koerper_weg_grad = 28
 
-[Sitzen.linker_unterarm]
-rotation = [25, 0, 0]
-verschiebung = [0, 0, 0]
+[Tanz_Freeze.rechter_unterarm]
+ellbogen_beugen_grad = 16
 
-[Sitzen.rechter_unterarm]
-rotation = [25, 0, 0]
-verschiebung = [0, 0, 0]
+[Tanz_Freeze.linker_oberarm]
+vor_hoch_schwingen_grad = -18
+vom_koerper_weg_grad = 34
+
+[Tanz_Freeze.linker_unterarm]
+ellbogen_beugen_grad = 42
 
 
 # -----------------------------------------------------------------------------
-#  Jubel – beide Arme nach oben, Kopf leicht im Nacken
+#  Flieger – wie im Flug nach vorn gestreckt, Arme am Körper, Beine gestreckt
+#  Sichtbar: ganzer Körper in der Luft (Avatar +1,6 Studs), viel Raum unten.
 # -----------------------------------------------------------------------------
-[Jubel]
-beschreibung = "Beide Arme hoch, Kopf im Nacken"
+[Flieger]
+beschreibung = "Im Flug: Körper nach vorn gestreckt, Arme anliegend, Beine lang"
+sichtbar_oben_prozent = 10
+sichtbar_unten_prozent = 16
+kamera_abstand_studs = 2
+avatar_hoch_studs = 1.6
 
-[Jubel.rechter_oberarm]
-rotation = [0, 0, 165]
-verschiebung = [0, 0, 0]
+[Flieger.unterer_torso]
+nach_vorne_beugen_grad = 38
 
-[Jubel.linker_oberarm]
-rotation = [0, 0, -165]
-verschiebung = [0, 0, 0]
+[Flieger.oberer_torso]
+nach_vorne_beugen_grad = 34
 
-[Jubel.rechter_unterarm]
-rotation = [0, 0, 8]
-verschiebung = [0, 0, 0]
+[Flieger.kopf]
+nicken_grad = -34
 
-[Jubel.linker_unterarm]
-rotation = [0, 0, -8]
-verschiebung = [0, 0, 0]
+[Flieger.rechtes_oberbein]
+vor_hoch_schwingen_grad = -16
+vom_koerper_weg_grad = 5
 
-[Jubel.kopf]
-rotation = [-10, 0, 0]
-verschiebung = [0, 0.1, 0]
+[Flieger.rechtes_unterbein]
+knie_beugen_grad = 8
 
-[Jubel.linkes_oberbein]
-rotation = [0, 0, -6]
-verschiebung = [0, 0, 0]
+[Flieger.rechter_fuss]
+spitze_senken_grad = 44
 
-[Jubel.rechtes_oberbein]
-rotation = [0, 0, 6]
-verschiebung = [0, 0, 0]
+[Flieger.linkes_oberbein]
+vor_hoch_schwingen_grad = -10
+vom_koerper_weg_grad = 5
+
+[Flieger.linkes_unterbein]
+knie_beugen_grad = 12
+
+[Flieger.linker_fuss]
+spitze_senken_grad = 44
+
+[Flieger.rechter_oberarm]
+vor_hoch_schwingen_grad = -24
+vom_koerper_weg_grad = 10
+
+[Flieger.rechter_unterarm]
+ellbogen_beugen_grad = 10
+
+[Flieger.linker_oberarm]
+vor_hoch_schwingen_grad = -24
+vom_koerper_weg_grad = 10
+
+[Flieger.linker_unterarm]
+ellbogen_beugen_grad = 10

@@ -78,15 +78,21 @@ Ergebnis im Build-Ordner: `manifest.json`, `parts/*.obj`, `textures/*`,
 | `username` | Roblox-Username (früher `username.txt`) |
 | `drehung_grad` | Seitliche Drehung `-90 … 90`; `0` = frontal, `90` = rechte Seite |
 | `pose` | `None` oder ein Name aus `Posen.toml` |
-| `freiraum_oben_prozent` | Freiraum über dem Kopf (ohne Accessoires), in % der Bildhöhe. Ragen Accessoires darüber hinaus, wird das Bild aufgezogen statt anzuschneiden |
-| `freiraum_unten_prozent` | Freiraum unter den Füßen; **negativ** schneidet an (z. B. `-40` = nur Torso) |
+| *(Bildausschnitt)* | Steht nicht mehr hier – jede Pose in `Posen.toml` definiert selbst, was sichtbar ist (`sichtbar_oben_prozent` / `sichtbar_unten_prozent`, Kamera-Abstand, Avatar-Höhe) |
 | `render_bei_aenderung` | `true` = nach dem Push rendern (Workflow setzt danach auf `false`) |
 | `hintergrund_url` | Bild-URL/Pfad, `"hdri"` (Standard) oder `"transparent"` |
 | `hintergrund_glossy` | `true` = glänzend wie der Avatar, `false` = matt |
 
-In `Posen.toml` lassen sich für jedes Körperteil `rotation = [x, y, z]` (Grad)
-und `verschiebung = [x, y, z]` (Studs) angeben; Accessoires folgen automatisch.
-Beispiele: `Winken`, `T_Pose`, `Laufen`, `Sitzen`, `Jubel`.
+In `Posen.toml` beschreibt jede Pose mit sprechenden Delta-Werten, wie sich
+die Gelenke gegenüber der Stand-Pose verändern (z. B. am Oberarm
+`vor_hoch_schwingen_grad` und `vom_koerper_weg_grad` statt roher Achsen-Tripel),
+plus eigenem Bildausschnitt und Kamera-Abstand. Gedreht wird um die exakten
+Gelenk-Pivots aus den RigAttachments, überblendet wird volumen-erhaltend per
+Quaternionen. Accessoires folgen automatisch – **Ausnahme: Ausrüstung (Gear,
+Asset-Typ 19) wird gar nicht erst geladen.** Enthalten sind viele GFX-Posen,
+z. B. `Helden_Pose`, `Siegerfaust`, `Kampfstellung`, `Superhelden_Landung`,
+`Sprung_Action`, `Arme_Verschraenkt`, `Denker`, `Peace_Pose`, `Tanz_Freeze`,
+`Flieger` und `Winken`.
 
 ## Änderungen landen ohne Pull Request in `main`
 

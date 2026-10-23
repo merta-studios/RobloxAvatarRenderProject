@@ -42,41 +42,24 @@ drehung_grad = -20
 #  3) Pose
 # -----------------------------------------------------------------------------
 #  "None" = normale Stand-Pose (wie bisher).
-#  Sonst der Name einer Pose aus Posen.toml, z. B. "Winken", "T_Pose",
-#  "Laufen", "Sitzen" oder "Jubel".
-#  Dort stehen für jedes Körperteil die Drehungen (Grad) und leichten
-#  Verschiebungen (Studs). Accessoires, Kleidung usw. folgen automatisch.
-pose = "T_Pose"
+#  Sonst der Name einer Pose aus Posen.toml, z. B. "Helden_Pose",
+#  "Siegerfaust", "Kampfstellung", "Superhelden_Landung" oder "Winken".
+#  Jede Pose bringt ihren eigenen Bildausschnitt (sichtbar oben/unten),
+#  Kamera-Abstand und ihre Körperhaltung mit. Accessoires folgen automatisch
+#  (Ausrüstung/Gear wird nie mit geladen).
+pose = "Helden_Pose"
 
 
 # -----------------------------------------------------------------------------
-#  4) Bildausschnitt: freier Abstand oben und unten
+#  4) Bildausschnitt, Kamera-Abstand und Avatar-Höhe
 # -----------------------------------------------------------------------------
-#  Beide Werte sind Prozent der Bildhöhe.
-#
-#  freiraum_oben_prozent:
-#      Freier Platz von der oberen Bildkante bis zur Oberkante des Kopfes.
-#      Accessoires (Hut, Haare, Krone …) zählen NICHT mit – der Wert bezieht
-#      sich nur auf den Kopf selbst.
-#
-#  freiraum_unten_prozent:
-#      Freier Platz von der Unterkante der Füße bis zur unteren Bildkante.
-#
-#  Negative Werte sind erlaubt und schneiden das Bild an:
-#      -20  = die Füße liegen 20 % unterhalb des Bildrands
-#      -40  = nur der Torso ist zu sehen (Beine abgeschnitten)
-#  Oben + unten müssen zusammen unter 95 bleiben, sonst wäre kein Platz
-#  für den Avatar im Bild.
-#
-#  Accessoires (Hut, Krone, schwebender Halo …) zählen beim Messen nicht mit –
-#  der Wert gilt bis zur Kopfoberkante. Damit ein normaler Hut/eine Krone
-#  nicht angeschnitten wird, rückt die Kamera bei Bedarf etwas weiter weg
-#  (max. 25 %, der Kopf sitzt dann etwas tiefer als eingestellt; genaue Werte
-#  stehen im Render-Log). Weit schwebende Accessoires (Halo) werden dagegen
-#  bewusst nicht eingepasst – dafür freiraum_oben_prozent erhöhen.
-#  Bei negativen Werten wird bewusst angeschnitten, dort wird nichts korrigiert.
-freiraum_oben_prozent = 6
-freiraum_unten_prozent = -20
+#  Diese Werte stehen NICHT mehr hier, sondern in jeder Pose in Posen.toml
+#  selbst (sichtbar_oben_prozent, sichtbar_unten_prozent,
+#  kamera_abstand_studs, avatar_hoch_studs). Dort steht in den Kommentaren
+#  zu jeder Pose, bis zu welchen Positionen man im Bild sehen kann
+#  (z. B. ganzer Körper, nur Oberkörper oder mit viel Luft für einen Sprung).
+#  Wer einen anderen Ausschnitt will, ändert also die Pose – oder legt in
+#  Posen.toml eine eigene Pose mit anderen Werten an.
 
 
 # -----------------------------------------------------------------------------

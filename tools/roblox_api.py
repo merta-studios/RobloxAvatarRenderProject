@@ -73,6 +73,21 @@ MESH_ASSET_TYPES = {4, 8, 19, 41, 42, 43, 44, 45, 46, 47, 17, 27, 28, 29, 30, 31
 # Audio (3) und alle Animations-/Emote-Typen: werden nie heruntergeladen,
 # nur gezaehlt (siehe stats["ignored_animations"] in build_avatar.py).
 IGNORED_ASSET_TYPES = {3, 24, 48, 49, 50, 51, 52, 53, 54, 55, 56, 61, 78}
+# Accessoire-Kategorien (deutsch) -> AssetTypeIds. "Ausrüstung" (Gear, 19)
+# wird bewusst NICHT geladen: Schwert & Co. gehoeren nicht auf ein
+# GFX-Portraet und wuerden sonst in der rechten Hand landen.
+GEAR_ASSET_TYPE = 19
+EXCLUDED_ASSET_TYPES = {GEAR_ASSET_TYPE}
+ACCESSORY_CATEGORIES = {
+    8: "Kopf", 41: "Kopf", 79: "Kopf",
+    43: "Hals",
+    42: "Gesicht", 76: "Gesicht", 77: "Gesicht",
+    44: "Schultern",
+    45: "Vorderseite",
+    46: "Rücken",
+    47: "Taille",
+    19: "Ausrüstung",
+}
 
 
 class RobloxError(RuntimeError):

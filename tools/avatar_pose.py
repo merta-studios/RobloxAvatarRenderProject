@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 """Posen fuer den Avatar-Render: laden, pruefen und auf das Rig anwenden.
 
-Die Posen stehen in ``Posen.toml`` im Repository-Root. Dort kann fuer jedes
-Koerperteil eine Drehung (Grad, alle drei Achsen) und eine leichte
-Verschiebung (Studs) angegeben werden. Diese Datei enthaelt die Logik:
+Die Posen stehen in ``Posen.toml``. Jede Pose beschreibt in sprechenden,
+*relativen* Delta-Werten, wie sich ein Gelenk gegenueber der Stand-Pose
+veraendert (z. B. ``vor_hoch_schwingen_grad`` am Oberarm statt einer
+rohen ``rotation = [x, y, z]``), plus eigene Kamera-/Ausschnitt-Werte
+(``sichtbar_oben_prozent``, ``kamera_abstand_studs``, ``avatar_hoch_studs``).
 
 * Laden/Validieren der Posen (``load_poses``)
-* Gelenkpunkte des Rigs bestimmen (``joints_from_parts`` - Rueckfall, wenn das
-  RBXM-Rig keine exakten ``*RigAttachment``-Gelenke geliefert hat)
-* Transformationen der Knochen-Kette berechnen (Eltern-Drehungen wirken auf
-  alle Kinder, wie bei einem echten Skelett)
-* Mesh-Verformung mit weichen Uebergaengen an den Gelenken (Linear Blend
-  Skinning entlang der Kette). Accessoires folgen starr dem passenden Knochen
-  (Hut -> Kopf, Gear -> rechte Hand, ...).
+* Gelenkpunkte: exakte ``*RigAttachment``-Positionen haben Vorrang; fehlende
+  Gelenke werden aus den Nachbar-Gelenken der Kette abgeleitet (nie geraten
+  mitten ins Teil), damit jede Drehung um das echte Gelenk (Pivot) laeuft.
+* FK-Kette: Eltern-Drehungen wirken auf alle Kinder wie bei einem Skelett.
+* Mesh-Verformung: gewichtete Quaternionen-Ueberblendung (statt Positionen
+  mehrerer starrer Transformationen zu mitteln) - das Volumen bleibt an
+  Ellbogen/Knie/Hals erhalten und die Uebergaenge bleiben nahtlos.
+  Accessoires folgen starr ihrem Knochen (Hut -> Kopf, ...).
 
-Koordinatensystem des Rigs (Roblox): X = rechts, Y = hoch, Z = hinten
-(das Gesicht zeigt nach -Z). Drehungen werden in Grad angegeben und in der
-Reihenfolge X, dann Y, dann Z angewendet.
+Koordinaten (Roblox): X = rechts, Y = hoch, Z = hinten (Gesicht: -Z).
 """
 
 from __future__ import annotations
@@ -141,8 +142,105 @@ ANCHOR_BONE: Dict[str, str] = {
 }
 
 MAX_ROTATION_DEG = 180.0
-MAX_OFFSET_STUDS = 5.0
-BLEND_FRACTION = 0.16
+MAX_OFFSET_STUDS = 2.0
+BLEND_FRACTION = 0.22
+
+# ---------------------------------------------------------------------------
+# Sprechende Pose-Felder je Koerperteil (Delta-Werte zur Stand-Pose)
+# ---------------------------------------------------------------------------
+# Feldname -> (Achse, Vorzeichen). Achsen: 0=X (vor/zurueck kippen),
+# 1=Y (um Hoch-/Laengsachse drehen), 2=Z (seitlich kippen/spreizen).
+# Seitliche Felder werden fuer die linke Koerperseite automatisch gespiegelt:
+# "vom Koerper weg" / "nach aussen" heisst auf beiden Seiten wirklich aussen.
+# Feldnamen mit ``_studs`` sind Positions-Deltas, der Rest Grad-Deltas.
+
+def _side(bone: str) -> float:
+    return -1.0 if bone.startswith(("linker", "linke", "linkes")) else 1.0
+
+
+def _fields(bone: str) -> Dict[str, Tuple[int, float]]:
+    side = _side(bone)
+    # Positions-Deltas (Studs): hoch / vor (Gesichtsrichtung) / aussen.
+    offsets = {
+        "hoch_studs": (1, 1.0),
+        "vor_studs": (2, -1.0),          # Gesicht zeigt nach -Z
+        "seitlich_nach_aussen_studs": (0, side),
+    }
+    if bone in ("oberer_torso", "unterer_torso", "kopf"):
+        offsets = {
+            "hoch_studs": (1, 1.0),
+            "vor_studs": (2, -1.0),
+            "nach_rechts_studs": (0, 1.0),
+        }
+        rotations = {
+            "nach_vorne_beugen_grad": (0, 1.0),
+            "nach_links_drehen_grad": (1, 1.0),
+            "nach_rechts_neigen_grad": (2, -1.0),
+        }
+        if bone == "kopf":
+            rotations = {
+                "nicken_grad": (0, 1.0),   # + = Kinn zur Brust
+                "nach_links_drehen_grad": (1, 1.0),
+                "nach_rechts_neigen_grad": (2, -1.0),
+            }
+        return {**rotations, **offsets}
+    if bone.endswith("oberarm"):
+        rotations = {
+            "vor_hoch_schwingen_grad": (0, 1.0),   # 0=haengt, 90=waagerecht vor, 180=oben
+            "vom_koerper_weg_grad": (2, side),      # + = seitlich vom Torso weg heben
+            "laengs_drehung_grad": (1, 1.0),        # um die eigene Arm-Achse
+        }
+    elif bone.endswith("unterarm"):
+        rotations = {
+            "ellbogen_beugen_grad": (0, 1.0),       # + = Unterarm klappt nach vorne
+            "laengs_drehung_grad": (1, 1.0),
+        }
+    elif bone.endswith("hand"):
+        rotations = {
+            "handgelenk_vor_beugen_grad": (0, 1.0),
+            "handgelenk_nach_aussen_grad": (2, side),
+            "laengs_drehung_grad": (1, 1.0),
+        }
+    elif bone.endswith("oberbein"):
+        rotations = {
+            "vor_hoch_schwingen_grad": (0, 1.0),    # 90 = Oberschenkel waagerecht
+            "vom_koerper_weg_grad": (2, side),
+            "laengs_drehung_grad": (1, 1.0),
+        }
+    elif bone.endswith("unterbein"):
+        rotations = {
+            "knie_beugen_grad": (0, -1.0),          # + = Unterschenkel klappt nach hinten
+            "laengs_drehung_grad": (1, 1.0),
+        }
+    elif bone.endswith("fuss"):
+        rotations = {
+            "spitze_senken_grad": (0, -1.0),        # + = Fussspitze zeigt nach unten
+            "fuss_nach_aussen_drehen_grad": (1, -side),
+            "laengs_drehung_grad": (2, side),
+        }
+    else:  # pragma: no cover - alle Knochen oben abgedeckt
+        rotations = {}
+    return {**rotations, **offsets}
+
+
+#: Erlaubte Feldnamen je Koerperteil (fuer Validierung + Fehlermeldungen).
+BONE_FIELDS: Dict[str, Dict[str, Tuple[int, float]]] = {
+    bone: _fields(bone) for bone in BODY_PART_KEYS
+}
+
+#: Pose-weite Einstellungen (Kamera/Ausschnitt) mit Standardwerten.
+POSE_SETTING_DEFAULTS: Dict[str, float] = {
+    "sichtbar_oben_prozent": 6.0,     # Freiraum ueber dem Kopf (% Bildhoehe)
+    "sichtbar_unten_prozent": 6.0,    # Freiraum unter den Fuessen (negativ = Schnitt)
+    "kamera_abstand_studs": 0.0,      # zusaetzlicher Kamera-Abstand (+ weiter weg)
+    "avatar_hoch_studs": 0.0,         # ganzen Avatar anheben (+) / senken (-)
+}
+POSE_SETTING_LIMITS: Dict[str, Tuple[float, float]] = {
+    "sichtbar_oben_prozent": (-100.0, 95.0),
+    "sichtbar_unten_prozent": (-100.0, 95.0),
+    "kamera_abstand_studs": (-6.0, 30.0),
+    "avatar_hoch_studs": (-3.0, 5.0),
+}
 
 
 class PoseError(ValueError):
@@ -252,65 +350,154 @@ def _smoothstep(t: float) -> float:
     return t * t * (3.0 - 2.0 * t)
 
 
+# Quaternionen (w, x, y, z): gewichtetes Mitteln erhaelt das Volumen an
+# Gelenken, waehrend gemittelte Positionen starrer Transformationen das
+# Mesh am Ellbogen/Knie sichtbar einschnueren ("Candy-Wrapper").
+Quat = Tuple[float, float, float, float]
+
+
+def _mat3_to_quat(m: Mat3) -> Quat:
+    trace = m[0][0] + m[1][1] + m[2][2]
+    if trace > 0.0:
+        s = math.sqrt(trace + 1.0) * 2.0
+        q = (0.25 * s, (m[2][1] - m[1][2]) / s, (m[0][2] - m[2][0]) / s,
+             (m[1][0] - m[0][1]) / s)
+    elif m[0][0] > m[1][1] and m[0][0] > m[2][2]:
+        s = math.sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]) * 2.0
+        q = ((m[2][1] - m[1][2]) / s, 0.25 * s, (m[0][1] + m[1][0]) / s,
+             (m[0][2] + m[2][0]) / s)
+    elif m[1][1] > m[2][2]:
+        s = math.sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]) * 2.0
+        q = ((m[0][2] - m[2][0]) / s, (m[0][1] + m[1][0]) / s, 0.25 * s,
+             (m[1][2] + m[2][1]) / s)
+    else:
+        s = math.sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]) * 2.0
+        q = ((m[1][0] - m[0][1]) / s, (m[0][2] + m[2][0]) / s,
+             (m[1][2] + m[2][1]) / s, 0.25 * s)
+    length = math.sqrt(sum(v * v for v in q)) or 1.0
+    return tuple(v / length for v in q)  # type: ignore[return-value]
+
+
+def _quat_to_mat3(q: Quat) -> Mat3:
+    w, x, y, z = q
+    return (
+        (1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)),
+        (2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)),
+        (2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)),
+    )
+
+
+def _blend_transforms(items: List[Tuple[Mat4, float]]) -> Tuple[Mat3, Vec3]:
+    """Gewichtete starre Transformation: Rotation slerp-artig, Translation lerp."""
+    ref: Optional[Quat] = None
+    acc = [0.0, 0.0, 0.0, 0.0]
+    translation = [0.0, 0.0, 0.0]
+    for matrix, weight in items:
+        quat = _mat3_to_quat(_mat3_of(matrix))
+        if ref is None:
+            ref = quat
+        if sum(a * b for a, b in zip(quat, ref)) < 0.0:  # gleiche Halbkugel
+            quat = tuple(-v for v in quat)  # type: ignore
+        for i in range(4):
+            acc[i] += quat[i] * weight
+        origin = _mat4_point(matrix, (0.0, 0.0, 0.0))
+        for i in range(3):
+            translation[i] += origin[i] * weight
+    length = math.sqrt(sum(v * v for v in acc)) or 1.0
+    quat = tuple(v / length for v in acc)  # type: ignore
+    return _quat_to_mat3(quat), (translation[0], translation[1], translation[2])  # type: ignore
+
+
 # ---------------------------------------------------------------------------
 # Posen laden und pruefen
 # ---------------------------------------------------------------------------
 
-def _numbers(value: Any, count: int, where: str) -> Tuple[float, ...]:
-    if not isinstance(value, (list, tuple)) or len(value) != count:
-        raise PoseError(f"{where}: erwartet eine Liste mit {count} Zahlen, "
-                        f"z. B. [0, 0, 0] (gefunden: {value!r}).")
-    result: List[float] = []
-    for item in value:
-        if isinstance(item, bool) or not isinstance(item, (int, float)):
-            raise PoseError(f"{where}: '{item!r}' ist keine Zahl.")
-        result.append(float(item))
-    return tuple(result)
+def _number(value: Any, where: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise PoseError(f"{where}: '{value!r}' ist keine Zahl.")
+    return float(value)
 
 
-def _check_part(part: str, spec: Any, where: str) -> Dict[str, Tuple[float, ...]]:
+def _check_part(part: str, spec: Any, where: str) -> Dict[str, Any]:
+    """Sprechende Delta-Felder eines Teils -> Euler-Grad + Welt-Offset."""
     if part not in BONE_PARENT:
         raise PoseError(
             f"{where}: unbekanntes Koerperteil '{part}'. Erlaubt: "
-            + ", ".join(BODY_PART_KEYS)
-        )
+            + ", ".join(BODY_PART_KEYS))
     if not isinstance(spec, dict):
-        raise PoseError(
-            f"{where}: '{part}' muss eine Tabelle mit rotation/verschiebung sein."
-        )
-    rotation = _numbers(spec.get("rotation", [0, 0, 0]), 3, f"{where}.{part}.rotation")
-    offset = _numbers(spec.get("verschiebung", [0, 0, 0]), 3,
-                      f"{where}.{part}.verschiebung")
-    for value in rotation:
-        if abs(value) > MAX_ROTATION_DEG:
-            raise PoseError(
-                f"{where}.{part}.rotation: {value:g}° ist zu gross "
-                f"(maximal +/-{MAX_ROTATION_DEG:.0f}°).")
-    for value in offset:
-        if abs(value) > MAX_OFFSET_STUDS:
-            raise PoseError(
-                f"{where}.{part}.verschiebung: {value:g} Studs ist zu viel "
-                f"('leichte Verschiebungen', maximal +/-{MAX_OFFSET_STUDS:.0f}).")
-    unknown = set(spec) - {"rotation", "verschiebung"}
+        raise PoseError(f"{where}: '{part}' muss eine Tabelle sein, z. B. "
+                        "[Pose.rechter_oberarm] mit vor_hoch_schwingen_grad.")
+    allowed = BONE_FIELDS[part]
+    unknown = set(spec) - set(allowed)
     if unknown:
+        hint = (" Die alten Felder 'rotation'/'verschiebung' gibt es nicht "
+                "mehr." if unknown & {"rotation", "verschiebung"} else "")
         raise PoseError(
-            f"{where}.{part}: unbekannte Felder {sorted(unknown)} "
-            "(erlaubt: rotation, verschiebung).")
-    return {"rotation": rotation, "verschiebung": offset}
+            f"{where}.{part}: unbekannte Felder {sorted(unknown)}.{hint} "
+            f"Erlaubt fuer '{part}': " + ", ".join(sorted(allowed)) + ".")
+    rotation = [0.0, 0.0, 0.0]
+    offset = [0.0, 0.0, 0.0]
+    felder: Dict[str, float] = {}
+    for field, value in spec.items():
+        number = _number(value, f"{where}.{part}.{field}")
+        axis, sign = allowed[field]
+        if field.endswith("_studs"):
+            if abs(number) > MAX_OFFSET_STUDS:
+                raise PoseError(
+                    f"{where}.{part}.{field}: {number:g} Studs ist zu viel "
+                    f"(Positions-Deltas max. +/-{MAX_OFFSET_STUDS:.0f}).")
+            offset[axis] += sign * number
+        else:
+            if abs(number) > MAX_ROTATION_DEG:
+                raise PoseError(
+                    f"{where}.{part}.{field}: {number:g} Grad ist zu gross "
+                    f"(max. +/-{MAX_ROTATION_DEG:.0f}).")
+            rotation[axis] += sign * number
+        felder[field] = number
+    return {"rotation": tuple(rotation), "verschiebung": tuple(offset),
+            "felder": felder}
 
 
-def normalize_pose(pose: Any, name: str = "Pose") -> Dict[str, Dict[str, Tuple[float, ...]]]:
-    """Prueft eine einzelne Pose und ergaenzt fehlende Teile mit 0-Werten."""
+def normalize_pose(pose: Any, name: str = "Pose") -> Dict[str, Dict[str, Any]]:
+    """Prueft die Koerperteile einer Pose (Pose-Einstellungen s. load_poses)."""
     if pose is None:
         return {}
     if not isinstance(pose, dict):
         raise PoseError(f"Pose '{name}' muss eine Tabelle sein.")
-    normalized: Dict[str, Dict[str, Tuple[float, ...]]] = {}
+    normalized: Dict[str, Dict[str, Any]] = {}
     for part, spec in pose.items():
-        if part in ("beschreibung", "description"):
+        if part in ("beschreibung", "description") or part in POSE_SETTING_DEFAULTS:
+            continue
+        if isinstance(spec, dict) and "felder" in spec:
+            # Bereits normalisiert (z. B. aus load_poses) - unveraendert durchreichen.
+            normalized[part] = {
+                "rotation": tuple(float(v) for v in spec["rotation"]),
+                "verschiebung": tuple(float(v) for v in spec["verschiebung"]),
+                "felder": dict(spec["felder"]),
+            }
             continue
         normalized[part] = _check_part(part, spec, f"Pose '{name}'")
     return normalized
+
+
+def normalize_settings(table: Dict[str, Any], name: str = "Pose") -> Dict[str, float]:
+    """Kamera-/Ausschnitt-Werte einer Pose pruefen (mit Defaults ergaenzen)."""
+    settings = dict(POSE_SETTING_DEFAULTS)
+    for key in POSE_SETTING_DEFAULTS:
+        if key not in table:
+            continue
+        value = _number(table[key], f"Pose '{name}'.{key}")
+        low, high = POSE_SETTING_LIMITS[key]
+        if not low <= value <= high:
+            raise PoseError(f"Pose '{name}'.{key}: {value:g} ausserhalb "
+                            f"{low:g}..{high:g}.")
+        settings[key] = value
+    if (settings["sichtbar_oben_prozent"] + settings["sichtbar_unten_prozent"]
+            > 95.0):
+        raise PoseError(
+            f"Pose '{name}': sichtbar_oben_prozent + sichtbar_unten_prozent "
+            "darf hoechstens 95 ergeben (sonst bleibt kein Platz im Bild).")
+    return settings
 
 
 def load_poses(path: str) -> Dict[str, Dict[str, Any]]:
@@ -342,6 +529,7 @@ def load_poses(path: str) -> Dict[str, Dict[str, Any]]:
         poses[name] = {
             "beschreibung": description,
             "teile": normalize_pose(table, name),
+            "einstellungen": normalize_settings(table, name),
         }
     return poses
 
@@ -491,19 +679,67 @@ def chain_weights(point: Sequence[float],
 class PoseContext:
     """Wendet eine (bereits validierte) Pose auf Welt-Meshes an."""
 
-    def __init__(self, pose: Dict[str, Dict[str, Tuple[float, ...]]],
-                 joints: Dict[str, Point]):
+    def __init__(self, pose: Dict[str, Dict[str, Any]],
+                 joints: Dict[str, Point],
+                 settings: Optional[Dict[str, float]] = None):
+        # ``pose`` darf roh (sprechende Felder) oder normalisiert sein.
         self.pose = normalize_pose(pose) if pose else {}
-        self.joints = dict(joints)
-        self.active = any(
-            any(abs(v) > 1e-9 for v in spec["rotation"]) or
-            any(abs(v) > 1e-9 for v in spec["verschiebung"])
-            for spec in self.pose.values()
-        )
+        self.settings = {**POSE_SETTING_DEFAULTS, **(settings or {})}
+        self.joints = self._resolve_joints(joints)
+        self.avatar_offset: Vec3 = (0.0, float(self.settings["avatar_hoch_studs"]), 0.0)
+        self.active = (
+            any(any(abs(v) > 1e-9 for v in spec["rotation"]) or
+                any(abs(v) > 1e-9 for v in spec["verschiebung"])
+                for spec in self.pose.values())
+            or any(abs(v) > 1e-9 for v in self.avatar_offset))
         self.transforms: Dict[str, Mat4] = {}
         self.rotations: Dict[str, Mat3] = {}
         self._build_transforms()
         self._chain_cache: Dict[str, Tuple[List[Point], List[str]]] = {}
+
+    @staticmethod
+    def _resolve_joints(joints: Dict[str, Point]) -> Dict[str, Point]:
+        """Jedes Gelenk auf einen echten Pivot festlegen.
+
+        Exakte RigAttachment-Positionen bleiben unangetastet. Fehlt ein
+        Gelenk, wird es aus den Nachbarn derselben Kette interpoliert bzw.
+        am Kettenanfang/-ende verankert - niemals auf (0,0,0) oder in die
+        Teilmitte geraten, sonst reisst die Drehung das Mesh auseinander.
+        """
+        resolved = {k: (float(p[0]), float(p[1]), float(p[2]))
+                    for k, p in joints.items()}
+        chains = (
+            ("LowerTorso", "UpperTorso", "Head"),
+            ("LeftUpperArm", "LeftLowerArm", "LeftHand"),
+            ("RightUpperArm", "RightLowerArm", "RightHand"),
+            ("LeftUpperLeg", "LeftLowerLeg", "LeftFoot"),
+            ("RightUpperLeg", "RightLowerLeg", "RightFoot"),
+        )
+        for chain in chains:
+            known = [i for i, n in enumerate(chain) if n in resolved]
+            for i, joint_name in enumerate(chain):
+                if joint_name in resolved:
+                    continue
+                if known:
+                    near = min(known, key=lambda k: abs(k - i))
+                    # Am Kettenende: 0.45 Studs hinter dem letzten Gelenk
+                    # in Kettenrichtung; dazwischen: Mitte der Nachbarn.
+                    before = [k for k in known if k < i]
+                    after = [k for k in known if k > i]
+                    if before and after:
+                        a, b = resolved[chain[before[-1]]], resolved[chain[after[0]]]
+                        resolved[joint_name] = tuple((a[j] + b[j]) / 2 for j in range(3))  # type: ignore
+                    elif before:
+                        a = resolved[chain[before[-1]]]
+                        prev = resolved[chain[before[-2]]] if len(before) > 1 else None
+                        d = _sub(a, prev) if prev else (0.0, -1.0, 0.0)
+                        step = _mul(_normalize(d, (0.0, -1.0, 0.0)), 0.45)
+                        resolved[joint_name] = _add(a, step)  # type: ignore
+                    else:
+                        resolved[joint_name] = resolved[chain[near]]
+                else:
+                    resolved[joint_name] = (0.0, 0.0, 0.0)
+        return resolved
 
     # -- Skelett ---------------------------------------------------------
     def _build_transforms(self) -> None:
@@ -511,19 +747,24 @@ class PoseContext:
             spec = self.pose.get(bone) or {}
             rotation = spec.get("rotation", (0.0, 0.0, 0.0))
             offset = spec.get("verschiebung", (0.0, 0.0, 0.0))
-            pivot = self.joints.get(BONE_JOINT[bone])
-            local = IDENTITY4
-            if pivot is not None:
-                rot = _euler_matrix(rotation)
-                local = _mat4_mul(_translation(pivot), rot)
-                local = _mat4_mul(local, _translation((-pivot[0], -pivot[1], -pivot[2])))
-            local = _mat4_mul(local, _translation(offset))
+            pivot = self.joints[BONE_JOINT[bone]]  # nach _resolve_joints immer da
+            # Drehung exakt um den Gelenk-Pivot; das Positions-Delta wirkt
+            # im Eltern-Raum (hoch/vor/aussen), verschiebt also den Pivot
+            # selbst - Kinder und Accessoires folgen nahtlos.
+            local = _mat4_mul(_translation(offset),
+                              _mat4_mul(_translation(pivot),
+                                        _mat4_mul(_euler_matrix(rotation),
+                                                  _translation((-pivot[0], -pivot[1], -pivot[2])))))
             parent = BONE_PARENT[bone]
-            self.transforms[bone] = (
-                _mat4_mul(self.transforms[parent], local) if parent
-                else local
-            )
-            self.rotations[bone] = _mat3_of(self.transforms[bone])
+            world = _mat4_mul(self.transforms[parent], local) if parent else local
+            if parent is None and any(abs(v) > 1e-9 for v in self.avatar_offset):
+                world = _mat4_mul(_translation(self.avatar_offset), world)
+            self.transforms[bone] = world
+            self.rotations[bone] = _mat3_of(world)
+
+    def transform_point(self, point: Sequence[float], bone: str = "kopf") -> Vec3:
+        """Einen Weltpunkt mit der Pose eines Knochens mitbewegen."""
+        return _mat4_point(self.transforms[bone], point)
 
     def _joint(self, key: str) -> Point:
         return self.joints.get(key, (0.0, 0.0, 0.0))
@@ -597,23 +838,21 @@ class PoseContext:
                 if has_normals:
                     normals.append(mesh.normals[len(positions) - 1])
                 continue
-            x = y = z = 0.0
-            for bone, weight in weights.items():
-                px, py, pz = _mat4_point(self.transforms[bone], vertex)
-                x += px * weight
-                y += py * weight
-                z += pz * weight
-            positions.append((x, y, z))
+            # Eine einzige gewichtete starre Transformation pro Vertex
+            # (Rotation quaternionen-gemischt): kein Einschnueren am Gelenk.
+            rotation, translation = _blend_transforms(
+                [(self.transforms[bone], w) for bone, w in weights.items()])
+            # p' = R_mix * p + t_mix: fuer einen einzelnen Knochen exakt
+            # dessen Transformation, dazwischen eine starre Ueberblendung
+            # um den interpolierten Pivot (kein Volumenverlust).
+            rotated = _mat3_vec(rotation, vertex)
+            positions.append((rotated[0] + translation[0],
+                              rotated[1] + translation[1],
+                              rotated[2] + translation[2]))
 
             if has_normals:
                 normal = mesh.normals[len(positions) - 1]
-                nx = ny = nz = 0.0
-                for bone, weight in weights.items():
-                    rx, ry, rz = _mat3_vec(self.rotations[bone], normal)
-                    nx += rx * weight
-                    ny += ry * weight
-                    nz += rz * weight
-                normals.append(_normalize((nx, ny, nz), normal))
+                normals.append(_normalize(_mat3_vec(rotation, normal), normal))
 
         return MeshData(
             positions=positions,
@@ -675,21 +914,22 @@ class PoseContext:
         )
 
 
-def pose_summary(pose: Dict[str, Dict[str, Tuple[float, ...]]]) -> str:
+def pose_summary(pose: Dict[str, Dict[str, Any]],
+                 settings: Optional[Dict[str, float]] = None) -> str:
     """Kurze, lesbare Zusammenfassung fuer Log/Manifest."""
     parts = []
     for part in BODY_PART_KEYS:
         spec = pose.get(part)
         if not spec:
             continue
-        rotation = spec["rotation"]
-        offset = spec["verschiebung"]
-        if not any(abs(v) > 1e-9 for v in rotation + offset):
+        felder = spec.get("felder") or {}
+        active = {k: v for k, v in felder.items() if abs(v) > 1e-9}
+        if not active:
             continue
-        parts.append(
-            f"{part}: Drehung "
-            + "/".join(f"{v:g}" for v in rotation)
-            + "°, Verschiebung "
-            + "/".join(f"{v:g}" for v in offset)
-        )
+        parts.append(f"{part}: " + ", ".join(
+            f"{k}={v:g}" for k, v in active.items()))
+    if settings:
+        parts.append("Kamera/Ausschnitt: " + ", ".join(
+            f"{k}={settings[k]:g}" for k in POSE_SETTING_DEFAULTS
+            if k in settings))
     return "; ".join(parts) if parts else "neutrale Stand-Pose"
