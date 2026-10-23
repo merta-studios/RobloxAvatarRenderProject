@@ -889,13 +889,48 @@ def _world_to_view(cam, points):
     return out
 
 
+def _project_points(matrix_world, cam_data, scene, points):
+    """Projiziert Weltpunkte in Kamera-NDC (0..1) mit expliziter Matrix.
+
+    Mathematisch identisch zu ``bpy_extras.world_to_camera_view`` (gleiche
+    Formeln: normalisierte, invertierte matrix_world, ``view_frame`` mit
+    Lens/Sensor/Shift und Szenen-Seitenverhaeltnis), liest aber NICHT
+    ``obj.matrix_world`` und braucht deshalb kein Depsgraph-Update: Der
+    Kamera-Solver ruft die Projektion hunderte Male pro Render - jedes
+    ``view_layer.update()`` dort loest die komplette Szenen-Auswertung aus
+    und kostete auf den Software-Renderern Minuten (Timeout in Schritt 6).
+    """
+    try:
+        inverse = matrix_world.normalized().inverted()
+    except Exception:
+        return [(0.5, 0.5) for _ in points]
+    frame = [Vector(v) for v in cam_data.view_frame(scene=scene)[:3]]
+    out = []
+    for p in points:
+        co_local = inverse @ Vector(p)
+        z = -co_local.z
+        if cam_data.type != 'ORTHO':
+            if z == 0.0:
+                out.append((0.5, 0.5))
+                continue
+            f = [-(v / (v.z / z)) for v in frame]
+        else:
+            f = frame
+        min_x, max_x = f[2].x, f[1].x
+        min_y, max_y = f[1].y, f[0].y
+        out.append(((co_local.x - min_x) / (max_x - min_x),
+                    (co_local.y - min_y) / (max_y - min_y)))
+    return out
+
+
 def fit_camera_with_blender(cam, focus_xy, head_z, feet_z, content_points,
                             yaw_deg: float = 0.0,
                             top_percent: float = 6.0,
                             bottom_percent: float = 6.0,
                             exact: bool = False,
                             max_scale: float = 1.25,
-                            distance_offset_studs: float = 0.0):
+                            distance_offset_studs: float = 0.0,
+                            deadline_s: float = 30.0):
     """Justiert Abstand und Hoehe der Kamera mit Blenders Projektion.
 
     Kopfoberkante (``head_z``) und Fuesse (``feet_z``) landen exakt auf den
@@ -903,11 +938,20 @@ def fit_camera_with_blender(cam, focus_xy, head_z, feet_z, content_points,
     zusaetzlich hoechstens ``max_scale`` weiter zurueck, damit Accessoires
     nicht abgeschnitten werden.
 
-    Rueckgabe: dict mit ``kopf_prozent``, ``fuss_prozent``, ``aufgezogen``,
-    ``abgeschnitten`` und ``distance``.
+    ``deadline_s`` begrenzt die Laufzeit hart (Wall-Clock): Bei breiten
+    Posen (z. B. Emotes mit ausgebreiteten Armen) laeuft der Aufzieh-Loop
+    viele Solver-Durchlaeufe - der Solver darf den Render-Schritt nie
+    aushungern, im Zweifel gewinnt das bisher beste Ergebnis.
     """
     target_top = 1.0 - top_percent / 100.0   # y-Koordinate (0 unten, 1 oben)
     target_bottom = bottom_percent / 100.0
+
+    t0 = time.monotonic()
+    scene = bpy.context.scene
+    projektionen = [0]
+
+    def zeit_ueberschritten() -> bool:
+        return (time.monotonic() - t0) > deadline_s
 
     direction = Vector(camera_direction(yaw_deg)).normalized()
     head_point = (focus_xy[0], focus_xy[1], head_z)
@@ -926,24 +970,41 @@ def fit_camera_with_blender(cam, focus_xy, head_z, feet_z, content_points,
         quat = (target - loc).to_track_quat("-Z", "Y")
         cam.rotation_euler = quat.to_euler()
         # matrix_world sofort selbst setzen statt auf das (teure)
-        # Depsgraph-/View-Layer-Update zu warten - sonst projiziert
-        # _world_to_view mit der veralteten Matrix (s. dort).
-        try:
-            if Matrix is not None:
-                cam.matrix_world = Matrix.LocRotScale(
-                    loc, quat, Vector((1.0, 1.0, 1.0)))
-        except Exception:
-            pass
-        (_, head_y), (_, feet_y) = _world_to_view(cam, [head_point, feet_point])
+        # Depsgraph-/View-Layer-Update zu warten - und die Projektion
+        # direkt mit DIESER Matrix rechnen (_project_points liest nie
+        # obj.matrix_world, damit kein view_layer.update() noetig wird).
+        matrix = None
+        if Matrix is not None:
+            matrix = Matrix.LocRotScale(loc, quat, Vector((1.0, 1.0, 1.0)))
+            try:
+                cam.matrix_world = matrix.copy()
+            except Exception:
+                pass
+        projektionen[0] += 1
+        if matrix is not None:
+            (_, head_y), (_, feet_y) = _project_points(
+                matrix, cam.data, scene, [head_point, feet_point])
+        else:  # pragma: no cover - mathutils ist in Blender immer da
+            (_, head_y), (_, feet_y) = _world_to_view(cam, [head_point, feet_point])
         return head_y, feet_y
 
-    def solve(dist: float, z: float) -> tuple:
-        """Newton fuer (Abstand, Hoehe) auf (Kopf, Fuesse)."""
-        for _ in range(30):
+    def solve(dist: float, z: float, max_iter: int = 30) -> tuple:
+        """Newton fuer (Abstand, Hoehe) auf (Kopf, Fuesse).
+
+        Behaelt immer das bisher beste (dist, z): Auch bei Abbruch wegen
+        Zeitlimit oder singulaerem Jakobi steht danach kein Schlechtwert.
+        """
+        best_dist, best_z, best_err = dist, z, float("inf")
+        for _ in range(max_iter):
             head_y, feet_y = place(dist, z)
             r1 = head_y - target_top
             r2 = feet_y - target_bottom
+            err = abs(r1) + abs(r2)
+            if err < best_err:
+                best_dist, best_z, best_err = dist, z, err
             if abs(r1) < 2e-4 and abs(r2) < 2e-4:
+                break
+            if zeit_ueberschritten():
                 break
             step_d = max(1e-4, 0.01 * dist)
             step_z = max(1e-4, 0.01 * body_span)
@@ -959,7 +1020,10 @@ def fit_camera_with_blender(cam, focus_xy, head_z, feet_z, content_points,
             # gedämpft, damit das Verfahren stabil konvergiert
             dist = max(0.2 * start_dist, dist + max(-0.5 * dist, min(0.5 * dist, d_dist)))
             z += max(-0.5 * body_span, min(0.5 * body_span, d_z))
-        return dist, z
+        # Kamera auf den Rueckgabewert synchronisieren: content_inside() und
+        # die Endkontrolle projizieren mit der zuletzt gesetzten Matrix.
+        place(best_dist, best_z)
+        return best_dist, best_z
 
     dist = start_dist
     z = float(cam.location.z)
@@ -979,7 +1043,7 @@ def fit_camera_with_blender(cam, focus_xy, head_z, feet_z, content_points,
             error = (head_y + feet_y) / 2.0 - target_mid
             if abs(error) < best_err:
                 best_z, best_err = z, abs(error)
-            if abs(error) < 2e-4:
+            if abs(error) < 2e-4 or zeit_ueberschritten():
                 break
             z = max(z_start - body_span, min(z_start + body_span,
                                              z + error * body_span * 0.7))
@@ -987,7 +1051,17 @@ def fit_camera_with_blender(cam, focus_xy, head_z, feet_z, content_points,
         place(dist, z)
 
     def content_inside() -> bool:
-        for x, y in _world_to_view(cam, content_points):
+        # Projektion ueber die Matrix aus dem letzten place()-Aufruf
+        # (matrix_world wurde dort direkt gesetzt) - kein Depsgraph-Update.
+        try:
+            mw = cam.matrix_world.copy()
+        except Exception:
+            mw = None
+        if mw is not None:
+            points = _project_points(mw, cam.data, scene, content_points)
+        else:  # pragma: no cover
+            points = _world_to_view(cam, content_points)
+        for x, y in points:
             if y < -1e-6 or y > 1.0 + 1e-6:
                 return False
             if not exact and (x < -1e-6 or x > 1.0 + 1e-6):
@@ -996,23 +1070,42 @@ def fit_camera_with_blender(cam, focus_xy, head_z, feet_z, content_points,
 
     aufgezogen = False
     abgeschnitten = False
+    zeitlimit = False
     if not exact and not distance_offset_studs and top_percent > 0 and bottom_percent > 0:
         max_dist = dist * max_scale
+        floor = dist  # Ratsche: Aufzieh-Niveau, das nicht wieder sinkt
         while not content_inside():
-            if dist >= max_dist:
+            if floor >= max_dist:
                 abgeschnitten = True
                 break
-            dist = min(max_dist, dist * 1.03)
-            dist, z = solve(dist, z)
+            if zeit_ueberschritten():
+                zeitlimit = True
+                abgeschnitten = True
+                break
+            # Monoton aufziehen. FRUEHER stand hier nur `dist = min(max_dist,
+            # dist * 1.03)` - aber solve() stellte den Abstand fuer Kopf/
+            # Fuesse sofort wieder zurueck, dist erreichte max_dist NIE und
+            # die Schleife lief endlos (breite Emote-Posen -> Render-
+            # Schritt starb im Zeitlimit, der Render startete nie).
+            floor = min(max_dist, floor * 1.03)
+            dist, z = solve(dist, z, max_iter=8)
+            dist = max(dist, floor)
+            place(dist, z)
             aufgezogen = True
 
     head_y, feet_y = place(dist, z)
+    if zeitlimit:
+        log(f"Hinweis: Kamera-Nachjustierung nach {deadline_s:.0f}s Zeitlimit "
+            f"abgebrochen ({projektionen[0]} Projektionen) - bestes Ergebnis "
+            "wird verwendet.")
     return {
         "kopf_prozent": (1.0 - head_y) * 100.0,
         "fuss_prozent": feet_y * 100.0,
         "aufgezogen": aufgezogen,
         "abgeschnitten": abgeschnitten,
         "distance": dist,
+        "projektionen": projektionen[0],
+        "dauer_s": time.monotonic() - t0,
     }
 
 
@@ -1104,6 +1197,13 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
         else:
             # Endkontrolle mit frischer Projektion: Kopf/Fuesse muessen
             # grob im Bild sein, sonst lieber die Vorberechnung nehmen.
+            # EIN view_layer.update() (nicht pro Projektion wie frueher im
+            # Solver): erst danach liest obj.matrix_world wirklich die soeben
+            # gesetzte Kameraposition, die auch der Render verwenden wird.
+            try:
+                bpy.context.view_layer.update()
+            except Exception:
+                pass
             focus_xy = (float(lo.x + hi.x) / 2.0, float(lo.y + hi.y) / 2.0)
             (_, head_y), (_, feet_y) = _world_to_view(cam, [
                 (focus_xy[0], focus_xy[1],
@@ -1121,7 +1221,9 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
             else:
                 log(f"Kamera (Blender-Projektion): oben {refined['kopf_prozent']:.1f} % / "
                     f"unten {refined['fuss_prozent']:.1f} % | Abstand "
-                    f"{refined['distance']:.2f}")
+                    f"{refined['distance']:.2f} | Nachjustierung "
+                    f"{refined.get('projektionen', 0)} Projektionen in "
+                    f"{refined.get('dauer_s', 0.0):.1f}s")
     except Exception as exc:  # pragma: no cover - bpy_extras fehlt
         log(f"WARNUNG: Kamera-Nachjustierung nicht moeglich ({exc}).")
         refined = placement
