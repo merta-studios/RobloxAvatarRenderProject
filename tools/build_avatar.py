@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import avatar_pose  # noqa: E402
 import avatar_rig  # noqa: E402
 import avatar_uv  # noqa: E402
+import emote_pose  # noqa: E402
 import rbxm  # noqa: E402
 import render_config  # noqa: E402
 import roblox_api as api  # noqa: E402
@@ -439,12 +440,20 @@ def setup_pose(config: Dict[str, Any],
                metrics: avatar_rig.BodyMetrics,
                rig_avatar: Optional[avatar_rig.RiggedAvatar],
                use_r15_rig: bool,
-               warnings: List[str]) -> Tuple[Optional[avatar_pose.PoseContext], Dict[str, Any]]:
+               warnings: List[str],
+               client: Any = None,
+               dry_run: bool = False) -> Tuple[Optional[avatar_pose.PoseContext], Dict[str, Any]]:
     """Baut den Pose-Kontext (None = Stand-Pose) aus der Configs.toml.
 
     Die Pose wird bewusst **nach** dem fertigen Rig angewendet: Avatar laden,
     RBXM parsen und Gelenke setzen bleiben unveraendert, erst danach werden
     die Vertices um die Gelenkpunkte gedreht.
+
+    ``pose`` kann entweder ein Name aus Posen.toml sein oder eine Emote-
+    Referenz (``"emote:3576893107"``): Dann laedt :mod:`emote_pose` das
+    Emote-Asset und uebersetzt genau den Frame in eine Pose, den auch
+    Roblox' Katalog-Vorschaubild zeigt (``ThumbnailKeyframe`` bzw.
+    ``ThumbnailTime`` aus dem Asset, Fallback Mittel-Keyframe/halbe Dauer).
     """
     pose_name = str((config or {}).get("pose") or "None").strip()
     info: Dict[str, Any] = {"name": pose_name or "None", "aktiv": False,
@@ -453,6 +462,54 @@ def setup_pose(config: Dict[str, Any],
     if not pose_name or pose_name.lower() == "none":
         return None, info
 
+    # Gelenke einmalig bestimmen - fuer Posen.toml-Namen und Emotes gleich.
+    part_meshes = {part.name: part.mesh for part in body_parts}
+    joints = avatar_pose.joints_from_parts(part_meshes, metrics)
+    if use_r15_rig and rig_avatar is not None:
+        # Exakte R15-Gelenke aus den *RigAttachment-Daten haben Vorrang.
+        joints.update(rig_avatar.joint_positions)
+
+    # ---- Emote-Referenz? ("emote:123" / Katalog-URL / reine Asset-ID) ----
+    emote_id = emote_pose.parse_emote_reference(pose_name)
+    if emote_id is not None:
+        datei = str((config or {}).get("_emote_pfad") or "").strip()
+        if not datei:
+            raw_datei = str((config or {}).get("emote_datei") or "").strip()
+            if raw_datei:
+                base = os.path.dirname(os.path.abspath(
+                    (config or {}).get("_pfad", "Configs.toml")))
+                candidate = (raw_datei if os.path.isabs(raw_datei)
+                             else os.path.join(base, raw_datei))
+                datei = candidate if os.path.isfile(candidate) else raw_datei
+        zeit_raw = (config or {}).get("emote_zeit")
+        try:
+            zeit = float(zeit_raw) if zeit_raw is not None else -1.0
+        except (TypeError, ValueError):
+            zeit = -1.0
+        zeit = zeit if zeit >= 0.0 else None
+        if dry_run and not datei:
+            warnings.append(
+                "Dry-Run: Emote "
+                f"'{pose_name}' wird nicht heruntergeladen - es wird die "
+                "Stand-Pose gerendert (oder 'emote_datei' in der Configs.toml "
+                "auf eine lokale Emote-Datei zeigen lassen).")
+            return None, info
+        try:
+            pose_dict, settings, emote_info = emote_pose.load_emote_pose(
+                emote_id=emote_id, client=client, datei=datei, zeit=zeit, log=log)
+        except emote_pose.EmoteError as exc:
+            warnings.append(
+                f"Emote-Pose '{pose_name}' konnte nicht geladen werden ({exc}) - "
+                "es wird die Stand-Pose gerendert.")
+            return None, info
+        context = avatar_pose.PoseContext(pose_dict, joints, settings=settings)
+        info["aktiv"] = context.active
+        info["einstellungen"] = settings
+        info["details"] = emote_pose.emote_summary(emote_info)
+        info["emote"] = emote_info
+        return context, info
+
+    # ---- Klassischer Pfad: Name aus Posen.toml ---------------------------
     poses_path = (config or {}).get("_posen_pfad") or os.path.join(
         os.path.dirname(os.path.abspath((config or {}).get("_pfad", "Configs.toml"))),
         render_config.POSES_FILENAME,
@@ -471,12 +528,6 @@ def setup_pose(config: Dict[str, Any],
             f"Pose '{pose_name}' steht nicht in {poses_path} - es wird die "
             "Stand-Pose gerendert. Verfuegbar: " + ", ".join(sorted(poses)))
         return None, info
-
-    part_meshes = {part.name: part.mesh for part in body_parts}
-    joints = avatar_pose.joints_from_parts(part_meshes, metrics)
-    if use_r15_rig and rig_avatar is not None:
-        # Exakte R15-Gelenke aus den *RigAttachment-Daten haben Vorrang.
-        joints.update(rig_avatar.joint_positions)
 
     settings = entry.get("einstellungen") or dict(avatar_pose.POSE_SETTING_DEFAULTS)
     context = avatar_pose.PoseContext(entry["teile"], joints, settings=settings)
@@ -557,6 +608,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             headless["info"] = info
 
     # ---- Avatar-Daten -----------------------------------------------------
+    client = None  # wird im Live-Pfad erzeugt; Emote-Posen duerfen ihn nutzen
     if dry_run:
         username = api.normalize_username(username_raw) if username_raw else "Builderman"
         user_id = 0
@@ -1110,7 +1162,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     # Mesh-Massen abgeleiteten Gelenke) sind die Drehpunkte. Avatar-Laden,
     # RBXM-Parsing und Rig-Aufbau bleiben davon komplett unberuehrt.
     pose_ctx, pose_info = setup_pose(config or {}, body_parts, metrics,
-                                     rig_avatar, use_r15_rig, warnings)
+                                     rig_avatar, use_r15_rig, warnings,
+                                     client=client, dry_run=dry_run)
 
     # Oberkante des Kopfes in Weltkoordinaten (nach der Pose). Wichtig fuer
     # Headless-Avatare: dort gibt es kein Kopf-Mesh, aber der Bildausschnitt
@@ -1369,6 +1422,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             "pose": pose_info["name"],
             "pose_aktiv": bool(pose_info["aktiv"]),
             "pose_details": pose_info["details"],
+            # Bei Emote-Posen: welche Asset-ID, welcher Frame, welche Regeln.
+            "pose_emote": pose_info.get("emote"),
             # Oberkante des Kopfes (ohne Accessoires) - Bezug fuer den
             # freien Abstand oben, funktioniert auch bei Headless-Avataren.
             "kopf_oberkante": head_top_world,

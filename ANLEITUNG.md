@@ -116,7 +116,9 @@ Werte werden vor dem Render geprüft (`tools/render_config.py`,
 | --- | --- |
 | `username` | Roblox-Username (früher `username.txt`) |
 | `drehung_grad` | Seitliche Drehung: `0` = frontal, `90` = rechte Seite, `-90` = linke Seite. Nur −90 … 90 ist erlaubt. |
-| `pose` | `None` = Stand-Pose, sonst ein Name aus `Posen.toml` (z. B. `Winken`) |
+| `pose` | `None` = Stand-Pose, ein Name aus `Posen.toml` (z. B. `Winken`) oder ein Emote: `emote:<Asset-ID>` (z. B. `emote:3576893107`) |
+| `emote_zeit` | `-1` (Standard) = Frame wie im Katalog-Vorschaubild; `>= 0` = Zeitpunkt in Sekunden |
+| `emote_datei` | leer = Emote herunterladen; sonst Pfad zu einer lokalen `.rbxm`/`.rbxmx`-Datei |
 | *(Bildausschnitt)* | Steht **nicht** mehr in der Config: Jede Pose in `Posen.toml` definiert selbst, bis zu welchen Positionen man sehen kann (`sichtbar_oben_prozent`, `sichtbar_unten_prozent`, `kamera_abstand_studs`, `avatar_hoch_studs`). |
 | `render_bei_aenderung` | `true` = nach diesem Push sofort rendern. Der Workflow setzt den Wert nach erfolgreichem Render automatisch auf `false`. |
 | `hintergrund_url` | URL (oder lokaler Pfad) zu einem Hintergrundbild, `"hdri"` für die HDRI-Umgebung (Standard) oder `"transparent"` für einen durchsichtigen Hintergrund. |
@@ -140,6 +142,16 @@ avatar_hoch_studs = 0            # Avatar weder angehoben noch gesenkt
 vor_hoch_schwingen_grad = 158    # Arm schwingt nach vorn-oben
 vom_koerper_weg_grad = 22        # und 22° vom Körper weg
 ```
+
+**Emote statt Handpose:** Setze `pose = "emote:<Asset-ID>"` (die Zahl aus der
+Roblox-Katalog-URL des Emotes). Der Render zeigt dann exakt die Haltung des
+Katalog-Vorschaubildes – die Pipeline liest dafür die gleichen Metadaten aus
+dem Emote-Asset, die auch Roblox' Thumbnail-Renderer nutzen
+(`ThumbnailKeyframe`/`ThumbnailTime`, Fallback: Mittel-Keyframe bzw. halbe
+Dauer). KeyframeSequence- und CurveAnimation-Emotes (moderne UGC-Emotes)
+funktionieren beide; schlägt das Laden fehl, wird sicherheitshalber die
+Stand-Pose gerendert. Mit `emote_zeit` wählst du stattdessen einen
+expiziten Zeitpunkt, mit `emote_datei` eine lokale Emote-Datei statt Download.
 
 Die Werte sind Deltas zur Stand-Pose und drehen um die exakten Gelenk-Pivots
 (Schulter, Ellbogen, Hüfte, Knie … aus den RigAttachments); überblendet wird
@@ -324,6 +336,8 @@ tools/
   roblox_mesh.py                 FileMesh-Parser (v1–v7) → OBJ
   avatar_rig.py                  Stand-Pose-Rig + Accessoire-Platzierung
   avatar_pose.py                 Posen laden/validieren und auf das Rig anwenden
+  emote_pose.py                  Emote-Posen: Asset laden, Frame wie im
+                                 Katalog-Vorschaubild, Curve-Interpolation
   render_config.py               Configs.toml lesen/prüfen (Grenzen, Schalter)
   brick_colors.json              208 Roblox-BrickColors (ID → RGB)
   tests/test_pipeline.py         Tests ohne Netzwerk/Blender
