@@ -321,9 +321,15 @@ def test_config_emote_datei_pfad_und_warnung(tmp_path):
 
 def test_repo_config_bleibt_gueltig():
     config = render_config.load_config(os.path.join(ROOT, "Configs.toml"))
-    assert config["pose"] == "Helden_Pose"
-    assert config["emote_zeit"] == -1.0
-    assert config["emote_datei"] == ""
+    pose = config["pose"]
+    # Der Pose-Wert in der Repo-Config aendert sich regelmaessig (None,
+    # Posen.toml-Name oder Emote) - hier nur pruefen, dass er jeweils
+    # gueltig IST, nicht welcher Wert gerade eingetragen ist.
+    if pose != "None" and not pose.startswith("emote:"):
+        poses = avatar_pose.load_poses(os.path.join(ROOT, "Posen.toml"))
+        assert pose in poses, f"Pose {pose!r} fehlt in Posen.toml"
+    assert render_config.MIN_EMOTE_ZEIT <= config["emote_zeit"] <= render_config.MAX_EMOTE_ZEIT
+    assert isinstance(config["emote_datei"], str)
 
 
 # ---------------------------------------------------------------------------
