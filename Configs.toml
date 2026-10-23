@@ -41,13 +41,64 @@ drehung_grad = 0
 # -----------------------------------------------------------------------------
 #  3) Pose
 # -----------------------------------------------------------------------------
-#  "None" = normale Stand-Pose (wie bisher).
-#  Sonst der Name einer Pose aus Posen.toml, z. B. "Helden_Pose",
-#  "Siegerfaust", "Kampfstellung", "Superhelden_Landung" oder "Winken".
-#  Jede Pose bringt ihren eigenen Bildausschnitt (sichtbar oben/unten),
-#  Kamera-Abstand und ihre Körperhaltung mit. Accessoires folgen automatisch
-#  (Ausrüstung/Gear wird nie mit geladen).
+#  Drei Möglichkeiten:
+#
+#  a) "None"                      normale Stand-Pose (wie bisher).
+#
+#  b) Name einer Pose aus Posen.toml, z. B. "Helden_Pose", "Siegerfaust",
+#     "Kampfstellung", "Superhelden_Landung" oder "Winken". Jede Pose bringt
+#     ihren eigenen Bildausschnitt (sichtbar oben/unten), Kamera-Abstand und
+#     ihre Körperhaltung mit. Accessoires folgen automatisch (Ausrüstung/Gear
+#     wird nie mit geladen).
+#
+#  c) Emote aus dem Roblox-Katalog: einfach die Emote-Asset-ID angeben –
+#     z. B. die Zahl aus der Katalog-URL
+#     https://www.roblox.com/catalog/3576893107/Tilt
+#
+#         pose = "emote:3576893107"
+#
+#     Die Pipeline lädt das Emote und wendet genau die Haltung an, die auch
+#     das Katalog-Vorschaubild zeigt – deterministisch über die Daten, die
+#     Roblox selbst dafür im Emote-Asset ablegt (ThumbnailKeyframe bzw.
+#     ThumbnailTime; ohne diese Werte gilt Roblox' eigene Fallback-Regel:
+#     Mittel-Keyframe bzw. halbe Emote-Dauer). Moderne UGC-Emotes
+#     (CurveAnimations) werden genauso unterstützt wie klassische
+#     KeyframeSequence-Emotes.
+#
+#     Optional dazu (siehe auch 3b/3c unten):
+#         emote_zeit  = Zeitpunkt in Sekunden, falls ein anderer Frame als
+#                       der Vorschau-Frame gewünscht ist (-1 = automatisch
+#                       nach der Vorschau-Regel).
+#         emote_datei = Pfad zu einer lokalen Emote-Datei (.rbxm/.rbxmx),
+#                       statt sie über die Asset-ID herunterzuladen.
+#
+#     Schlägt das Laden fehl (falsche ID, Netzwerk), wird automatisch die
+#     Stand-Pose gerendert und eine Warnung ins Log geschrieben.
 pose = "Helden_Pose"
+
+
+# -----------------------------------------------------------------------------
+#  3b) Emote: Frame-Auswahl (optional)
+# -----------------------------------------------------------------------------
+#  Nur relevant, wenn unter "pose" ein Emote (emote:…) steht.
+#      -1  = automatisch: exakt der Frame aus dem Katalog-Vorschaubild
+#            (ThumbnailKeyframe/ThumbnailTime aus dem Emote-Asset, sonst
+#            Roblox' Fallback Mittel-Keyframe/halbe Dauer). Default.
+#      >= 0 = expliziter Zeitpunkt in Sekunden; bei KeyframeSequence-Emotes
+#            wird der Keyframe genommen, der diesem Zeitpunkt am nächsten
+#            liegt. So lässt sich z. B. die "ausdrucksstärkste" Haltung
+#            eines Tanz-Emotes einfrieren.
+emote_zeit = -1
+
+
+# -----------------------------------------------------------------------------
+#  3c) Emote: lokale Datei statt Download (optional)
+# -----------------------------------------------------------------------------
+#  Leer ("") = Emote über die Asset-ID aus dem Internet laden (Normalfall).
+#  Sonst ein Pfad zu einer gespeicherten Emote-Datei (.rbxm oder .rbxmx),
+#  relativ zum Repository-Root oder absolut. Praktisch zum Testen ohne
+#  Netzwerk oder für private Emotes.
+emote_datei = ""
 
 
 # -----------------------------------------------------------------------------

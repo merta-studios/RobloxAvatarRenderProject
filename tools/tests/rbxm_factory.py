@@ -120,13 +120,23 @@ def make_chunk(name: bytes, payload: bytes, compression: str = "none") -> bytes:
 
 def make_rbxm(instances: List[Dict[str, Any]], compression: str = "none",
               meshid_as_content: bool = False,
-              name_as_shared: bool = False) -> bytes:
+              name_as_shared: bool = False,
+              prop_types: Dict[str, str] = None) -> bytes:
     """instances: [{"class": str, "props": {...}, "Parent": Index | None}].
 
     String-Props werden als Typ 0x01 kodiert (MeshId optional als Content
     0x22, Name optional als SharedString 0x1C), 3-Tupel als Vector3 (0x0E),
     "CFrame" als Typ 0x10 (Wert: (x,y,z) oder ("M", (x,y,z))).
+
+    ``prop_types`` erzwingt einen Typ pro Property-Name - noetig fuer Werte,
+    die keine 3-Tupel sind: ``"float"`` (0x04, z. B. Keyframe.Time),
+    ``"double"`` (0x05), ``"int"`` (0x03, z. B. IntValue.Value),
+    ``"enum"`` (0x12, Token ohne Zigzag, z. B. RotationOrder),
+    ``"bytes"`` (0x01 mit Rohbytes, z. B. ValuesAndTimes) und
+    ``"shared"`` (0x1C: SharedString-Index, z. B. ValuesAndTimes als Blob
+    im SSTR-Chunk - so speichert Roblox CurveAnimation-Daten).
     """
+    prop_types = prop_types or {}
     referents = list(range(len(instances)))
     classes: Dict[str, List[int]] = {}
     for idx, inst in enumerate(instances):
@@ -134,15 +144,30 @@ def make_rbxm(instances: List[Dict[str, Any]], compression: str = "none",
 
     chunks: List[bytes] = []
 
-    shared_strings: List[str] = []
+    shared_strings: List[bytes] = []
+
+    def shared_index(value: bytes) -> int:
+        raw = bytes(value)
+        if raw not in shared_strings:
+            shared_strings.append(raw)
+        return shared_strings.index(raw)
+
     if name_as_shared:
         for inst in instances:
             name = (inst.get("props") or {}).get("Name", "")
-            if name not in shared_strings:
-                shared_strings.append(name)
+            if isinstance(name, str):
+                shared_index(name.encode("utf-8"))
+    for prop_name, ptype in prop_types.items():
+        if ptype != "shared":
+            continue
+        for inst in instances:
+            value = (inst.get("props") or {}).get(prop_name)
+            if isinstance(value, (bytes, bytearray)):
+                shared_index(value)
+    if shared_strings:
         payload = struct.pack("<II", 0, len(shared_strings))
-        for text in shared_strings:
-            payload += b"\x00" * 16 + enc_string(text)
+        for raw in shared_strings:
+            payload += b"\x00" * 16 + struct.pack("<I", len(raw)) + raw
         chunks.append(make_chunk(b"SSTR", payload, compression))
 
     class_ids: Dict[str, int] = {}
@@ -161,7 +186,27 @@ def make_rbxm(instances: List[Dict[str, Any]], compression: str = "none",
                     prop_names.append(key)
         for prop_name in prop_names:
             values = [(instances[i].get("props") or {}).get(prop_name) for i in idxs]
-            if prop_name == "CFrame":
+            ptype = prop_types.get(prop_name)
+            if ptype == "float":
+                type_id, body = 0x04, enc_f32_array(
+                    [float(v) if isinstance(v, (int, float)) else 0.0 for v in values])
+            elif ptype == "double":
+                type_id, body = 0x05, b"".join(
+                    struct.pack("<d", float(v) if isinstance(v, (int, float)) else 0.0)
+                    for v in values)
+            elif ptype == "int":
+                type_id, body = 0x03, enc_i32_array(
+                    [int(v) if isinstance(v, (int, float)) else 0 for v in values])
+            elif ptype == "enum":
+                type_id = 0x12
+                body = interleave_u32(
+                    [int(v) if isinstance(v, (int, float)) else 0 for v in values])
+            elif ptype == "bytes":
+                type_id = 0x01
+                body = b"".join(
+                    struct.pack("<I", len(v)) + bytes(v if isinstance(v, (bytes, bytearray)) else b"")
+                    for v in values)
+            elif prop_name == "CFrame":
                 filled = [v if v is not None else (0.0, 0.0, 0.0) for v in values]
                 type_id, body = 0x10, enc_cframe_array(filled)
             elif all(isinstance(v, tuple) for v in values if v is not None):
@@ -171,7 +216,12 @@ def make_rbxm(instances: List[Dict[str, Any]], compression: str = "none",
                 filled = [v if isinstance(v, str) else "" for v in values]
                 type_id, body = 0x22, enc_content_array(filled)
             elif prop_name == "Name" and name_as_shared:
-                indices = [shared_strings.index(v if isinstance(v, str) else "") for v in values]
+                indices = [shared_index(v.encode("utf-8")) if isinstance(v, str) else 0
+                           for v in values]
+                type_id, body = 0x1C, interleave_u32(indices)
+            elif ptype == "shared":
+                indices = [shared_index(v) if isinstance(v, (bytes, bytearray)) else 0
+                           for v in values]
                 type_id, body = 0x1C, interleave_u32(indices)
             else:
                 filled = [v if isinstance(v, str) else "" for v in values]

@@ -35,6 +35,14 @@ DEFAULTS: Dict[str, Any] = {
     "hintergrund_url": "hdri",
     "hintergrund_glossy": False,
     "posen_datei": POSES_FILENAME,
+    # Emote-Posen (pose = "emote:<asset-id>"):
+    #   emote_zeit   -1 = Frame automatisch (ThumbnailKeyframe/ThumbnailTime
+    #                  aus dem Emote-Asset, sonst Roblox-Fallback), >= 0 =
+    #                  expliziter Zeitpunkt in Sekunden.
+    #   emote_datei  "" = Emote per Asset-ID herunterladen; sonst Pfad zu
+    #                  einer lokalen Emote-RBXM/RBXMX-Datei (offline/testbar).
+    "emote_zeit": -1.0,
+    "emote_datei": "",
 }
 
 KNOWN_KEYS = tuple(DEFAULTS)
@@ -51,6 +59,17 @@ MAX_DREHUNG = 90.0
 # Bildausschnitt (sichtbar oben/unten), Kamera-Abstand und Avatar-Hoehe
 # stehen nicht mehr hier, sondern in jeder Pose in Posen.toml
 # (siehe tools/avatar_pose.py: POSE_SETTING_DEFAULTS).
+# Emote-Zeit: -1 = automatisch (Roblox-Thumbnail-Regel), sonst Sekunden.
+# Roblox-Emotes sind laut Spezifikation kuerzer als 10 s - hier bewusst
+# etwas Luft gelassen.
+MIN_EMOTE_ZEIT = -1.0
+MAX_EMOTE_ZEIT = 600.0
+
+# Emote-Referenz in "pose": "emote:123", "emote=123", "Emote 123", die reine
+# Asset-ID "123" oder eine Katalog-/Bibliotheks-URL. Normalisiert wird alles
+# auf "emote:<id>", damit build_avatar es eindeutig erkennt.
+_EMOTE_PREFIX_RE = re.compile(r"^\s*emote\s*[:=]?\s*(\d{1,16})\s*$", re.IGNORECASE)
+_EMOTE_URL_RE = re.compile(r"roblox\.com/(?:catalog|library)/(\d+)", re.IGNORECASE)
 
 
 class ConfigError(ValueError):
@@ -213,6 +232,42 @@ def is_hdri(url: str) -> bool:
     return url.strip().lower() in HDRI_WORDS
 
 
+def normalize_pose_value(pose: str) -> str:
+    """Prueft/normalisiert die ``pose``-Angabe, inklusive Emote-Referenzen.
+
+    * ``"None"``/leer -> ``"None"`` (Stand-Pose)
+    * ``"emote:123"``, ``"Emote = 123"``, ``"123"``,
+      ``"https://www.roblox.com/catalog/123/Tilt"`` -> ``"emote:123"``
+    * alles andere bleibt unveraendert (Name einer Pose aus Posen.toml)
+
+    Ungueltige Emote-Schreibweisen (``"emote:abc"``, ``"emote:"``) werfen
+    eine :class:`ConfigError` mit klarer Meldung.
+    """
+    text = (pose or "").strip()
+    if not text or text.lower() == "none":
+        return "None"
+
+    match = _EMOTE_PREFIX_RE.match(text)
+    if match:
+        return f"emote:{int(match.group(1))}"
+    if re.match(r"^\s*emote\b", text, re.IGNORECASE):
+        # "emote:abc", "Emote -" ... aber nicht Posenamen wie "EmoteTanz".
+        raise ConfigError(
+            f"'pose' = {text!r} sieht nach einer Emote-Angabe aus, enthaelt "
+            "aber keine gueltige Asset-ID. Richtig ist z. B. "
+            "pose = \"emote:3576893107\" (die Zahl aus der Katalog-URL)."
+        )
+    url_match = _EMOTE_URL_RE.search(text)
+    if url_match:
+        return f"emote:{int(url_match.group(1))}"
+    if text.isdigit():
+        number = int(text)
+        if number <= 0:
+            raise ConfigError(f"'pose' = {text!r} ist keine gueltige Emote-Asset-ID.")
+        return f"emote:{number}"
+    return text
+
+
 def load_config(path: str = CONFIG_FILENAME,
                 require_username: bool = True) -> Dict[str, Any]:
     """Laedt, normalisiert und prueft die Configs.toml.
@@ -270,12 +325,23 @@ def load_config(path: str = CONFIG_FILENAME,
     config["drehung_grad"] = drehung
 
     pose = _text("pose", config["pose"])
-    config["pose"] = "None" if pose.strip().lower() in ("", "none") else pose
+    config["pose"] = normalize_pose_value(pose)
 
     config["render_bei_aenderung"] = _flag(
         "render_bei_aenderung", config["render_bei_aenderung"])
     config["hintergrund_glossy"] = _flag(
         "hintergrund_glossy", config["hintergrund_glossy"])
+
+    emote_zeit = _number("emote_zeit", config["emote_zeit"])
+    if emote_zeit < MIN_EMOTE_ZEIT or emote_zeit > MAX_EMOTE_ZEIT:
+        raise ConfigError(
+            f"'emote_zeit' muss zwischen {MIN_EMOTE_ZEIT:g} (automatisch, "
+            f"Roblox-Thumbnail-Regel) und {MAX_EMOTE_ZEIT:g} Sekunden liegen, "
+            f"gefunden: {emote_zeit:g}."
+        )
+    config["emote_zeit"] = emote_zeit
+    if config["pose"].startswith("emote:") and emote_zeit < 0.0:
+        config["emote_zeit"] = -1.0  # kanonisch: -1 = automatisch
 
     url = _text("hintergrund_url", config["hintergrund_url"])
     config["hintergrund_url"] = url
@@ -298,6 +364,21 @@ def load_config(path: str = CONFIG_FILENAME,
         posen_name if os.path.isabs(posen_name)
         else os.path.join(config_dir, posen_name)
     )
+
+    emote_datei = _text("emote_datei", config["emote_datei"])
+    config["emote_datei"] = emote_datei
+    config["_emote_pfad"] = ""
+    if emote_datei:
+        candidate = (emote_datei if os.path.isabs(emote_datei)
+                     else os.path.join(config_dir, emote_datei))
+        config["_emote_pfad"] = candidate
+        if not os.path.isfile(candidate):
+            warnings.append(
+                f"Configs.toml: 'emote_datei' ({emote_datei!r}) wurde nicht "
+                "gefunden - die Emote-Pose wird ueber die Asset-ID "
+                "heruntergeladen, sofern 'pose' ein Emote referenziert."
+            )
+
     config["_pfad"] = os.path.abspath(path)
     config["_warnungen"] = warnings
     return config

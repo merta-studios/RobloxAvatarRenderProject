@@ -59,10 +59,11 @@ vermutlich fehl (401) – es wird dann ein Platzhalter-Körper gerendert.
 | 1 | `.github/workflows/avatar-render.yml` | Trigger, Secret, Blender-Installation, Artifact |
 | 2 | `tools/build_avatar.py` | Orchestrierung: Username → UserId → Avatar → Rig |
 | 3 | `tools/roblox_api.py` | Web-APIs + Asset Delivery (Open Cloud & Fallbacks) |
-| 4 | `tools/rbxm.py` | RBXM-/RBXMX-Parser: Mesh-/Textur-IDs aus Modellen |
+| 4 | `tools/rbxm.py` | RBXM-/RBXMX-Parser: Mesh-/Textur-IDs aus Modellen, kompletter Instanz-Baum für Emotes |
 | 5 | `tools/roblox_mesh.py` | Roblox-`.mesh`-Parser (v1.00–v7.00) → OBJ |
 | 6 | `tools/avatar_rig.py` | Stand-Pose-Rig, Accessoire-Platzierung |
 | 7 | `tools/avatar_pose.py` | Posen aus `Posen.toml` auf das Rig anwenden |
+| 7b | `tools/emote_pose.py` | Emote-Posen: Roblox-Emote per Asset-ID, Frame wie im Katalog-Vorschaubild |
 | 8 | `tools/render_config.py` | `Configs.toml` lesen/prüfen (Grenzen, Render-Schalter) |
 | 9 | `blender/render_glass.py` | Blender-5.0-EEVEE-Glossy-Material, World-HDRI (`sunset_jhbcentral_4k.exr`), Kamera mit Drehung/Bildausschnitt, Hintergrundbild, Render |
 | 10 | `.github/workflows/avatar-render.yml` | Veröffentlichen: Artifact + Branch `renders` + Release |
@@ -77,7 +78,9 @@ Ergebnis im Build-Ordner: `manifest.json`, `parts/*.obj`, `textures/*`,
 | --- | --- |
 | `username` | Roblox-Username (früher `username.txt`) |
 | `drehung_grad` | Seitliche Drehung `-90 … 90`; `0` = frontal, `90` = rechte Seite |
-| `pose` | `None` oder ein Name aus `Posen.toml` |
+| `pose` | `None`, ein Name aus `Posen.toml` **oder ein Emote**: `emote:<Asset-ID>` (z. B. `emote:3576893107` – die Zahl aus der Katalog-URL; reine ID oder Katalog-URL gehen auch) |
+| `emote_zeit` | `-1` (Standard) = automatisch der Frame aus dem Katalog-Vorschaubild; `>= 0` = expliziter Zeitpunkt in Sekunden |
+| `emote_datei` | leer = Emote über die Asset-ID laden; sonst Pfad zu einer lokalen `.rbxm`/`.rbxmx`-Emote-Datei |
 | *(Bildausschnitt)* | Steht nicht mehr hier – jede Pose in `Posen.toml` definiert selbst, was sichtbar ist (`sichtbar_oben_prozent` / `sichtbar_unten_prozent`, Kamera-Abstand, Avatar-Höhe) |
 | `render_bei_aenderung` | `true` = nach dem Push rendern (Workflow setzt danach auf `false`) |
 | `hintergrund_url` | Bild-URL/Pfad, `"hdri"` (Standard) oder `"transparent"` |
@@ -88,7 +91,19 @@ die Gelenke gegenüber der Stand-Pose verändern (z. B. am Oberarm
 `vor_hoch_schwingen_grad` und `vom_koerper_weg_grad` statt roher Achsen-Tripel),
 plus eigenem Bildausschnitt und Kamera-Abstand. Gedreht wird um die exakten
 Gelenk-Pivots aus den RigAttachments, überblendet wird volumen-erhaltend per
-Quaternionen. Accessoires folgen automatisch – **Ausnahme: Ausrüstung (Gear,
+Quaternionen.
+
+**Emote-Posen** (`pose = "emote:<ID>"`): Die Pipeline lädt das Emote aus dem
+Roblox-Katalog und wendet exakt die Haltung an, die auch das
+Katalog-Vorschaubild zeigt – deterministisch über die Metadaten, die Roblox
+selbst dafür im Emote-Asset ablegt (`ThumbnailKeyframe` bzw.
+`ThumbnailTime`; ohne diese Werte gilt Roblox' eigene Fallback-Regel:
+Mittel-Keyframe bzw. halbe Emote-Dauer). Klassische KeyframeSequence-Emotes
+werden genauso unterstützt wie moderne UGC-CurveAnimations (inkl. der
+Engine-Interpolation: konstant/linear/kubisch Hermite, Quaternion-Slerp).
+Root-Bewegungen (HumanoidRootPart) fließen korrekt ein. Schlägt das Laden
+fehlerhaft, wird automatisch die Stand-Pose gerendert und eine Warnung
+geloggt – der Render bricht nie ab. Accessoires folgen automatisch – **Ausnahme: Ausrüstung (Gear,
 Asset-Typ 19) wird gar nicht erst geladen.** Enthalten sind viele GFX-Posen,
 z. B. `Helden_Pose`, `Siegerfaust`, `Kampfstellung`, `Superhelden_Landung`,
 `Sprung_Action`, `Arme_Verschraenkt`, `Denker`, `Peace_Pose`, `Tanz_Freeze`,

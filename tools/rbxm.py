@@ -26,6 +26,7 @@ Oeffentliche API:
 
     extract_assets(data) -> [{"class", "name", "mesh_id", "texture_id",
                               "size", "position"}, ...]
+    parse_instances(data) -> [Wurzel-Instanz, ...]   # kompletter Baum (Emotes)
 
 Abhaengigkeiten: `zstandard` und `lz4` sind optional. Fehlt das fuer eine
 Datei noetige Modul, wird ein verstaendlicher `RbxmError` geworfen statt
@@ -58,10 +59,14 @@ _ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 # PROP-Datentyp-IDs (nur die, die wir dekodieren)
 _T_STRING = 0x01
 _T_BOOL = 0x02
+_T_INT32 = 0x03
 _T_FLOAT32 = 0x04
+_T_FLOAT64 = 0x05
 _T_VECTOR3 = 0x0E
 _T_CFRAME = 0x10
+_T_ENUM = 0x12
 _T_SHARED_STRING = 0x1C
+_T_PROTECTED_STRING = 0x1D
 _T_CONTENT = 0x22
 
 Vec3 = Tuple[float, float, float]
@@ -354,7 +359,6 @@ _TEXTURE_PROPS = {"textureid", "texture", "colormap", "basetextureid",
 _TEXTURE_OVERLAY_PROPS = {"overlaytextureid"}
 _CAGE_MESH_PROPS = {"cagemeshid", "referencemeshid"}
 
-
 def _new_record(cls: str) -> Dict[str, Any]:
     return {
         "class": cls, "name": "", "mesh_url": "", "texture_url": "",
@@ -363,6 +367,11 @@ def _new_record(cls: str) -> Dict[str, Any]:
         "attachment_point": None, "import_origin": None, "reference_origin": None,
         "scale": None, "offset": None, "transparency": None, "puffiness": None,
         "value_str": None, "value_vec3": None,
+        # Emote-Posen (tools/emote_pose.py): Thumbnails-Metadaten,
+        # Keyframes/Pose-CFrames und CurveAnimation-Kanaldaten.
+        "value_num": None, "time": None, "weight": None,
+        "rotation_order": None, "values_and_times": None,
+        "animation_url": "", "loop": None,
         "Parent": None, "children": [],
     }
 
@@ -397,6 +406,20 @@ def _apply_property(record: Dict[str, Any], prop_name: str, value: Any) -> None:
             record["value_str"] = value
         elif isinstance(value, tuple) and len(value) == 3:
             record["value_vec3"] = value
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            record["value_num"] = float(value)
+    elif key == "animationid" and isinstance(value, str):
+        record["animation_url"] = value
+    elif key == "time" and isinstance(value, (int, float)) and not isinstance(value, bool):
+        record["time"] = float(value)
+    elif key == "weight" and isinstance(value, (int, float)) and not isinstance(value, bool):
+        record["weight"] = float(value)
+    elif key == "rotationorder" and isinstance(value, (int, float)) and not isinstance(value, bool):
+        record["rotation_order"] = int(value)
+    elif key == "valuesandtimes" and isinstance(value, (bytes, bytearray)):
+        record["values_and_times"] = bytes(value)
+    elif key == "loop" and isinstance(value, bool):
+        record["loop"] = value
     elif key == "size":
         record["size"] = value
     elif key == "cframe":
@@ -606,15 +629,37 @@ def _assemble(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # Binaer-Parser (RBXM)
 # ---------------------------------------------------------------------------
 
-_STRING_PROPS = ({"name", "meshid", "value"} | _TEXTURE_PROPS
+_STRING_PROPS = ({"name", "meshid", "value", "animationid"} | _TEXTURE_PROPS
                  | _TEXTURE_OVERLAY_PROPS | _CAGE_MESH_PROPS)
 _VECTOR3_PROPS = {"size", "scale", "offset", "vertex", "value"}
 _CFRAME_PROPS = {"cframe", "attachmentpoint", "importorigin", "referenceorigin"}
-_FLOAT_PROPS = {"transparency", "puffiness"}
-_BOOL_PROPS = {"archivable"}
+_FLOAT_PROPS = {"transparency", "puffiness", "time", "weight", "value",
+                "authoredhipheight"}
+_BOOL_PROPS = {"archivable", "loop"}
+# Int32-Werte (Zigzag wie Referenten) - z. B. IntValue.Value (ThumbnailBundleId).
+_INT_PROPS = {"value"}
+# Token/Enums: interleaved u32 OHNE Zigzag (PropertyType.Enum, ID 0x12) -
+# z. B. EulerRotationCurve.RotationOrder und Pose.EasingStyle/Direction.
+_ENUM_PROPS = {"rotationorder", "easingstyle", "easingdirection"}
+# Binaer-Blobs (PropertyType.String mit Rohbytes): FloatCurve/RotationCurve-
+# Keys ("ValuesAndTimes") in CurveAnimations (Emotes).
+_BINARY_PROPS = {"valuesandtimes"}
 
 
 def _parse_binary(data: bytes) -> List[Dict[str, Any]]:
+    records, payloads = _parse_binary_records(data)
+    entries = _assemble(records)
+    if not entries:
+        entries = _scan_for_asset_ids(payloads)
+    return entries
+
+
+def _parse_binary_records(data: bytes) -> Tuple[List[Dict[str, Any]], List[bytes]]:
+    """Liest alle Instanz-Records (mit ``Parent``-Verweisen) aus binaerem RBXM.
+
+    Rueckgabe: (Records, dekomprimierte Chunk-Payloads). Die Baum-Verknuepfung
+    (``children``) macht :func:`parse_instances`.
+    """
     if len(data) < 32 or not data.startswith(MAGIC):
         raise RbxmError("Keine RBXM-Datei (Magic '<roblox!' fehlt oder Datei zu kurz)")
 
@@ -623,6 +668,7 @@ def _parse_binary(data: bytes) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     by_referent: Dict[int, Dict[str, Any]] = {}
     shared_strings: List[str] = []
+    shared_string_bytes: List[bytes] = []
     parents: Dict[int, int] = {}
     payloads: List[bytes] = []
     saw_end = False
@@ -647,9 +693,15 @@ def _parse_binary(data: bytes) -> List[Dict[str, Any]]:
             reader.u32()  # Version
             count = reader.u32()
             shared_strings = []
+            shared_string_bytes = []
             for _ in range(count):
                 reader.skip(16)  # MD5-Hash (wird von Roblox ignoriert)
-                shared_strings.append(reader.string())
+                length = reader.u32()
+                raw = reader.read(length)
+                # Binaer-Blobs (ValuesAndTimes) brauchen die rohen Bytes;
+                # Text-Properties bekommen die dekodierte Variante.
+                shared_string_bytes.append(raw)
+                shared_strings.append(raw.decode("utf-8", errors="replace"))
         elif chunk == "INST":
             class_id = reader.u32()
             class_name = reader.string()
@@ -671,24 +723,48 @@ def _parse_binary(data: bytes) -> List[Dict[str, Any]]:
             recs = cls["records"]
             key = prop_name.lower()
             values: Optional[List[Any]] = None
-            if key in _STRING_PROPS and type_id in (_T_STRING, _T_SHARED_STRING, _T_CONTENT):
-                if type_id == _T_STRING:
-                    values = [reader.string() for _ in recs]
-                elif type_id == _T_SHARED_STRING:
+            try:
+                if key in _STRING_PROPS and type_id in (_T_STRING, _T_SHARED_STRING, _T_CONTENT):
+                    if type_id == _T_STRING:
+                        values = [reader.string() for _ in recs]
+                    elif type_id == _T_SHARED_STRING:
+                        indices = _deinterleave_u32(reader.read(4 * len(recs)), len(recs))
+                        values = [
+                            shared_strings[i] if i < len(shared_strings) else "" for i in indices
+                        ]
+                    elif type_id == _T_CONTENT:
+                        values = _read_content_array(reader, len(recs))
+                elif key in _VECTOR3_PROPS and type_id == _T_VECTOR3:
+                    values = _read_vector3_array(reader, len(recs))  # type: ignore[assignment]
+                elif key in _CFRAME_PROPS and type_id == _T_CFRAME:
+                    values = _read_cframe_array(reader, len(recs))  # type: ignore[assignment]
+                elif key in _FLOAT_PROPS and type_id == _T_FLOAT32:
+                    values = _read_f32_array(reader, len(recs))
+                elif key in _FLOAT_PROPS and type_id == _T_FLOAT64:
+                    # Float64: einfache Little-Endian-Doubles, nicht interleaved.
+                    count = len(recs)
+                    values = list(struct.unpack("<%dd" % count, reader.read(8 * count))) if count else []
+                elif key in _INT_PROPS and type_id == _T_INT32:
+                    values = _read_i32_array(reader, len(recs))
+                elif key in _ENUM_PROPS and type_id == _T_ENUM:
+                    # Token: interleaved u32 ohne Zigzag-Dekodierung.
+                    values = list(_deinterleave_u32(reader.read(4 * len(recs)), len(recs)))
+                elif key in _BINARY_PROPS and type_id in (_T_STRING, _T_PROTECTED_STRING):
+                    values = [bytes(reader.read(reader.u32())) for _ in recs]
+                elif key in _BINARY_PROPS and type_id == _T_SHARED_STRING:
                     indices = _deinterleave_u32(reader.read(4 * len(recs)), len(recs))
                     values = [
-                        shared_strings[i] if i < len(shared_strings) else "" for i in indices
+                        shared_string_bytes[i] if i < len(shared_string_bytes) else b""
+                        for i in indices
                     ]
-                elif type_id == _T_CONTENT:
-                    values = _read_content_array(reader, len(recs))
-            elif key in _VECTOR3_PROPS and type_id == _T_VECTOR3:
-                values = _read_vector3_array(reader, len(recs))  # type: ignore[assignment]
-            elif key in _CFRAME_PROPS and type_id == _T_CFRAME:
-                values = _read_cframe_array(reader, len(recs))  # type: ignore[assignment]
-            elif key in _FLOAT_PROPS and type_id == _T_FLOAT32:
-                values = _read_f32_array(reader, len(recs))
-            elif key in _BOOL_PROPS and type_id == _T_BOOL:
-                values = [bool(b) for b in reader.read(len(recs))]
+                elif key in _BOOL_PROPS and type_id == _T_BOOL:
+                    values = [bool(b) for b in reader.read(len(recs))]
+            except RbxmError:
+                # Unbekannte kuenftige Kodierung dieses Properties: lieber
+                # das Property weglassen (Werte fehlen dann) als den ganzen
+                # Avatar-Load abbrechen zu lassen. Andere Properties und die
+                # Chunk-Struktur bleiben unberuehrt (eigener Reader je Chunk).
+                values = None
             if values is not None:
                 for rec, value in zip(recs, values):
                     _apply_property(rec, prop_name, value)
@@ -709,10 +785,7 @@ def _parse_binary(data: bytes) -> List[Dict[str, Any]]:
         if parent_ref >= 0 and child_ref in by_referent and parent_ref in by_referent:
             by_referent[child_ref]["Parent"] = by_referent[parent_ref]
 
-    entries = _assemble(records)
-    if not entries:
-        entries = _scan_for_asset_ids(payloads)
-    return entries
+    return records, payloads
 
 
 # Legacy-URL-Form: klassische Shirt-/Pants-Templates stehen oft als
@@ -765,6 +838,14 @@ def _xml_float(text: Optional[str]) -> float:
 
 
 def _parse_xml(data: bytes) -> List[Dict[str, Any]]:
+    records = _parse_xml_records(data)
+    entries = _assemble(records)
+    if not entries:
+        entries = _scan_for_asset_ids([data])
+    return entries
+
+
+def _parse_xml_records(data: bytes) -> List[Dict[str, Any]]:
     try:
         root = ET.fromstring(data)
     except ET.ParseError as exc:
@@ -799,6 +880,16 @@ def _parse_xml(data: bytes) -> List[Dict[str, Any]]:
                     value = shared.get((prop.text or "").strip(), "")
                 elif prop.tag in ("float", "double"):
                     value = _xml_float(prop.text)
+                elif prop.tag in ("int", "token", "int64"):
+                    try:
+                        value = int((prop.text or "0").strip())
+                    except ValueError:
+                        value = 0
+                elif prop.tag == "BinaryString":
+                    try:
+                        value = base64.b64decode((prop.text or "").strip())
+                    except (ValueError, TypeError):
+                        value = b""
                 elif prop.tag == "bool":
                     value = (prop.text or "").strip().lower() in ("true", "1")
                 elif prop.tag == "Vector3":
@@ -821,10 +912,7 @@ def _parse_xml(data: bytes) -> List[Dict[str, Any]]:
     for top in root.findall("Item"):
         walk(top, None)
 
-    entries = _assemble(records)
-    if not entries:
-        entries = _scan_for_asset_ids([data])
-    return entries
+    return records
 
 
 # ---------------------------------------------------------------------------
@@ -850,3 +938,41 @@ def extract_assets(data: bytes) -> List[Dict[str, Any]]:
     if head.startswith(b"<roblox") or head.startswith(b"<?xml"):
         return _parse_xml(data)
     raise RbxmError("Weder RBXM (binaer) noch RBXMX (XML) erkannt")
+
+
+def parse_instances(data: bytes) -> List[Dict[str, Any]]:
+    """Komplette Instanz-Hierarchie aus RBXM/RBXMX - Wurzel-Instanzen.
+
+    Fuer Emote-Posen (tools/emote_pose.py): im Gegensatz zu
+    :func:`extract_assets` werden hier **alle** Instanzen zurueckgegeben
+    (KeyframeSequence/Keyframe/Pose/SubPose, CurveAnimation/FloatCurve,
+    Animation mit NumberValue-Metadaten ...), verknuepft ueber ``children``
+    und ``Parent``. Jeder Record traegt ``class``, ``name`` und die in
+    :func:`_apply_property` gefuellten Felder (u. a. ``position``/
+    ``rotation`` aus CFrame, ``value_num``, ``time``, ``weight``,
+    ``values_and_times``, ``animation_url``).
+    """
+    if not data:
+        raise RbxmError("Leere RBXM-Daten")
+    if data[:len(MAGIC)] == MAGIC:
+        records, _payloads = _parse_binary_records(data)
+    else:
+        head = data[:512].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+        if head.startswith(b"<roblox") or head.startswith(b"<?xml"):
+            records = _parse_xml_records(data)
+        else:
+            raise RbxmError("Weder RBXM (binaer) noch RBXMX (XML) erkannt")
+
+    for rec in records:
+        rec["children"] = []
+    roots: List[Dict[str, Any]] = []
+    for rec in records:
+        parent = rec.get("Parent")
+        if parent is None:
+            roots.append(rec)
+        else:
+            parent["children"].append(rec)
+    if not roots and records:
+        # Zyklen-Schutz: sollte bei echten Dateien nicht passieren.
+        roots = records
+    return roots
