@@ -619,3 +619,34 @@ def test_negative_raender_schneiden_bewusst_an(render):
     unten = _framing(render, (-1.0, -0.5, 0.0), (1.0, 0.5, 5.0), 6.0, -40.0)
     assert unten["aufgezogen"] is False
     assert unten["fuss_prozent"] == pytest.approx(-40.0, abs=0.05)
+
+
+def test_kamera_abstand_studs_aus_pose_haelt_avatar_im_bild(render):
+    # Regression: kamera_abstand_studs darf die Kamera nur weiter weg
+    # setzen - der Avatar muss zentriert im Bild bleiben (nicht leer!).
+    lo, hi = (-1.0, -0.5, 0.0), (1.0, 0.5, 5.0)
+    base = _framing(render, lo, hi, 9.0, 5.0)
+    shifted = render.compute_camera_placement(
+        lo, hi, FOV_TAN, FOV_TAN, yaw_deg=0.0, top_percent=9.0,
+        bottom_percent=5.0, head_z=hi[2], feet_z=lo[2],
+        camera_distance_offset_studs=1.0)
+    assert shifted["distance"] == pytest.approx(base["distance"] + 1.0)
+    # Mehr Abstand -> mehr Freiraum oben/unten, aber Kopf UND Fuesse
+    # bleiben sichtbar (beide Prozentwerte zwischen 0 und 50).
+    assert 9.0 < shifted["kopf_prozent"] < 50.0
+    assert 5.0 < shifted["fuss_prozent"] < 50.0
+    mitte = _ndc(render, shifted, (0.0, 0.5, 2.5))
+    assert -1.0 < mitte[0] < 1.0 and -1.0 < mitte[1] < 1.0
+
+
+def test_kamera_solver_aktualisiert_view_layer_und_stellt_wieder_her():
+    # Regression fuer komplett transparente Bilder: _world_to_view muss
+    # die View-Layer aktualisieren (sonst projiziert world_to_camera_view
+    # mit veralteter matrix_world und der Solver schiebt die Kamera ins
+    # Leere), und setup_camera muss eine verworfene Nachjustierung durch
+    # die Vorberechnung ersetzen statt die Kamera falsch stehen zu lassen.
+    text = open(SCRIPT, encoding="utf-8").read()
+    assert "view_layer.update()" in text
+    assert "Kamera-Endkontrolle" in text
+    assert text.count("apply_placement()") >= 3
+    assert "best_z, best_err" in text
