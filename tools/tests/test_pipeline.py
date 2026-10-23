@@ -508,8 +508,7 @@ def test_wichtige_dateien_existieren():
 def test_configs_toml_ist_gueltig():
     config = render_config.load_config(str(ROOT / "Configs.toml"))
     assert roblox_api.normalize_username(config["username"])
-    for key in ("drehung_grad", "pose", "freiraum_oben_prozent",
-                "freiraum_unten_prozent", "render_bei_aenderung",
+    for key in ("drehung_grad", "pose", "render_bei_aenderung",
                 "hintergrund_url", "hintergrund_glossy"):
         assert key in config
     assert -90 <= config["drehung_grad"] <= 90

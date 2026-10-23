@@ -117,8 +117,7 @@ Werte werden vor dem Render geprüft (`tools/render_config.py`,
 | `username` | Roblox-Username (früher `username.txt`) |
 | `drehung_grad` | Seitliche Drehung: `0` = frontal, `90` = rechte Seite, `-90` = linke Seite. Nur −90 … 90 ist erlaubt. |
 | `pose` | `None` = Stand-Pose, sonst ein Name aus `Posen.toml` (z. B. `Winken`) |
-| `freiraum_oben_prozent` | Freier Platz über der Kopfoberkante in Prozent der Bildhöhe. Accessoires zählen nicht mit; ragen sie darüber hinaus, wird das Bild aufgezogen (nichts wird abgeschnitten). |
-| `freiraum_unten_prozent` | Freier Platz unter den Füßen in Prozent der Bildhöhe. **Negativ** schneidet an (z. B. `-40` → nur der Torso). |
+| *(Bildausschnitt)* | Steht **nicht** mehr in der Config: Jede Pose in `Posen.toml` definiert selbst, bis zu welchen Positionen man sehen kann (`sichtbar_oben_prozent`, `sichtbar_unten_prozent`, `kamera_abstand_studs`, `avatar_hoch_studs`). |
 | `render_bei_aenderung` | `true` = nach diesem Push sofort rendern. Der Workflow setzt den Wert nach erfolgreichem Render automatisch auf `false`. |
 | `hintergrund_url` | URL (oder lokaler Pfad) zu einem Hintergrundbild, `"hdri"` für die HDRI-Umgebung (Standard) oder `"transparent"` für einen durchsichtigen Hintergrund. |
 | `hintergrund_glossy` | `true` = Hintergrund glänzt wie der Avatar, `false` = matt. |
@@ -126,22 +125,34 @@ Werte werden vor dem Render geprüft (`tools/render_config.py`,
 Das Hintergrundbild wird in Blender auf eine Fläche gelegt, die exakt hinter
 dem Avatar sitzt und bis zum Bildrand reicht.
 
-**Posen:** In `Posen.toml` bekommt jede Pose einen eigenen Abschnitt. Für jedes
-Körperteil lassen sich `rotation = [x, y, z]` (Grad) und
-`verschiebung = [x, y, z]` (Studs, max. ±5) angeben:
+**Posen:** In `Posen.toml` bekommt jede Pose einen eigenen Abschnitt mit
+eigenem Bildausschnitt/Kamera-Werten und sprechenden Delta-Werten pro
+Körperteil – keine rohen Achsen-Tripel mehr. Beispiel:
 
 ```toml
+[Winken]
+sichtbar_oben_prozent = 8        # bis 8 % über dem Kopf sieht man
+sichtbar_unten_prozent = 5       # bis 5 % unter den Füßen
+kamera_abstand_studs = 0.5       # zusätzlich 0,5 Studs weiter weg
+avatar_hoch_studs = 0            # Avatar weder angehoben noch gesenkt
+
 [Winken.rechter_oberarm]
-rotation = [0, 0, 105]
-verschiebung = [0, 0, 0]
+vor_hoch_schwingen_grad = 158    # Arm schwingt nach vorn-oben
+vom_koerper_weg_grad = 22        # und 22° vom Körper weg
 ```
 
-Verfügbare Körperteile: oberer/unterer Torso, Kopf, linke/rechte Ober- und
-Unterarme, linke/rechte Hand, linke/rechte Ober- und Unterschenkel sowie
-linker/rechter Fuß. Nicht genannte Teile bleiben in der Stand-Pose.
-Accessoires und Kleidung werden automatisch passend mitgedreht und
-mitverschoben (Hut → Kopf, Gear → rechte Hand usw.). Als Beispiele sind
-`Winken`, `T_Pose`, `Laufen`, `Sitzen` und `Jubel` enthalten.
+Die Werte sind Deltas zur Stand-Pose und drehen um die exakten Gelenk-Pivots
+(Schulter, Ellbogen, Hüfte, Knie … aus den RigAttachments); überblendet wird
+volumen-erhaltend, damit nichts an den Gelenken einschnürt. Verfügbare
+Körperteile: oberer/unterer Torso, Kopf, linke/rechte Ober- und Unterarme,
+linke/rechte Hand, linke/rechte Ober- und Unterschenkel sowie linker/rechter
+Fuß. Nicht genannte Teile/Felder bleiben neutral. Accessoires der Kategorien
+Kopf, Hals, Gesicht, Schultern, Vorderseite, Rücken und Taille folgen
+automatisch ihrem Körperteil; **Ausrüstung (Gear) wird als einzige Kategorie
+gar nicht erst heruntergeladen.** Enthalten sind u. a. `Helden_Pose`,
+`Siegerfaust`, `Kampfstellung`, `Superhelden_Landung`, `Sprung_Action`,
+`Arme_Verschraenkt`, `Denker`, `Peace_Pose`, `Tanz_Freeze`, `Flieger` und
+`Winken`.
 
 ---
 

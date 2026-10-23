@@ -23,8 +23,9 @@ Der Bildausschnitt und der Hintergrund kommen aus dem Manifest (Block
 ``render``), das ``tools/build_avatar.py`` aus der ``Configs.toml`` schreibt:
 
   * ``drehung_grad``             seitliche Drehung (-90 .. 90, 0 = frontal)
-  * ``freiraum_oben_prozent``    freier Abstand ueber dem Kopf (ohne Accessoires)
-  * ``freiraum_unten_prozent``   freier Abstand unter den Fuessen (negativ = anschneiden)
+  * ``sichtbar_oben_prozent``    aus der Pose: freier Abstand ueber dem Kopf
+  * ``sichtbar_unten_prozent``   aus der Pose: Abstand unter den Fuessen (negativ = Schnitt)
+  * ``kamera_abstand_studs``     aus der Pose: zusaetzlicher Kamera-Abstand in Studs
   * ``hintergrund``              Bild-URL/-Datei, ``transparent``, ``glossy``
 """
 
@@ -701,7 +702,8 @@ def compute_camera_placement(lo, hi, tan_h: float, tan_v: float,
                              yaw_deg: float = 0.0,
                              top_percent: float = 6.0,
                              bottom_percent: float = 6.0,
-                             head_z=None, feet_z=None):
+                             head_z=None, feet_z=None,
+                             camera_distance_offset_studs: float = 0.0):
     """Kameraabstand und -hoehe so, dass der Bildausschnitt exakt passt.
 
     Rechnet **perspektivisch**: Punkte naeher an der Kamera werden groesser
@@ -783,7 +785,10 @@ def compute_camera_placement(lo, hi, tan_h: float, tan_v: float,
         else:
             high_d = mid
     base_distance = (low_d + high_d) / 2.0
-    distance = base_distance
+    # Pose-Wert: zusaetzlicher Abstand in Studs (+ = weiter weg/kleiner,
+    # - = naeher dran/groesser). Die vertikale Mitte folgt weiter den
+    # sichtbar_*-Prozenten, nur die Groesse im Bild aendert sich.
+    distance = max(0.5, base_distance + float(camera_distance_offset_studs or 0.0))
 
     def content_fits(d: float):
         cam = placement(d)
@@ -799,7 +804,7 @@ def compute_camera_placement(lo, hi, tan_h: float, tan_v: float,
     # darf die Kamera etwas weiter zurueck (max. 25 %). Reicht das fuer ein
     # weit schwebendes Accessoire (Halo o. Ae.) nicht, bleibt der Ausschnitt
     # wie eingestellt - dann wird geloggt, wie man es ins Bild bekommt.
-    if not exact and top > 0.0 and bottom > 0.0:
+    if not exact and not camera_distance_offset_studs and top > 0.0 and bottom > 0.0:
         max_distance = base_distance * 1.25
         for _ in range(80):
             fits, cam = content_fits(distance)
@@ -823,7 +828,7 @@ def compute_camera_placement(lo, hi, tan_h: float, tan_v: float,
         "distance": distance,
         "kopf_prozent": head_pct,
         "fuss_prozent": feet_pct,
-        "aufgezogen": distance > base_distance * 1.001,
+        "aufgezogen": distance > base_distance * 1.001 and not camera_distance_offset_studs,
         "abgeschnitten": abgeschnitten,
     }
 
@@ -868,7 +873,8 @@ def fit_camera_with_blender(cam, focus_xy, head_z, feet_z, content_points,
                             top_percent: float = 6.0,
                             bottom_percent: float = 6.0,
                             exact: bool = False,
-                            max_scale: float = 1.25):
+                            max_scale: float = 1.25,
+                            distance_offset_studs: float = 0.0):
     """Justiert Abstand und Hoehe der Kamera mit Blenders Projektion.
 
     Kopfoberkante (``head_z``) und Fuesse (``feet_z``) landen exakt auf den
@@ -927,6 +933,17 @@ def fit_camera_with_blender(cam, focus_xy, head_z, feet_z, content_points,
     dist = start_dist
     z = float(cam.location.z)
     dist, z = solve(dist, z)
+    if distance_offset_studs:
+        # Abstand aus der Pose fest vorgeben: nur noch die Hoehe so
+        # nachfuehren, dass die Mitte zwischen Kopf/Fuessen stimmt.
+        dist = max(0.2, dist + float(distance_offset_studs))
+        target_mid = (target_top + target_bottom) / 2.0
+        for _ in range(40):
+            head_y, feet_y = place(dist, z)
+            error = (head_y + feet_y) / 2.0 - target_mid
+            if abs(error) < 2e-4:
+                break
+            z += error * body_span
 
     def content_inside() -> bool:
         for x, y in _world_to_view(cam, content_points):
@@ -938,7 +955,7 @@ def fit_camera_with_blender(cam, focus_xy, head_z, feet_z, content_points,
 
     aufgezogen = False
     abgeschnitten = False
-    if not exact and top_percent > 0 and bottom_percent > 0:
+    if not exact and not distance_offset_studs and top_percent > 0 and bottom_percent > 0:
         max_dist = dist * max_scale
         while not content_inside():
             if dist >= max_dist:
@@ -961,7 +978,8 @@ def fit_camera_with_blender(cam, focus_xy, head_z, feet_z, content_points,
 def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
                  yaw_deg: float = 0.0, top_percent: float = 6.0,
                  bottom_percent: float = 6.0,
-                 focus_lo=None, focus_hi=None):
+                 focus_lo=None, focus_hi=None,
+                 camera_distance_offset_studs: float = 0.0):
     """Kamera exakt nach Configs.toml ausrichten (perspektivisch korrekt).
 
     * ``yaw_deg``: 0 = frontal (Avatar schaut zur Kamera), 90 = rechte Seite,
@@ -988,6 +1006,7 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
         bottom_percent=bottom_percent,
         head_z=float(focus_hi if focus_hi is not None else hi.z),
         feet_z=float(focus_lo if focus_lo is not None else lo.z),
+        camera_distance_offset_studs=camera_distance_offset_studs,
     )
 
     center = Vector(placement["center"])
@@ -1018,6 +1037,7 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
             top_percent=top_percent,
             bottom_percent=bottom_percent,
             exact=exact,
+            distance_offset_studs=camera_distance_offset_studs,
         )
         # Sicherheitsnetz: unplausible Ergebnisse verwerfen.
         plausible = (
@@ -1045,8 +1065,8 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
     if refined.get("abgeschnitten"):
         log("Hinweis: Ein Accessoire reicht weit ueber Kopf/Fuesse hinaus und "
             "ist nicht komplett im Bild. Der Ausschnitt folgt wie eingestellt "
-            "der Kopfoberkante; fuer mehr Platz freiraum_oben_prozent bzw. "
-            "freiraum_unten_prozent erhoehen.")
+            "der Kopfoberkante; fuer mehr Platz in der Pose (Posen.toml) "
+            "sichtbar_oben_prozent bzw. sichtbar_unten_prozent erhoehen.")
     return cam, center, radius
 
 
@@ -1258,9 +1278,10 @@ def main() -> int:
     yaw_deg = (args.yaw if args.yaw is not None
                else float(render_cfg.get("drehung_grad") or 0.0))
     top_percent = (args.margin_top if args.margin_top is not None
-                   else float(render_cfg.get("freiraum_oben_prozent", 6.0)))
+                   else float(render_cfg.get("sichtbar_oben_prozent", 6.0)))
     bottom_percent = (args.margin_bottom if args.margin_bottom is not None
-                      else float(render_cfg.get("freiraum_unten_prozent", 6.0)))
+                      else float(render_cfg.get("sichtbar_unten_prozent", 6.0)))
+    camera_distance_offset = float(render_cfg.get("kamera_abstand_studs", 0.0) or 0.0)
 
     background_cfg = render_cfg.get("hintergrund") or {}
     background_path = ""
@@ -1289,8 +1310,8 @@ def main() -> int:
         denoise=args.denoise,
         transparent=transparent,
     )
-    log(f"Bildausschnitt: Drehung {yaw_deg:g}°, Freiraum oben {top_percent:g} %, "
-        f"unten {bottom_percent:g} % | Hintergrund: "
+    log(f"Bildausschnitt (aus Pose): Drehung {yaw_deg:g}°, sichtbar oben {top_percent:g} %, "
+        f"unten {bottom_percent:g} %, Kamera-Abstand {camera_distance_offset:+g} Studs | Hintergrund: "
         + ("transparent" if transparent else
            (os.path.basename(background_path) + (" (glossy)" if background_glossy else " (matt)"))
            if background_path else "HDRI"))
@@ -1447,6 +1468,7 @@ def main() -> int:
         bottom_percent=bottom_percent,
         focus_lo=focus_lo,
         focus_hi=focus_hi,
+        camera_distance_offset_studs=camera_distance_offset,
     )
 
     # Hintergrundbild auf eine Flaeche exakt hinter dem Avatar legen.

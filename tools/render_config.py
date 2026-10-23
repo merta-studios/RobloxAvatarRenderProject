@@ -31,8 +31,6 @@ DEFAULTS: Dict[str, Any] = {
     "username": "",
     "drehung_grad": 0.0,
     "pose": "None",
-    "freiraum_oben_prozent": 6.0,
-    "freiraum_unten_prozent": 6.0,
     "render_bei_aenderung": False,
     "hintergrund_url": "hdri",
     "hintergrund_glossy": False,
@@ -50,13 +48,9 @@ HDRI_WORDS = ("hdri", "hdr", "environment", "env", "")
 # Grenzen: seitliche Drehung laut Vorgabe -90 .. 90 Grad.
 MIN_DREHUNG = -90.0
 MAX_DREHUNG = 90.0
-# Freiraum in Prozent der Bildhoehe. Negative Werte schneiden das Bild an
-# (z. B. unten -40 -> nur der Torso ist zu sehen).
-MIN_FREIRAUM = -100.0
-MAX_FREIRAUM = 95.0
-# Oben + unten muessen zusammen kleiner als 100 % bleiben, sonst waere fuer
-# den Avatar kein Platz mehr im Bild.
-MAX_FREIRAUM_SUMME = 95.0
+# Bildausschnitt (sichtbar oben/unten), Kamera-Abstand und Avatar-Hoehe
+# stehen nicht mehr hier, sondern in jeder Pose in Posen.toml
+# (siehe tools/avatar_pose.py: POSE_SETTING_DEFAULTS).
 
 
 class ConfigError(ValueError):
@@ -243,6 +237,12 @@ def load_config(path: str = CONFIG_FILENAME,
 
     warnings: List[str] = []
     for key in raw:
+        if key in ("freiraum_oben_prozent", "freiraum_unten_prozent"):
+            warnings.append(
+                f"Configs.toml: '{key}' gibt es nicht mehr - der "
+                "Bildausschnitt steht jetzt in jeder Pose in Posen.toml "
+                "(sichtbar_oben_prozent / sichtbar_unten_prozent).")
+            continue
         if key not in KNOWN_KEYS:
             warnings.append(
                 f"Configs.toml: unbekannter Schluessel '{key}' wird ignoriert "
@@ -271,24 +271,6 @@ def load_config(path: str = CONFIG_FILENAME,
 
     pose = _text("pose", config["pose"])
     config["pose"] = "None" if pose.strip().lower() in ("", "none") else pose
-
-    oben = _number("freiraum_oben_prozent", config["freiraum_oben_prozent"])
-    unten = _number("freiraum_unten_prozent", config["freiraum_unten_prozent"])
-    for name, value in (("freiraum_oben_prozent", oben),
-                        ("freiraum_unten_prozent", unten)):
-        if value < MIN_FREIRAUM or value > MAX_FREIRAUM:
-            raise ConfigError(
-                f"'{name}' muss zwischen {MIN_FREIRAUM:.0f} und "
-                f"{MAX_FREIRAUM:.0f} Prozent liegen, gefunden: {value:g}."
-            )
-    if oben + unten > MAX_FREIRAUM_SUMME:
-        raise ConfigError(
-            "'freiraum_oben_prozent' + 'freiraum_unten_prozent' darf hoechstens "
-            f"{MAX_FREIRAUM_SUMME:.0f} ergeben (sonst bleibt kein Platz fuer den "
-            f"Avatar), gefunden: {oben:g} + {unten:g} = {oben + unten:g}."
-        )
-    config["freiraum_oben_prozent"] = oben
-    config["freiraum_unten_prozent"] = unten
 
     config["render_bei_aenderung"] = _flag(
         "render_bei_aenderung", config["render_bei_aenderung"])
@@ -417,8 +399,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     print(f"Config OK: {config['username']} | Drehung {config['drehung_grad']:g}° | "
-          f"Pose {config['pose']} | Freiraum oben {config['freiraum_oben_prozent']:g}% "
-          f"unten {config['freiraum_unten_prozent']:g}% | "
+          f"Pose {config['pose']} (Ausschnitt/Kamera stehen in der Pose) | "
           f"Render bei Aenderung: {config['render_bei_aenderung']} | "
           f"Hintergrund: {'transparent' if config['_transparent'] else ('HDRI' if config['_hdri'] else config['hintergrund_url'])}"
           f"{'' if config['_hdri'] or config['_transparent'] else (' (glossy)' if config['hintergrund_glossy'] else ' (matt)')}")

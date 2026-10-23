@@ -448,7 +448,8 @@ def setup_pose(config: Dict[str, Any],
     """
     pose_name = str((config or {}).get("pose") or "None").strip()
     info: Dict[str, Any] = {"name": pose_name or "None", "aktiv": False,
-                            "details": ""}
+                            "details": "",
+                            "einstellungen": dict(avatar_pose.POSE_SETTING_DEFAULTS)}
     if not pose_name or pose_name.lower() == "none":
         return None, info
 
@@ -477,9 +478,11 @@ def setup_pose(config: Dict[str, Any],
         # Exakte R15-Gelenke aus den *RigAttachment-Daten haben Vorrang.
         joints.update(rig_avatar.joint_positions)
 
-    context = avatar_pose.PoseContext(entry["teile"], joints)
+    settings = entry.get("einstellungen") or dict(avatar_pose.POSE_SETTING_DEFAULTS)
+    context = avatar_pose.PoseContext(entry["teile"], joints, settings=settings)
     info["aktiv"] = context.active
-    info["details"] = avatar_pose.pose_summary(context.pose)
+    info["einstellungen"] = settings
+    info["details"] = avatar_pose.pose_summary(context.pose, settings)
     log(f"      Pose '{pose_name}': {info['details']}")
     return context, info
 
@@ -643,6 +646,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                      rbxm_rotation: Optional[Any] = None,
                      rbxm_meta: Optional[Dict[str, Any]] = None) -> None:
             """Parst ein FileMesh und reiht es in mesh_parts ein."""
+            if type_id in api.EXCLUDED_ASSET_TYPES:
+                return  # Ausrüstung (auch aus RBXM verschachtelt) nie laden
             try:
                 mesh = roblox_mesh.parse(raw)
             except roblox_mesh.MeshParseError as exc:
@@ -766,6 +771,15 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 continue
             label = asset.get("name") or ""
             declared = asset_type_id(asset, {})
+            if declared in api.EXCLUDED_ASSET_TYPES:
+                # Ausrüstung (Gear) wird gar nicht erst heruntergeladen.
+                ignored.append({
+                    "asset_id": aid, "name": label,
+                    "asset_type": api.ASSET_TYPE_NAMES.get(declared, "Gear"),
+                    "reason": "Ausrüstung wird nicht mit geladen",
+                })
+                log(f"      - {aid} Gear: übersprungen (Ausrüstung wird nicht geladen)")
+                continue
             if declared in api.IGNORED_ASSET_TYPES:
                 # Animationen/Audio: gar nicht herunterladen, nur zaehlen
                 ignored.append({
@@ -782,6 +796,12 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             if type_id in api.IGNORED_ASSET_TYPES:
                 ignored.append({"asset_id": aid, "name": label,
                                 "asset_type": type_name})
+                continue
+            if type_id in api.EXCLUDED_ASSET_TYPES:
+                ignored.append({"asset_id": aid, "name": label,
+                                "asset_type": type_name,
+                                "reason": "Ausrüstung wird nicht mit geladen"})
+                log(f"      - {aid} {type_name}: übersprungen (Ausrüstung)")
                 continue
 
             dl = api.download_asset(client, aid)
@@ -1104,8 +1124,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         head_center = (head_center[0], metrics.head_center_y, head_center[2])
         head_radius = metrics.head_radius
     if pose_ctx is not None and pose_ctx.active:
-        head_center = avatar_pose._mat4_point(
-            pose_ctx.transforms["kopf"], head_center)
+        head_center = pose_ctx.transform_point(head_center, "kopf")
     head_top_world = round(head_center[1] + head_radius, 3)
 
     body_parts_from_mesh = 0
@@ -1225,6 +1244,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     for mesh_part in mesh_parts:
         if id(mesh_part) in consumed:
             continue
+        if int(mesh_part["type_id"]) in api.EXCLUDED_ASSET_TYPES:
+            continue  # Ausrüstung wird nicht gerendert
         if int(mesh_part["type_id"]) in BODY_PART_TYPES:
             continue  # Duplikat (Warnung steht oben)
         if int(mesh_part["type_id"]) == HEAD_ASSET_TYPE:
@@ -1351,8 +1372,12 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             # Oberkante des Kopfes (ohne Accessoires) - Bezug fuer den
             # freien Abstand oben, funktioniert auch bei Headless-Avataren.
             "kopf_oberkante": head_top_world,
-            "freiraum_oben_prozent": config_number("freiraum_oben_prozent", 6.0),
-            "freiraum_unten_prozent": config_number("freiraum_unten_prozent", 6.0),
+            # Bildausschnitt/Kamera kommen aus der Pose selbst (Posen.toml),
+            # nicht mehr aus der Configs.toml.
+            "sichtbar_oben_prozent": float(pose_info["einstellungen"]["sichtbar_oben_prozent"]),
+            "sichtbar_unten_prozent": float(pose_info["einstellungen"]["sichtbar_unten_prozent"]),
+            "kamera_abstand_studs": float(pose_info["einstellungen"]["kamera_abstand_studs"]),
+            "avatar_hoch_studs": float(pose_info["einstellungen"]["avatar_hoch_studs"]),
             "render_bei_aenderung": config_flag("render_bei_aenderung", False),
             "hintergrund": background_info,
         },
@@ -1386,6 +1411,10 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             # Animationen stehen getrennt unter ignored_animations.
             "failed": len(skipped),
             "ignored_animations": len(ignored),
+            "ausruestung_uebersprungen": sum(
+                1 for item in ignored
+                if item.get("asset_type") == "Gear"
+                or "Ausrüstung" in str(item.get("reason", ""))),
             "assets_seen": len(avatar_raw.get("assets") or []),
         },
     }
