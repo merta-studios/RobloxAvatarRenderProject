@@ -47,7 +47,7 @@ drehung_grad = 0
 #  Jede Pose bringt ihren eigenen Bildausschnitt (sichtbar oben/unten),
 #  Kamera-Abstand und ihre Körperhaltung mit. Accessoires folgen automatisch
 #  (Ausrüstung/Gear wird nie mit geladen).
-pose = "Helden_Pose"
+pose = "Siegerfaust"
 
 
 # -----------------------------------------------------------------------------
@@ -72,7 +72,7 @@ pose = "Helden_Pose"
 #  automatisch wieder auf false. So rendert es nicht bei jeder kleinen
 #  Änderung erneut – einfach auf true stellen, wenn ein neues Bild gewünscht
 #  ist.
-render_bei_aenderung = false
+render_bei_aenderung = true
 
 
 # -----------------------------------------------------------------------------
