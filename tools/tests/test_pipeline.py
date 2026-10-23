@@ -638,3 +638,24 @@ def test_anleitung_ist_deutsch_und_vollstaendig():
                    "Posen.toml", "Actions", "Artifacts", "artifact", "GPU",
                    "Nutzungsbedingungen"):
         assert needle.lower() in text.lower(), needle
+
+
+def test_render_workflow_hat_zeitbudget_statt_45_minuten_hänger():
+    # Regression: Schritt 6 lief mit bis zu drei kompletten Render-
+    # Versuchen ohne Timeout und wurde erst vom 45-Minuten-Job-Timeout
+    # abgebrochen ("The operation was canceled"). Jetzt: Gesamtbudget,
+    # Timeout pro Versuch, kleineres Job-Timeout.
+    yaml = pytest.importorskip("yaml")
+    path = ROOT / ".github/workflows/avatar-render.yml"
+    text = path.read_text(encoding="utf-8")
+    data = yaml.safe_load(text)
+    assert data["jobs"]["render"]["timeout-minutes"] <= 25
+    steps = data["jobs"]["render"]["steps"]
+    render_step = next(s for s in steps if "Glossy-Render" in s.get("name", ""))
+    assert render_step["timeout-minutes"] <= 12
+    assert "timeout --signal=TERM --kill-after=20s" in text
+    assert "DEADLINE" in text
+    # Alle drei Backends bleiben als Fallback erhalten.
+    assert "--gpu-backend opengl" in text
+    assert "--gpu-backend vulkan" in text
+    assert "xvfb-run" in text
