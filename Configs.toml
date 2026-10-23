@@ -22,7 +22,7 @@
 # -----------------------------------------------------------------------------
 #  Der Name aus der Roblox-Profil-URL, z. B. "MertaStudios".
 #  (Ein "https://www.roblox.com/users/123456/profile"-Link funktioniert auch.)
-username = "Djselena2013"
+username = "SunsetSiya"
 
 
 # -----------------------------------------------------------------------------
@@ -35,7 +35,7 @@ username = "Djselena2013"
 #      -90   = nach links gedreht  -> wir sehen die linke Seite (Profil)
 #  Erlaubt ist nur -90 bis 90. Zwischenwerte wie 25 oder -40 sind ideal für
 #  eine schräge 3/4-Ansicht (früher war der Render fest auf ca. 27°).
-drehung_grad = -20
+drehung_grad = 0
 
 
 # -----------------------------------------------------------------------------
@@ -72,7 +72,7 @@ pose = "Helden_Pose"
 #  automatisch wieder auf false. So rendert es nicht bei jeder kleinen
 #  Änderung erneut – einfach auf true stellen, wenn ein neues Bild gewünscht
 #  ist.
-render_bei_aenderung = false
+render_bei_aenderung = true
 
 
 # -----------------------------------------------------------------------------
