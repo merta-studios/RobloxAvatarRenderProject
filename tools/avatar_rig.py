@@ -641,6 +641,9 @@ class RiggedAvatar:
     #: Je Gelenk der tatsaechlich verwendete Abstand zum Eltern-Gelenk in
     #: Studs (0 = Naht geschlossen). Nur zur Diagnose.
     joint_spans: Dict[str, float] = field(default_factory=dict)
+    #: Platzierte Segment-Meshes (Weltraum, vor der Pose) je Instanzname -
+    #: fuer das Diagnose-Manifest ("welches Teil sitzt wo?").
+    placed_segments: Dict[str, MeshData] = field(default_factory=dict)
 
 
 def _attach_placement(
@@ -1253,6 +1256,9 @@ def assemble_r15_rig(
     shift_y = -min_y
     for k, m in list(body_meshes.items()):
         body_meshes[k] = m.transform(1.0, (0.0, shift_y, 0.0))
+    # Diagnose-Meshes mitverschieben (gleiche Basis wie Gelenke/Meshes).
+    for k, m in list(placed_seg_mesh.items()):
+        placed_seg_mesh[k] = m.transform(1.0, (0.0, shift_y, 0.0))
     if head_world is not None:
         head_world = head_world.transform(1.0, (0.0, shift_y, 0.0))
     for k, (p, r) in list(world_atts.items()):
@@ -1296,6 +1302,7 @@ def assemble_r15_rig(
         scales_head=s_head,
         notes=notes,
         joint_spans=joint_spans,
+        placed_segments=dict(placed_seg_mesh),
     )
 
 
