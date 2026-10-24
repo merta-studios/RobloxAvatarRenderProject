@@ -539,6 +539,7 @@ def _assemble(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "scale_type": scale_type,
             "attachments": attachments,
             "accessory_attachment_point": enclosing_attachment_point(rec),
+            "import_origin": rec.get("import_origin"),
             "wrap_layer": wrap_layer,
             "wrap_target": wrap_target,
         }

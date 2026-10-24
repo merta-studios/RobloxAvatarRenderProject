@@ -1653,6 +1653,82 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
             for k, v in sorted(jp.items()))
         ci_notice("Diagnose 2/6 Gelenke Bind-Pose", jtxt or "keine")
 
+        # 2b) Segment-Rohdaten: Mesh-BBox (lokal, unskaliert) vs. Attachment-
+        #     Positionen/Rotationen, Part-CFrame und ImportOrigin. Zeigt, in
+        #     welchem Raum Vertices und Attachments leben und ob die
+        #     Gelenk-Frames (Pose-Achsen!) echt sind.
+        raw_lines: List[str] = []
+        seen_labels = set()
+        for _rig_name, _segs in sorted(r15_segments_by_part.items()):
+            for mp in _segs:
+                label = mp.get("label") or "?"
+                if label in seen_labels:
+                    continue
+                seen_labels.add(label)
+                mesh = mp.get("mesh")
+                if mesh is None or mesh.is_empty:
+                    continue
+                lo, hi = mesh.bbox()
+                size = mp.get("rbxm_size")
+                stxt = ("x".join(f"{float(v):.2f}" for v in size)
+                        if size else "?")
+                pos = mp.get("position")
+                prtxt = ""
+                prot = mp.get("rotation")
+                if prot is not None:
+                    rx, ry, rz = _mat3_euler_deg(prot)
+                    prtxt = f" rot=({rx:.0f},{ry:.0f},{rz:.0f}deg)"
+                ptxt = (f"({float(pos[0]):.2f},{float(pos[1]):.2f},"
+                        f"{float(pos[2]):.2f}){prtxt}") if pos else "0"
+                iorg = mp.get("import_origin")
+                itxt = ""
+                if iorg and iorg.get("position"):
+                    ip = iorg["position"]
+                    irot = iorg.get("rotation")
+                    irtxt = ""
+                    if irot is not None:
+                        ix, iy, iz = _mat3_euler_deg(irot)
+                        irtxt = f"|r{ix:.0f},{iy:.0f},{iz:.0f}"
+                    itxt = (f" importOrigin=({float(ip[0]):.2f},"
+                            f"{float(ip[1]):.2f},{float(ip[2]):.2f}){irtxt}")
+                atxt = []
+                for aname, ainfo in sorted((mp.get("attachments") or {}).items()):
+                    if "RigAttachment" not in aname:
+                        continue
+                    ap = ainfo.get("position")
+                    if ap is None:
+                        continue
+                    ar = ainfo.get("rotation")
+                    artxt = ""
+                    if ar is not None:
+                        ax, ay, az = _mat3_euler_deg(ar)
+                        if abs(ax) + abs(ay) + abs(az) > 0.5:
+                            artxt = f"|r{ax:.0f},{ay:.0f},{az:.0f}"
+                    atxt.append(f"{aname}"
+                                f"=({float(ap[0]):.2f},{float(ap[1]):.2f},"
+                                f"{float(ap[2]):.2f}){artxt}")
+                raw_lines.append(
+                    f"{label}: bbox=x[{lo[0]:.2f}..{hi[0]:.2f}]"
+                    f"y[{lo[1]:.2f}..{hi[1]:.2f}]z[{lo[2]:.2f}..{hi[2]:.2f}] "
+                    f"size={stxt} pos={ptxt}{itxt}"
+                    + ((" atts: " + ", ".join(atxt)) if atxt else ""))
+        for _i in range(0, len(raw_lines), 4):
+            ci_notice(f"Diagnose 2b/6 Segment-Rohdaten ({_i // 4 + 1})",
+                      " | ".join(raw_lines[_i:_i + 4]))
+
+        # 2c) Gelenk-Frames (Bind-Welt-Rotation der Attachments) - die
+        #     Achsen, um die die Pose rotiert.
+        jf = getattr(rig_avatar, "joint_frames", None) or {}
+        jflines = []
+        for k, m in sorted(jf.items()):
+            if m is None:
+                continue
+            rx, ry, rz = _mat3_euler_deg(m)
+            jflines.append(f"{k}=({rx:.0f},{ry:.0f},{rz:.0f}deg)")
+        for _i in range(0, len(jflines), 8):
+            ci_notice(f"Diagnose 2c/6 Gelenk-Frames ({_i // 8 + 1})",
+                      " | ".join(jflines[_i:_i + 8]))
+
         arm: List[str] = []
         for side in ("Left", "Right"):
             sh = jp.get(f"{side}UpperArm")
