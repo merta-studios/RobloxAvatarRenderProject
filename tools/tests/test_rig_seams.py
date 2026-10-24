@@ -369,3 +369,57 @@ def test_geskinntes_mesh_bleibt_nach_sanity_check_weich():
     assert warnings and "Sanity-Check" in warnings[0]
     assert fixed.skinning is not None, "Skin-Gewichte duerfen nicht verloren gehen"
     assert fixed.size()[0] == pytest.approx(2.0, rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# 6) Posen.toml-Drehungen wirken im Gelenk-Frame (gedrehte Attachments)
+# ---------------------------------------------------------------------------
+
+def _rotate_with_frame(frame, degrees, axis=(1.0, 0.0, 0.0)):
+    """Prueft: J * R * J^-1 dreht um die Gelenk-Achse, nicht um die Weltachse."""
+    pivot = (0.3, 4.0, -0.2)
+    rotation = [0.0, 0.0, 0.0]
+    rotation[0] = degrees  # X-Achse (nicken / ellbogen)
+    ctx = avatar_pose.PoseContext({"kopf": {"nicken_grad": degrees}},
+                                  {"Head": pivot})
+    ctx.rig = None
+    local_world = avatar_pose._rotation_local(rotation, (0.0, 0.0, 0.0),
+                                              pivot, None)
+    local_frame = avatar_pose._rotation_local(rotation, (0.0, 0.0, 0.0),
+                                              pivot, frame)
+    point = (pivot[0] + 0.5, pivot[1] + 0.2, pivot[2] + 0.1)
+    return (avatar_pose._mat4_point(local_world, point),
+            avatar_pose._mat4_point(local_frame, point))
+
+
+def test_rotation_local_ohne_frame_bleibt_weltachsen_drehung():
+    frame = ((0.0, 0.0, 1.0), (0.0, 1.0, 0.0), (-1.0, 0.0, 0.0))
+    world, _framed = _rotate_with_frame(frame, 30.0)
+    # Ohne Rig bleibt es die alte Weltachsen-Drehung (hier um X): x konstant.
+    assert world[0] == pytest.approx(0.8, abs=1e-9)
+    assert world[1] != pytest.approx(4.2, abs=1e-6)
+
+
+def test_rotation_local_dreht_um_die_gelenk_achse():
+    """Gelenk-Frame um Y gedreht: die lokale X-Achse ist jetzt Welt-Z."""
+    frame = ((0.0, 0.0, 1.0), (0.0, 1.0, 0.0), (-1.0, 0.0, 0.0))
+    _world, framed = _rotate_with_frame(frame, 90.0)
+    # Drehung um die Welt-Z-Achse laesst z unveraendert, bewegt aber x/y.
+    assert framed[2] == pytest.approx(-0.1, abs=1e-9)
+    assert abs(framed[1] - 4.2) > 0.2 or abs(framed[0] - 0.8) > 0.2
+    # Der Gelenkpunkt selbst bleibt fix.
+    pivot = (0.3, 4.0, -0.2)
+    local = avatar_pose._rotation_local([90.0, 0.0, 0.0], (0.0, 0.0, 0.0),
+                                        pivot, frame)
+    assert avatar_pose._mat4_point(local, pivot) == pytest.approx(pivot, abs=1e-9)
+
+
+def test_rotation_local_erhaelt_abstaende():
+    frame = ((0.0, 0.0, 1.0), (0.0, 1.0, 0.0), (-1.0, 0.0, 0.0))
+    pivot = (0.3, 4.0, -0.2)
+    local = avatar_pose._rotation_local([25.0, -10.0, 40.0], (0.0, 0.0, 0.0),
+                                        pivot, frame)
+    for offset in ((0.5, 0.0, 0.0), (0.0, -0.7, 0.2)):
+        point = (pivot[0] + offset[0], pivot[1] + offset[1], pivot[2] + offset[2])
+        moved = avatar_pose._mat4_point(local, point)
+        assert _dist(moved, pivot) == pytest.approx(_dist(point, pivot), abs=1e-9)

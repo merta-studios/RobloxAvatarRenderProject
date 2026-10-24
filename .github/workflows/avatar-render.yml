@@ -345,14 +345,12 @@ jobs:
           if [ -z "$SAFE_NAME" ]; then SAFE_NAME="avatar"; fi
 
           TMP="$(mktemp -d)"
-          # Bild + Manifest (damit sich ein kaputter Rig/Pose-Stand auch ohne
-          # Artifact-Download nachvollziehen laesst: Gelenke, Rig-Audit,
-          # Warnungen). Wird bei jedem Lauf ersetzt.
+          # Ergebnis = nur das Bild. Das Manifest bleibt aus dem Branch
+          # heraus (keine Analyse-Dateien), wandert aber in die Step Summary.
           cp render_avatar.png "$TMP/latest.png"
           cp render_avatar.png "$TMP/${SAFE_NAME}.png"
           if [ -f build/manifest.json ]; then
-            cp build/manifest.json "$TMP/manifest.json"
-            python3 - "$TMP/manifest.json" >> "$GITHUB_STEP_SUMMARY" <<'PYEOF'
+            python3 - build/manifest.json >> "$GITHUB_STEP_SUMMARY" <<'PYEOF'
           import json, sys
           data = json.load(open(sys.argv[1], encoding="utf-8"))
           audit = (data.get("rig_audit") or {})

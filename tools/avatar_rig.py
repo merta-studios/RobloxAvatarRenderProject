@@ -805,35 +805,34 @@ def _distal_point_local(mesh: MeshData, joint_rot: Matrix3,
     return _face_center(mesh, (-up_local[0], -up_local[1], -up_local[2]))
 
 
-def _attachment_matches_face(mesh: MeshData,
-                             position: Tuple[float, float, float],
-                             joint_rot: Matrix3,
-                             face: str = "top") -> bool:
-    """Liegt ein Attachment an der erwarteten Deckflaeche des Segments?
+def _attachment_near_face(mesh: MeshData,
+                          position: Tuple[float, float, float],
+                          placed_rot: Matrix3,
+                          face: str = "top") -> bool:
+    """Liegt das Attachment auf der erwarteten Seite des Segments?
 
-    R15-Attachments fuer das *Eltern*-Gelenk liegen am oberen Ende eines
-    Glieds (face="top"), das fuer das *Kind* am unteren (face="bottom").
-    Ein Attachment mitten im Teil - typisch fuer konvertierte Bundles mit
-    Platzhalter ``(0,0,0)`` - wuerde das Segment halb ueberlappen lassen und
-    den Drehpunkt in die Teilmitte legen; es wird daher wie ein fehlendes
-    Attachment behandelt.
+    ``face="top"``: das Gelenk sitzt am oberen Ende (Kind-Attachment des
+    Eltern-Gelenks), ``face="bottom"``: am unteren. Konvertierte Bundles
+    tragen oft Platzhalter ``(0,0,0)`` - das liegt in der Teilmitte und
+    liesse das Segment zur Haelfte im Nachbarglied stecken (Drehpunkt
+    mitten im Teil, Naht ueberlappt). Bewusst tolerant: nur die *falsche*
+    Haelfte bzw. exakt die Mitte wird verworfen.
     """
     if mesh.is_empty:
         return False
-    axis_local = _mat3_vec(_mat3_transpose(joint_rot), (0.0, 1.0, 0.0))
+    axis_local = _mat3_vec(_mat3_transpose(placed_rot), (0.0, 1.0, 0.0))
     length = _dot(axis_local, axis_local) ** 0.5
     if length < 1e-9:
         return True
     direction = (axis_local[0] / length, axis_local[1] / length,
                  axis_local[2] / length)
-    projections = [_dot(p, direction) for p in mesh.positions]
-    extent = max(projections) - min(projections)
-    center = (max(projections) + min(projections)) / 2.0
+    values = [_dot(p, direction) for p in mesh.positions]
+    center = (max(values) + min(values)) / 2.0
     value = _dot(position, direction)
-    margin = 0.20 * extent
+    tol = max(1e-6, 0.02 * (max(values) - min(values)))
     if face == "bottom":
-        return value < center - margin
-    return value > center + margin
+        return value < center - tol
+    return value > center + tol
 
 
 def _attachment_is_plausible(mesh: MeshData,
@@ -936,8 +935,10 @@ def assemble_r15_rig(
         """
         mesh, atts, _transparent = seg_lookup[seg_name]
         own = atts.get(att_name)
+        child_rot = own[1] if own is not None else IDENTITY_MAT3
+        placed_rot = _mat3_mul(parent_att[1], _mat3_transpose(child_rot))
         if own is not None and _attachment_is_plausible(mesh, own[0]) and \
-                _attachment_matches_face(mesh, own[0], parent_att[1], face):
+                _attachment_near_face(mesh, own[0], placed_rot, face):
             return own
         if own is None:
             reason = "fehlt"
@@ -948,9 +949,12 @@ def assemble_r15_rig(
         notes.append(
             f"Segment '{seg_name}': Attachment '{att_name}' {reason} - "
             "Anschluss aus der Mesh-Geometrie abgeleitet (Naht bleibt zu).")
-        point = (_proximal_point_local(mesh, parent_att[1], inward_world=inward_world)
-                 if face == "top" else _distal_point_local(mesh, parent_att[1]))
-        return (point, IDENTITY_MAT3)
+        # Orientierung beibehalten: konvertierte Legacy-Bundles haben oft
+        # gedrehte Parts - mit Identitaets-Rotation wuerde das Segment
+        # schief sitzen und alle Folgegelenke mitziehen.
+        point = (_proximal_point_local(mesh, placed_rot, inward_world=inward_world)
+                 if face == "top" else _distal_point_local(mesh, placed_rot))
+        return (point, child_rot)
 
     def _chain_next_joint(
         seg_name: str,
@@ -993,6 +997,9 @@ def assemble_r15_rig(
             if att is None:
                 att = (_face_center(placed, (0.0, -1.0, 0.0)), parent_att[1])
                 world_atts[att_name] = att
+                notes.append(
+                    f"Gelenk '{att_name}' aus der Geometrie von '{seg_name}' "
+                    "abgeleitet (untere Deckflaeche).")
             joint_spans[att_name] = _dist3(att[0], parent_att[0])
         if att is None:
             # Kein platziertes Segment: konservativ gerade nach unten.
