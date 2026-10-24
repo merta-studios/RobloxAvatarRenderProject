@@ -1140,8 +1140,16 @@ def weld_accessory(
     else:
         sh = rig.scales_body[1]
         scale_vec = (sh, sh, sh)
-    local_mesh, local_atts, _ = _scale_part_local(mp, scale_vec,
-                                                  rescale_to_size=False)
+    # Roblox-Render-Semantik am Accessoire: SpecialMesh/FileMesh-Geometrie
+    # wird nur mit Mesh.Scale multipliziert (skaliert NICHT auf die
+    # Part-Groesse), MeshPart-Geometrie dagegen skaliert auf die
+    # Size-Property. (Roblox-Doku: "The mesh of a MeshPart scales on all
+    # axis depending on the Size property of the MeshPart, the mesh of a
+    # SpecialMesh does not.")
+    is_legacy_mesh = mp.get("rbxm_class") in (
+        "SpecialMesh", "BlockMesh", "CylinderMesh", "FileMesh")
+    local_mesh, local_atts, _ = _scale_part_local(
+        mp, scale_vec, rescale_to_size=not is_legacy_mesh)
     if legacy:
         hm = hat_mount or {}
         p_acc = hm.get("pos") or (0.0, 0.0, 0.0)

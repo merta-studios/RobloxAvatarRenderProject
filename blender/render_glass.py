@@ -1329,13 +1329,20 @@ def emit_projection_notices(cam, imported_parts, manifest, base_dir: str,
                 continue
             raw = part.get("raw_size") or []
             rsize = part.get("rbxm_size") or []
+            atts = part.get("handle_atts") or {}
+            att_txt = "; ".join(
+                f"{k}=({','.join(f'{float(v):.2f}' for v in p)})"
+                for k, p in atts.items()) or "keine"
             acc_bits.append(
                 f"{(part or {}).get('name')}: Modus {part.get('mode')}, "
-                f"Kette {part.get('ancestry')}, platziert "
+                f"Klasse {part.get('rbxm_class')}, Kette {part.get('ancestry')}, "
+                + "MeshScale "
+                + ("x".join(f"{float(v):.2f}" for v in part.get("mesh_scale") or []))
+                + ", platziert "
                 + ("x".join(f"{float(v):.2f}" for v in raw) if raw else "?")
-                + " Studs, RBXM-Size "
+                + ", RBXM-Size "
                 + ("x".join(f"{float(v):.2f}" for v in rsize) if rsize else "?")
-                + f" - {part.get('note')}")
+                + f", Handle-Atts: {att_txt} - {part.get('note')}")
         for _i in range(0, len(acc_bits), 2):
             _ci_notice(f"Accessory Platzierung ({_i // 2 + 1})",
                        " || ".join(acc_bits[_i:_i + 2]))
