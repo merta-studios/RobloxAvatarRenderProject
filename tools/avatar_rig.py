@@ -677,14 +677,23 @@ def _merge_with_spans(
 def _scale_part_local(
     mp: Dict[str, Any],
     scale_vec: Tuple[float, float, float],
+    rescale_to_size: bool = True,
 ) -> Tuple[MeshData, Dict[str, Tuple[Tuple[float, float, float], Matrix3]], bool]:
-    """Bringt ein einzelnes RBXM-Segment samt Attachments in skalierten lokalen Stud-Raum."""
+    """Bringt ein einzelnes RBXM-Segment samt Attachments in skalierten lokalen Stud-Raum.
+
+    ``rescale_to_size=False``: MeshPart-Meshes NICHT auf die Size-Property
+    des Parts stretchen. Fuer Accessoire-Handles ist das die Roblox-
+    Semantik (Weld = exakte Attachment-Koinzidenz, Geometrie 1:1 in
+    Studs); konvertierte Legacy-Handles tragen oft Platzhalter-Sizes wie
+    2x2x2, die einen kleinen Hut auf das Dreifache aufblaehen wuerden.
+    """
     mesh: MeshData = mp["mesh"]
     sx_s, sy_s, sz_s = scale_vec
     transparent = float(mp.get("transparency") or 0.0) >= 0.99
 
-    if mp.get("rbxm_class") == "SpecialMesh":
-        ms = mp.get("mesh_scale") or (1.0, 1.0, 1.0)
+    if mp.get("rbxm_class") == "SpecialMesh" or not rescale_to_size:
+        ms = mp.get("mesh_scale") if mp.get("rbxm_class") == "SpecialMesh" else None
+        ms = ms or (1.0, 1.0, 1.0)
         mo = mp.get("mesh_offset") or (0.0, 0.0, 0.0)
         fx, fy, fz = float(ms[0]) * sx_s, float(ms[1]) * sy_s, float(ms[2]) * sz_s
         ox, oy, oz = float(mo[0]) * sx_s, float(mo[1]) * sy_s, float(mo[2]) * sz_s
@@ -1131,7 +1140,8 @@ def weld_accessory(
     else:
         sh = rig.scales_body[1]
         scale_vec = (sh, sh, sh)
-    local_mesh, local_atts, _ = _scale_part_local(mp, scale_vec)
+    local_mesh, local_atts, _ = _scale_part_local(mp, scale_vec,
+                                                  rescale_to_size=False)
     if legacy:
         hm = hat_mount or {}
         p_acc = hm.get("pos") or (0.0, 0.0, 0.0)
