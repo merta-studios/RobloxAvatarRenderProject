@@ -37,7 +37,7 @@ import math
 import os
 import sys
 import time
-from typing import List, Tuple
+from typing import List
 
 import bpy
 from mathutils import Vector
@@ -1337,29 +1337,39 @@ def emit_projection_notices(cam, imported_parts, manifest, base_dir: str,
                    " || ".join(proj_bits[_i:_i + 4]))
 
     # ASCII-Silhouette der posierten Geometrie aus Render-Sicht: macht die
-    # Form (Pose, Montage, Accessory) ohne Bildbetrachtung lesbar.
-    all_pts: List[Tuple[float, float, float]] = []
+    # Form (Pose, Montage, Accessory) ohne Bildbetrachtung lesbar. Nutzt die
+    # ECHTE Blender-Geometrie (obj.data.vertices * matrix_world) - nicht die
+    # OBJ-Dateien (deren Lesen fuer Kopf/Accessory schon mal leer ging).
+    cols, rows = 56, 40
+    grid = [[0] * cols for _ in range(rows)]
+    part_chars = []
     for obj, part in imported_parts:
-        obj_path = os.path.join(base_dir, str((part or {}).get("obj") or ""))
-        verts = _read_obj_vertices(obj_path)
-        if verts:
-            # Import-Konvention: Blender = (x, z, y)
-            all_pts.extend((p[0], p[2], p[1]) for p in verts)
-    if all_pts:
-        proj = _world_to_view(cam, [(p[0], p[1], p[2]) for p in all_pts])
-        cols, rows = 56, 40
-        grid = [[0] * cols for _ in range(rows)]
+        name = str((part or {}).get("name") or obj.name)
+        verts = [tuple(obj.matrix_world @ v.co) for v in obj.data.vertices]
+        part_chars.append(f"{name}={len(verts)}v")
+        if name == "kopf_mesh":
+            ch_bit = 1
+        elif (part or {}).get("accessory") or name == "Handle" or "handle" in name.lower():
+            ch_bit = 2
+        else:
+            ch_bit = 4
+        proj = _world_to_view(cam, verts)
         for u, v in proj:
             if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
                 continue
             cx = min(cols - 1, int(u * cols))
             cy = min(rows - 1, int((1.0 - v) * rows))
-            grid[cy][cx] += 1
+            grid[cy][cx] |= ch_bit
+    if any(any(c for c in row) for row in grid):
         lines = []
         for row in grid:
-            line = "".join(" " if c == 0 else "." if c == 1 else
-                           "*" if c <= 3 else "#" for c in row)
+            line = "".join(
+                " " if c == 0 else
+                "H" if c == 1 else "A" if c == 2 else "HA" if c == 3 else
+                "#" if c == 4 else "H#" if c == 5 else "A#" if c == 6 else "#"
+                for c in row)
             lines.append("|" + line + "|")
+        _ci_notice("Silhouette Teile", ", ".join(part_chars))
         for _i in range(0, len(lines), 10):
             _ci_notice(f"Silhouette ({_i // 10 + 1})",
                        "\n".join(lines[_i:_i + 10]))
