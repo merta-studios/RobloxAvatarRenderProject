@@ -947,6 +947,16 @@ def fit_camera_with_blender(cam, focus_xy, head_z, feet_z, content_points,
     target_top = 1.0 - top_percent / 100.0   # y-Koordinate (0 unten, 1 oben)
     target_bottom = bottom_percent / 100.0
 
+    # Prozentziele gelten fuer den GANZEN sichtbaren Avatar: Ragt ein
+    # Accessoire (Frisur, Krone, Rucksack) ueber die Kopfoberkante oder
+    # unter die Fuesse, wird es zum Bezugspunkt - sonst beschnitt die
+    # Kopf/Fuess-Justierung die Frisur an der Bildoberkante (Roblox-
+    # Thumbnails rahmen den kompletten Charakter mit Rand ein).
+    if content_points:
+        content_zs = [float(p[2]) for p in content_points]
+        head_z = max(head_z, max(content_zs))
+        feet_z = min(feet_z, min(content_zs))
+
     t0 = time.monotonic()
     scene = bpy.context.scene
     projektionen = [0]
@@ -1314,8 +1324,8 @@ def emit_projection_notices(cam, imported_parts, manifest, base_dir: str,
             uv = _world_to_view(cam, wpts)
             us = [p[0] for p in uv]
             vs = [p[1] for p in uv]
-            img_bits.append(f"{name}: u[{min(us):.2f}..{max(us):.2f}] "
-                            f"v[{min(vs):.2f}..{max(vs):.2f}]")
+            img_bits.append(f"{name}: u[{min(us):.3f}..{max(us):.3f}] "
+                            f"v[{min(vs):.3f}..{max(vs):.3f}]")
         for _i in range(0, len(img_bits), 3):
             _ci_notice(f"Silhouette Bild-BBox ({_i // 3 + 1})",
                        " || ".join(img_bits[_i:_i + 3]))
