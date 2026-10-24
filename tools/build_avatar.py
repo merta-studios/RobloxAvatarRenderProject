@@ -1710,7 +1710,8 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
                 f"dauer_s={emo.get('dauer_s')} auswahl='{emo.get('auswahl')}' "
                 f"gelenke={emo.get('gelenke')} "
                 f"thumbnail={emo.get('thumbnail')} "
-                f"marker={emo.get('marker')}")
+                f"marker={emo.get('marker')} "
+                f"key_zeiten={emo.get('key_zeiten')}")
             if emo.get("typ") == "curves":
                 ci_notice("Diagnose 4c/6 Emote-Marker",
                           f"debug={emo.get('marker_debug')} "
