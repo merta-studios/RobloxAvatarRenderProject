@@ -1244,10 +1244,94 @@ def setup_camera(lo: Vector, hi: Vector, res_x: int, res_y: int,
 # Hintergrundbild: Flaeche exakt hinter dem Avatar, bis zum Bildrand
 # ---------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------- #
+# CI-Diagnose: Teil-/Segment-Projektion ins Bild als GitHub-Notice            #
+# --------------------------------------------------------------------------- #
+
+def _ci_escape(text) -> str:
+    return (str(text).replace("%", "%25").replace("\r", "%0D")
+            .replace("\n", "%0A").replace(":", "%3A"))
+
+
+def _ci_notice(title: str, message: str) -> None:
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    print(f"::notice title={_ci_escape(title)}::{_ci_escape(message)}")
+
+
+def _read_obj_vertices(path: str) -> list:
+    """OBJ-Vertices in Dateireihenfolge lesen (x, y, z)."""
+    verts = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.startswith("v "):
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        try:
+                            verts.append((float(parts[1]), float(parts[2]),
+                                          float(parts[3])))
+                        except ValueError:
+                            continue
+    except OSError:
+        pass
+    return verts
+
+
+def emit_projection_notices(cam, imported_parts, manifest, base_dir: str,
+                            res_x: int, res_y: int) -> None:
+    """Projiziert Teil- und Segment-Bounding-Boxen ins Pixelbild.
+
+    Teil-BBoxen kommen aus Blender selbst (obj.bound_box, Weltraum) - das
+    ist exakt die Geometrie, die gerendert wird. Segment-BBoxen werden aus
+    der OBJ-Datei gelesen (Vertex-Reihenfolge == Span-Indizes) und mit der
+    Import-Achsenkonvention (forward=-Z, up=Y: Blender=(x, z, y)) in den
+    Blender-Raum geholt. Die Konsistenz beider Quellen wird pro Teil
+    mitgeteilt, damit eine falsche Konvention sofort auffaellt.
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    spans_map = manifest.get("segment_spans") or {}
+
+    def _proj_rect(points_blender):
+        if not points_blender:
+            return None
+        proj = _world_to_view(cam, [(p[0], p[1], p[2]) for p in points_blender])
+        pxs = [int(round(p[0] * res_x)) for p in proj]
+        pys = [int(round((1.0 - p[1]) * res_y)) for p in proj]
+        return min(pxs), max(pxs), min(pys), max(pys)
+
+    for obj, part in imported_parts:
+        name = str((part or {}).get("name") or obj.name)
+        mw = obj.matrix_world
+        world_corners = [tuple(mw @ Vector(c)) for c in obj.bound_box]
+        rect = _proj_rect(world_corners)
+        bits = []
+        if rect:
+            bits.append(f"ganzes Teil px x[{rect[0]}..{rect[1]}] y[{rect[2]}..{rect[3]}]")
+        spans = spans_map.get(name) or []
+        if spans:
+            obj_path = os.path.join(base_dir, str((part or {}).get("obj") or ""))
+            verts = _read_obj_vertices(obj_path)
+            for seg, v0, v1 in spans:
+                v0, v1 = int(v0), int(v1)
+                sub = verts[v0:v1] if verts else []
+                if not sub:
+                    bits.append(f"{seg}: keine Vertexdaten")
+                    continue
+                # Achsenkonvention des Imports: Blender = (x, z, y)
+                bl = [(p[0], p[2], p[1]) for p in sub]
+                r = _proj_rect(bl)
+                if r:
+                    bits.append(f"{seg} ({v1 - v0} v) px x[{r[0]}..{r[1]}] "
+                                f"y[{r[2]}..{r[3]}]")
+        if bits:
+            _ci_notice(f"Projektion {name}", " | ".join(bits))
+
+
 def background_plane_geometry(cam_location, forward, tan_h: float, tan_v: float,
                               points, margin: float = 0.08):
     """Position und Groesse der Hintergrundflaeche (reine Zahlen, testbar).
-
     Die Flaeche steht senkrecht zur Blickrichtung, hinter dem gesamten Avatar,
     und ist so gross, dass sie den kompletten Bildausschnitt fuellt.
 
@@ -1652,6 +1736,14 @@ def main() -> int:
         focus_hi=focus_hi,
         camera_distance_offset_studs=camera_distance_offset,
     )
+
+    # CI-Diagnose: Wo landet jedes Teil/Segment im Bild? (nur in GitHub
+    # Actions aktiv, sonst still.)
+    try:
+        emit_projection_notices(cam, imported_parts, manifest, base_dir,
+                                res_x, res_y)
+    except Exception as exc:  # pragma: no cover - Diagnose darf nie brechen
+        log(f"Hinweis: Projektions-Diagnose nicht moeglich ({exc}).")
 
     # Hintergrundbild auf eine Flaeche exakt hinter dem Avatar legen.
     background_plane = None

@@ -1524,6 +1524,14 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         "ignored": ignored,
         "layered_ausgelassen": layered_ausgelassen,
         "warnings": warnings,
+        # R15-Segment-Spannen (Vertex-Indizes je Koerperteil in OBJ-
+        # Reihenfolge) - die Render-Diagnose projiziert damit jedes
+        # Segment einzeln ins Bild.
+        "segment_spans": (
+            {part: [[seg, int(v0), int(v1)] for seg, v0, v1 in spans]
+             for part, spans in rig_avatar.segment_spans.items()}
+            if use_r15_rig and rig_avatar is not None else {}
+        ),
         "stats": {
             "parts": len(parts),
             "body_parts": len(body_parts),
