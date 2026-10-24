@@ -1265,6 +1265,14 @@ def load_emote_pose(emote_id: Optional[int] = None,
         info["marker_debug"] = clip.get("marker_debug") or []
         key_zeiten = clip.get("key_zeiten") or []
         info["key_zeiten"] = [round(t, 4) for t in key_zeiten]
+        # RotationOrder je Gelenk (EulerRotationCurve-Token; 0=XYZ, 1=XZY,
+        # 2=YZX, 3=YXZ, 4=ZXY, 5=ZYX gemaess Enum.RotationOrder).
+        orders = {}
+        for name, entry in (clip.get("gelenke") or {}).items():
+            rot = entry.get("rotation") or {}
+            if rot.get("art") == "euler":
+                orders[name] = rot.get("ordnung")
+        info["rotation_orders"] = orders
         t, auswahl = select_curve_frame(laenge, meta.get("ThumbnailTime"),
                                         marker, zeit, key_zeiten)
         info["auswahl"] = auswahl
@@ -1282,7 +1290,9 @@ def load_emote_pose(emote_id: Optional[int] = None,
     # Marker-Diagnose relevanten Klassen (rbxm-Diagnose 4c).
     markant = [l for l in prop_log
                if any(c in l for c in ("MarkerCurve.", "CurveAnimation.",
-                                       "AnimationRigData"))]
+                                       "AnimationRigData",
+                                       "EulerRotationCurve.RotationOrder",
+                                       "RotationCurve.ValuesAndTimes"))]
     info["prop_log"] = markant[:40] + [f"(insgesamt {len(prop_log)} PROP-Chunks)"]
     if unbekannt:
         log("      ! Nicht-R15-Gelenke im Emote (ignoriert): "

@@ -1791,6 +1791,7 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
             if emo.get("typ") == "curves":
                 ci_notice("Diagnose 4c/6 Emote-Marker",
                           f"debug={emo.get('marker_debug')} "
+                          f"orders={emo.get('rotation_orders')} "
                           f"prop_log={emo.get('prop_log')}")
             struktur = str(emo.get("struktur") or "")
             if struktur:
