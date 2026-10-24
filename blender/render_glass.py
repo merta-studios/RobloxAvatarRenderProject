@@ -1370,6 +1370,32 @@ def emit_projection_notices(cam, imported_parts, manifest, base_dir: str,
                 for c in row)
             lines.append("|" + line + "|")
         _ci_notice("Silhouette Teile", ", ".join(part_chars))
+        # Welt-BBox je Objekt (data.vertices * matrix_world) vs. rohe
+        # OBJ-Datei-Werte (Import-Swap x,z,y) - deckt Zuordnungs-/Transform-
+        # Fehler sofort auf.
+        box_bits: List[str] = []
+        for obj, part in imported_parts:
+            name = str((part or {}).get("name") or obj.name)
+            wpts = [tuple(obj.matrix_world @ v.co) for v in obj.data.vertices]
+            if not wpts:
+                box_bits.append(f"{name}: leer")
+                continue
+            lo = [min(p[i] for p in wpts) for i in range(3)]
+            hi = [max(p[i] for p in wpts) for i in range(3)]
+            obj_path = os.path.join(base_dir, str((part or {}).get("obj") or ""))
+            raw = _read_obj_vertices(obj_path)
+            rtxt = ""
+            if raw:
+                rlo = [min(p[i] for p in raw) for i in range(3)]
+                rhi = [max(p[i] for p in raw) for i in range(3)]
+                rtxt = (f" objSwap=x[{rlo[0]:.2f}..{rhi[0]:.2f}]"
+                        f"y[{rlo[2]:.2f}..{rhi[2]:.2f}]z[{rlo[1]:.2f}..{rhi[1]:.2f}]")
+            box_bits.append(
+                f"{name}: welt=x[{lo[0]:.2f}..{hi[0]:.2f}]"
+                f"y[{lo[1]:.2f}..{hi[1]:.2f}]z[{lo[2]:.2f}..{hi[2]:.2f}]{rtxt}")
+        for _i in range(0, len(box_bits), 3):
+            _ci_notice(f"Silhouette BBox ({_i // 3 + 1})",
+                       " || ".join(box_bits[_i:_i + 3]))
         for _i in range(0, len(lines), 10):
             _ci_notice(f"Silhouette ({_i // 10 + 1})",
                        "\n".join(lines[_i:_i + 10]))
