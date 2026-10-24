@@ -1319,6 +1319,26 @@ def emit_projection_notices(cam, imported_parts, manifest, base_dir: str,
         for _i in range(0, len(img_bits), 3):
             _ci_notice(f"Silhouette Bild-BBox ({_i // 3 + 1})",
                        " || ".join(img_bits[_i:_i + 3]))
+        # Accessory-Platzierung - bewusst GANZ AM ENDE: GitHub schneidet
+        # die Annotation-Liste pro Check-Run (~20) und zeigt sie in
+        # umgekehrter Reihenfolge, daher ueberleben nur die letzten
+        # Notices zuverlaessig.
+        acc_bits: List[str] = []
+        for obj, part in imported_parts:
+            if (part or {}).get("kind") != "accessory":
+                continue
+            raw = part.get("raw_size") or []
+            rsize = part.get("rbxm_size") or []
+            acc_bits.append(
+                f"{(part or {}).get('name')}: Modus {part.get('mode')}, "
+                f"Kette {part.get('ancestry')}, platziert "
+                + ("x".join(f"{float(v):.2f}" for v in raw) if raw else "?")
+                + " Studs, RBXM-Size "
+                + ("x".join(f"{float(v):.2f}" for v in rsize) if rsize else "?")
+                + f" - {part.get('note')}")
+        for _i in range(0, len(acc_bits), 2):
+            _ci_notice(f"Accessory Platzierung ({_i // 2 + 1})",
+                       " || ".join(acc_bits[_i:_i + 2]))
         for _i in range(0, len(lines), 10):
             _ci_notice(f"Silhouette ({_i // 10 + 1})",
                        "\n".join(lines[_i:_i + 10]))
