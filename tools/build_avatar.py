@@ -1712,9 +1712,9 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
                     f"y[{lo[1]:.2f}..{hi[1]:.2f}]z[{lo[2]:.2f}..{hi[2]:.2f}] "
                     f"size={stxt} pos={ptxt}{itxt}"
                     + ((" atts: " + ", ".join(atxt)) if atxt else ""))
-        for _i in range(0, len(raw_lines), 4):
-            ci_notice(f"Diagnose 2b/6 Segment-Rohdaten ({_i // 4 + 1})",
-                      " | ".join(raw_lines[_i:_i + 4]))
+        for _i in range(0, len(raw_lines), 8):
+            ci_notice(f"Diagnose 2b/6 Segment-Rohdaten ({_i // 8 + 1})",
+                      " | ".join(raw_lines[_i:_i + 8]))
 
         # 2c) Gelenk-Frames (Bind-Welt-Rotation der Attachments) - die
         #     Achsen, um die die Pose rotiert.
@@ -1725,9 +1725,8 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
                 continue
             rx, ry, rz = _mat3_euler_deg(m)
             jflines.append(f"{k}=({rx:.0f},{ry:.0f},{rz:.0f}deg)")
-        for _i in range(0, len(jflines), 8):
-            ci_notice(f"Diagnose 2c/6 Gelenk-Frames ({_i // 8 + 1})",
-                      " | ".join(jflines[_i:_i + 8]))
+        if jflines:
+            ci_notice("Diagnose 2c/6 Gelenk-Frames", " | ".join(jflines))
 
         arm: List[str] = []
         for side in ("Left", "Right"):
