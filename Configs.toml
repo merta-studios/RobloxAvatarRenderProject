@@ -81,7 +81,7 @@ drehung_grad = 0
 #
 #     Schlägt das Laden fehl (falsche ID, Netzwerk), wird automatisch die
 #     Stand-Pose gerendert und eine Warnung ins Log geschrieben.
-pose = "emote:4272351660"
+pose = "emote:87757463565936"
 
 
 # -----------------------------------------------------------------------------
@@ -130,7 +130,7 @@ emote_datei = ""
 #  automatisch wieder auf false. So rendert es nicht bei jeder kleinen
 #  Änderung erneut – einfach auf true stellen, wenn ein neues Bild gewünscht
 #  ist.
-render_bei_aenderung = false
+render_bei_aenderung = true
 
 
 # -----------------------------------------------------------------------------
