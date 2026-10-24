@@ -443,18 +443,23 @@ def setup_pose(config: Dict[str, Any],
                use_r15_rig: bool,
                warnings: List[str],
                client: Any = None,
-               dry_run: bool = False) -> Tuple[Optional[avatar_pose.PoseContext], Dict[str, Any]]:
+               dry_run: bool = False,
+               avatar: Optional[Dict[str, Any]] = None,
+               user_id: Optional[int] = None) -> Tuple[Optional[avatar_pose.PoseContext], Dict[str, Any]]:
     """Baut den Pose-Kontext (None = Stand-Pose) aus der Configs.toml.
 
     Die Pose wird bewusst **nach** dem fertigen Rig angewendet: Avatar laden,
     RBXM parsen und Gelenke setzen bleiben unveraendert, erst danach werden
     die Vertices um die Gelenkpunkte gedreht.
 
-    ``pose`` kann entweder ein Name aus Posen.toml sein oder eine Emote-
-    Referenz (``"emote:3576893107"``): Dann laedt :mod:`emote_pose` das
-    Emote-Asset und uebersetzt genau den Frame in eine Pose, den auch
-    Roblox' Katalog-Vorschaubild zeigt (``ThumbnailKeyframe`` bzw.
-    ``ThumbnailTime`` aus dem Asset, Fallback Mittel-Keyframe/halbe Dauer).
+    ``pose`` kann ein Name aus Posen.toml, eine Emote-Referenz
+    (``"emote:3576893107"``) oder ``"ausgeruestet"`` sein. Bei einem Emote
+    laedt :mod:`emote_pose` das Asset und uebersetzt genau den Frame, den
+    auch Roblox' Katalog-Vorschaubild zeigt (``ThumbnailKeyframe`` bzw.
+    ``ThumbnailTime``, Fallback Mittel-Keyframe/halbe Dauer).
+    ``"ausgeruestet"`` laedt die Pose, die der Account selbst traegt
+    (Pose-/Idle-Animation, sonst ausgeruestetes Emote) - siehe
+    :func:`emote_pose.load_equipped_pose`.
     """
     pose_name = str((config or {}).get("pose") or "None").strip()
     info: Dict[str, Any] = {"name": pose_name or "None", "aktiv": False,
@@ -465,29 +470,67 @@ def setup_pose(config: Dict[str, Any],
 
     # Gelenke einmalig bestimmen - fuer Posen.toml-Namen und Emotes gleich.
     part_meshes = {part.name: part.mesh for part in body_parts}
-    joints = avatar_pose.joints_from_parts(part_meshes, metrics)
-    if use_r15_rig and rig_avatar is not None:
-        # Exakte R15-Gelenke aus den *RigAttachment-Daten haben Vorrang.
-        joints.update(rig_avatar.joint_positions)
+    if use_r15_rig and rig_avatar is not None and rig_avatar.joint_positions:
+        # NUR die echten RigAttachment-Gelenke verwenden. Frueher wurden die
+        # BBox-Schaetzungen zuerst berechnet und nur teilweise ueberschrieben;
+        # fehlte ein Gelenk im Rig, blieb ein geschaetzter Pivot stehen, der
+        # sichtbar neben dem Gelenk lag (Pose reisst an Schulter/Ellbogen auf).
+        joints = dict(rig_avatar.joint_positions)
+    else:
+        joints = avatar_pose.joints_from_parts(part_meshes, metrics)
+
+    # Lokale Emote-/Animationsdatei und expliziter Frame gelten fuer Emotes
+    # UND fuer die ausgeruestete Pose.
+    datei = str((config or {}).get("_emote_pfad") or "").strip()
+    if not datei:
+        raw_datei = str((config or {}).get("emote_datei") or "").strip()
+        if raw_datei:
+            base = os.path.dirname(os.path.abspath(
+                (config or {}).get("_pfad", "Configs.toml")))
+            candidate = (raw_datei if os.path.isabs(raw_datei)
+                         else os.path.join(base, raw_datei))
+            datei = candidate if os.path.isfile(candidate) else raw_datei
+    zeit_raw = (config or {}).get("emote_zeit")
+    try:
+        zeit = float(zeit_raw) if zeit_raw is not None else -1.0
+    except (TypeError, ValueError):
+        zeit = -1.0
+    zeit = zeit if zeit >= 0.0 else None
+
+    # ---- Ausgeruestete Pose des Accounts? --------------------------------
+    equipped_mode = emote_pose.parse_equipped_reference(pose_name)
+    if equipped_mode is not None:
+        if dry_run and not datei:
+            warnings.append(
+                "Dry-Run: die ausgeruestete Pose "
+                f"('{pose_name}') wird nicht geladen - es wird die Stand-Pose "
+                "gerendert (oder 'emote_datei' auf eine lokale Datei zeigen "
+                "lassen).")
+            return None, info
+        try:
+            pose_dict, settings, emote_info = emote_pose.load_equipped_pose(
+                avatar=avatar, client=client, user_id=user_id, datei=datei,
+                zeit=zeit, prefer=equipped_mode, log=log, warnings=warnings)
+        except emote_pose.EmoteError as exc:
+            warnings.append(
+                f"Ausgeruestete Pose '{pose_name}' konnte nicht geladen werden "
+                f"({exc}) - es wird die Stand-Pose gerendert.")
+            return None, info
+        context = avatar_pose.PoseContext(
+            pose_dict, joints, settings=settings,
+            rig=rig_avatar if use_r15_rig else None)
+        info["name"] = pose_name
+        info["aktiv"] = context.active
+        info["einstellungen"] = settings
+        info["details"] = emote_pose.emote_summary(emote_info)
+        info["emote"] = emote_info
+        info["equipped"] = emote_info.get("equipped")
+        log(f"      Pose '{pose_name}': {info['details']}")
+        return context, info
 
     # ---- Emote-Referenz? ("emote:123" / Katalog-URL / reine Asset-ID) ----
     emote_id = emote_pose.parse_emote_reference(pose_name)
     if emote_id is not None:
-        datei = str((config or {}).get("_emote_pfad") or "").strip()
-        if not datei:
-            raw_datei = str((config or {}).get("emote_datei") or "").strip()
-            if raw_datei:
-                base = os.path.dirname(os.path.abspath(
-                    (config or {}).get("_pfad", "Configs.toml")))
-                candidate = (raw_datei if os.path.isabs(raw_datei)
-                             else os.path.join(base, raw_datei))
-                datei = candidate if os.path.isfile(candidate) else raw_datei
-        zeit_raw = (config or {}).get("emote_zeit")
-        try:
-            zeit = float(zeit_raw) if zeit_raw is not None else -1.0
-        except (TypeError, ValueError):
-            zeit = -1.0
-        zeit = zeit if zeit >= 0.0 else None
         if dry_run and not datei:
             warnings.append(
                 "Dry-Run: Emote "
@@ -1111,6 +1154,11 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         scales,
         headless=headless["active"],
     )
+    # Hinweise des Gelenk-Audits (abgeleitete Attachments, ersetzte
+    # Platzhalter-Gelenke) sichtbar machen - sie erklaeren, warum ein Teil
+    # ggf. anders sitzt als im Bundle.
+    for note in getattr(rig_avatar, "notes", [])[:12]:
+        warnings.append(f"Rig-Audit: {note}")
 
     if use_r15_rig:
         metrics = rig_avatar.metrics
@@ -1170,7 +1218,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     # RBXM-Parsing und Rig-Aufbau bleiben davon komplett unberuehrt.
     pose_ctx, pose_info = setup_pose(config or {}, body_parts, metrics,
                                      rig_avatar, use_r15_rig, warnings,
-                                     client=client, dry_run=dry_run)
+                                     client=client, dry_run=dry_run,
+                                     avatar=avatar_raw, user_id=user_id)
 
     # Oberkante des Kopfes in Weltkoordinaten (nach der Pose). Wichtig fuer
     # Headless-Avatare: dort gibt es kein Kopf-Mesh, aber der Bildausschnitt
@@ -1548,6 +1597,13 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
              for part, spans in rig_avatar.segment_spans.items()}
             if use_r15_rig and rig_avatar is not None else {}
         ),
+        # Gelenk-Audit: Abstand Eltern->Kind-Gelenk in Studs (0 = Naht zu)
+        # plus die Hinweise, wenn ein Attachment ersetzt werden musste.
+        "rig_audit": {
+            "joint_spans": {k: round(float(v), 4) for k, v in
+                            getattr(rig_avatar, "joint_spans", {}).items()},
+            "hinweise": list(getattr(rig_avatar, "notes", [])),
+        } if rig_avatar is not None else {},
         "stats": {
             "parts": len(parts),
             "body_parts": len(body_parts),

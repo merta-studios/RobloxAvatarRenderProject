@@ -116,7 +116,7 @@ Werte werden vor dem Render geprüft (`tools/render_config.py`,
 | --- | --- |
 | `username` | Roblox-Username (früher `username.txt`) |
 | `drehung_grad` | Seitliche Drehung: `0` = frontal, `90` = rechte Seite, `-90` = linke Seite. Nur −90 … 90 ist erlaubt. |
-| `pose` | `None` = Stand-Pose, ein Name aus `Posen.toml` (z. B. `Winken`) oder ein Emote: `emote:<Asset-ID>` (z. B. `emote:3576893107`) |
+| `pose` | `None` = Stand-Pose, ein Name aus `Posen.toml` (z. B. `Winken`), ein Emote (`emote:<Asset-ID>`, z. B. `emote:3576893107`) oder die vom Account getragene Pose: `"ausgeruestet"` (auch `"ausgerüstet"`, `equipped`, `auto`, `getragen`; einschränkbar mit `"ausgeruestet:emote"` / `"ausgeruestet:idle"`) |
 | `emote_zeit` | `-1` (Standard) = Frame wie im Katalog-Vorschaubild (ThumbnailTime bzw. mittlerer benannter bzw. generierter Keyframe); `>= 0` = Zeitpunkt in Sekunden |
 | `emote_datei` | leer = Emote herunterladen; sonst Pfad zu einer lokalen `.rbxm`/`.rbxmx`-Datei |
 | *(Bildausschnitt)* | Steht **nicht** mehr in der Config: Jede Pose in `Posen.toml` definiert selbst, bis zu welchen Positionen man sehen kann (`sichtbar_oben_prozent`, `sichtbar_unten_prozent`, `kamera_abstand_studs`, `avatar_hoch_studs`). |
@@ -153,6 +153,17 @@ Dauer). KeyframeSequence- und CurveAnimation-Emotes (moderne UGC-Emotes)
 funktionieren beide; schlägt das Laden fehl, wird sicherheitshalber die
 Stand-Pose gerendert. Mit `emote_zeit` wählst du stattdessen einen
 expiziten Zeitpunkt, mit `emote_datei` eine lokale Emote-Datei statt Download.
+
+**Ausgerüstete Pose des Accounts:** Mit `pose = "ausgeruestet"` brauchst du
+keine Asset-ID – die Pipeline liest, was der Account gerade trägt, und wendet
+es an. Reihenfolge: `PoseAnimation` (Asset-Typ 56, „Avatar Pose“) →
+`IdleAnimation` (51, Standard-Idle) → ausgerüstete Emotes in Slot-Reihenfolge;
+die erste Variante, die sich laden lässt, wird gerendert. Mit
+`"ausgeruestet:emote"` bzw. `"ausgeruestet:idle"` beschränkst du die Suche,
+`emote_zeit` wählt den Frame (Standard: Vorschau-Frame bei Emotes, Anfang der
+Animation bei Posen/Idle), `emote_datei` hat weiterhin Vorrang. Welche Quelle
+verwendet wurde, steht im Log (`ausgeruestet: …`) und im Manifest unter
+`render.pose_details`.
 
 Die Werte sind Deltas zur Stand-Pose und drehen um die exakten Gelenk-Pivots
 (Schulter, Ellbogen, Hüfte, Knie … aus den RigAttachments); überblendet wird
@@ -252,6 +263,12 @@ Besonderheiten:
   `C1 = Kind-Attachment.CFrame`, d. h. Kind-Segment = `Eltern * C0 * C1⁻¹`
   – beide Attachment-Frames (Position **und** Orientierung) koinzidieren
   danach exakt. Das ergibt nahtlose Gelenke ohne geratene Winkel/Offsets;
+  fehlende oder als Platzhalter (`(0,0,0)`) mitten im Teil liegende
+  Attachments werden aus der Mesh-Geometrie an die Deckfläche des Segments
+  gelegt (statt an eine geratene Konstante), und ein einzelnes fehlendes
+  Segment (z. B. die Hand) ersetzt nicht mehr den ganzen Arm. Jeder solche
+  Eingriff steht als `Rig-Audit:`-Warnung im Log und im Manifest unter
+  `rig_audit`;
   Posen (Emotes) werden nach derselben Motor6D-Formel
   (`part1 = part0 * C0 * Transform * C1⁻¹`, RCC `EmoteUtility.lua`)
   **starr je Segment** im Frame des Eltern-Attachments angewandt.

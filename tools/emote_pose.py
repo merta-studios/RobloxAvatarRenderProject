@@ -119,6 +119,14 @@ class EmoteError(ValueError):
 
 _EMOTE_PREFIX_RE = re.compile(r"^\s*emote\s*[:=]?\s*(\d{1,16})\s*$", re.IGNORECASE)
 _CATALOG_URL_RE = re.compile(r"roblox\.com/(?:catalog|library)/(\d+)", re.IGNORECASE)
+#: "Ausgeruestete Pose": ohne Quelle wird Pose/Idle-Animation vor dem Emote
+#: probiert; ``ausgeruestet:emote`` bzw. ``ausgeruestet:idle`` erzwingt eine.
+_EQUIPPED_RE = re.compile(
+    r"^\s*(?:ausger(?:ue|ü)stet(?:e)?|equipped|auto(?:matisch)?|profil(?:pose)?"
+    r"|getragen(?:e)?)\s*(?:[:=]\s*(?P<source>\w+))?\s*$",
+    re.IGNORECASE)
+#: So viele Kandidaten werden hoechstens geladen (jeder kostet einen Download).
+MAX_EQUIPPED_CANDIDATES = 4
 
 
 def parse_emote_reference(value: Any) -> Optional[int]:
@@ -148,6 +156,29 @@ def parse_emote_reference(value: Any) -> Optional[int]:
 # ---------------------------------------------------------------------------
 
 IDENTITY3: Mat3 = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+
+
+def parse_equipped_reference(value: Any) -> Optional[str]:
+    """Erkennt ``"ausgeruestet"`` & Co. -> Quelle (``"auto"``/``"idle"``/``"emote"``).
+
+    ``None`` bedeutet: keine Angabe zur ausgeruesteten Pose (normale Pose).
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    match = _EQUIPPED_RE.match(text)
+    if not match:
+        return None
+    source = (match.group("source") or "auto").strip().lower()
+    aliases = {
+        "auto": "auto", "beides": "auto", "all": "auto",
+        "idle": "idle", "pose": "idle", "animation": "idle", "anim": "idle",
+        "stand": "idle", "standpose": "idle",
+        "emote": "emote", "emotes": "emote", "tanz": "emote", "dance": "emote",
+    }
+    return aliases.get(source, "auto")
 
 
 def _mat3_mul(a: Mat3, b: Mat3) -> Mat3:
@@ -1138,6 +1169,11 @@ def emote_summary(info: Dict[str, Any]) -> str:
     quoted = f"'{name}' " if name else ""
     typ = (info.get("typ") or "").replace("_", " ")
     parts = [f"Emote {quoted}({info.get('emote_id', '?')}), {typ}"]
+    equipped = info.get("equipped") or {}
+    if equipped:
+        quelle = equipped.get("source") or equipped.get("kind") or ""
+        if quelle:
+            parts.insert(0, f"ausgeruestet: {quelle}")
     if info.get("keyframes"):
         parts.append(f"Keyframe {info.get('frame', 0) + 1}/{info['keyframes']}")
     if info.get("zeit_s") is not None:
@@ -1307,3 +1343,105 @@ def load_emote_pose(emote_id: Optional[int] = None,
     settings = dict(avatar_pose.POSE_SETTING_DEFAULTS)
     log(f"      Emote-Pose: {emote_summary(info)}")
     return pose_dict, settings, info
+
+
+# ---------------------------------------------------------------------------
+# Ausgeruestete Pose des Accounts
+# ---------------------------------------------------------------------------
+
+def load_equipped_pose(
+    avatar: Optional[Dict[str, Any]] = None,
+    client: Any = None,
+    user_id: Optional[int] = None,
+    datei: str = "",
+    zeit: Optional[float] = None,
+    prefer: str = "auto",
+    log: Optional[Callable[[str], None]] = None,
+    warnings: Optional[List[str]] = None,
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, float], Dict[str, Any]]:
+    """Laedt die **ausgeruestete Pose** des Accounts als Pose fuer den Render.
+
+    ``pose = "ausgeruestet"`` in der Configs.toml loest das hier aus. Quelle
+    ist (in dieser Reihenfolge):
+
+    1. eine ausgeruestete ``PoseAnimation`` (56) bzw. ``IdleAnimation`` (51)
+       - das ist die "Pose", die der Roblox-Avatar-Editor unter *Posen*
+       fuehrt. Gerendert wird deren erster Frame (= die Standpose).
+    2. das ausgeruestete Emote (Slot 1, dann die uebrigen Slots) - daraus
+       der Frame, den Roblox fuer das Katalog-/Profilbild benutzt.
+
+    Mit ``prefer="idle"`` bzw. ``"emote"`` laesst sich eine Quelle erzwingen
+    (Configs.toml: ``pose = "ausgeruestet:emote"``).
+
+    ``zeit`` ueberschreibt wie bei Emotes den Frame (Sekunden; ``None`` =
+    automatisch). ``datei`` laedt stattdessen eine lokale RBXM/RBXMX-Datei
+    (offline/testbar), dann ist ``avatar`` optional.
+
+    Faellt ein Kandidat aus (z. B. R6-Emote ohne R15-Gelenke), wird der
+    naechste probiert. Erst wenn keiner passt, gibt es :class:`EmoteError`.
+
+    Rueckgabe: ``(pose_dict, einstellungen, info)`` - wie
+    :func:`load_emote_pose`, ``info["equipped"]`` beschreibt die Quelle.
+    """
+    if log is None:
+        def log(msg: str) -> None:  # noqa: F811
+            print(msg, flush=True)
+    if warnings is None:
+        warnings = []
+    prefer = (prefer or "auto").strip().lower()
+    if prefer not in ("auto", "idle", "emote"):
+        prefer = "auto"
+
+    if datei:
+        # Lokale Datei: keine Kandidatensuche, direkt laden.
+        pose_dict, settings, info = load_emote_pose(
+            emote_id=None, client=client, datei=datei, zeit=zeit, log=log)
+        info["equipped"] = {"asset_id": None, "kind": "datei",
+                            "source": f"Datei {datei}",
+                            "name": info.get("name") or ""}
+        return pose_dict, settings, info
+
+    if avatar is None:
+        raise EmoteError(
+            "Ausgeruestete Pose: keine Avatar-Daten uebergeben (und keine "
+            "'emote_datei' gesetzt). Ohne Avatar-/Netzwerkdaten laesst sich "
+            "die getragene Pose nicht bestimmen.")
+
+    candidates = api.fetch_equipped_pose_candidates(
+        client, avatar, user_id=user_id, warnings=warnings) if client else \
+        api.equipped_pose_candidates(avatar, warnings)
+    if prefer == "idle":
+        candidates = [c for c in candidates if c["kind"] in ("pose", "idle")]
+    elif prefer == "emote":
+        candidates = [c for c in candidates if c["kind"] == "emote"]
+    if not candidates:
+        raise EmoteError(
+            "Ausgeruestete Pose: der Account hat keine "
+            + ("Pose-/Idle-Animation" if prefer == "idle" else
+               "Emote" if prefer == "emote" else "Pose/Idle-Animation und kein Emote")
+            + " ausgeruestet.")
+
+    errors: List[str] = []
+    for candidate in candidates[:MAX_EQUIPPED_CANDIDATES]:
+        kind = candidate.get("kind")
+        # Pose-/Idle-Animationen: erster Frame ist die Standpose.
+        frame_zeit = zeit if zeit is not None else (
+            0.0 if kind in ("pose", "idle") else None)
+        try:
+            pose_dict, settings, info = load_emote_pose(
+                emote_id=int(candidate["asset_id"]), client=client,
+                datei="", zeit=frame_zeit, log=log)
+        except EmoteError as exc:
+            errors.append(f"{candidate.get('source')} "
+                          f"{candidate['asset_id']}: {exc}")
+            log(f"      ! Ausgeruestete Pose {candidate['asset_id']} "
+                f"nicht verwendbar ({exc})")
+            continue
+        info["equipped"] = dict(candidate)
+        if not info.get("name"):
+            info["name"] = candidate.get("name") or ""
+        return pose_dict, settings, info
+
+    raise EmoteError(
+        "Ausgeruestete Pose: keiner der Kandidaten war als R15-Pose lesbar ("
+        + "; ".join(errors[:3]) + ").")

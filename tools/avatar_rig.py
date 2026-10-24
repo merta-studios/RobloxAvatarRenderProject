@@ -635,6 +635,12 @@ class RiggedAvatar:
     metrics: BodyMetrics = field(default_factory=BodyMetrics)
     scales_body: Tuple[float, float, float] = (1.0, 1.0, 1.0)
     scales_head: Tuple[float, float, float] = (1.0, 1.0, 1.0)
+    #: Hinweise des Gelenk-Audits (fehlende/plausiblere Attachments, ersetzte
+    #: Platzhalter-Gelenke). Landet als Warnung im Build-Log.
+    notes: List[str] = field(default_factory=list)
+    #: Je Gelenk der tatsaechlich verwendete Abstand zum Eltern-Gelenk in
+    #: Studs (0 = Naht geschlossen). Nur zur Diagnose.
+    joint_spans: Dict[str, float] = field(default_factory=dict)
 
 
 def _attach_placement(
@@ -725,6 +731,132 @@ def _scale_part_local(
     return local_mesh, local_atts, transparent
 
 
+def _dot(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _face_center(mesh: MeshData, direction: Tuple[float, float, float],
+                 band: float = 0.02) -> Tuple[float, float, float]:
+    """Mittelpunkt der Extrem-Flaeche eines Meshes entlang ``direction``.
+
+    Statt der Bounding-Box-Ecke (die bei schraeg skulptierten Paketen weit
+    neben dem Gelenk liegt) wird der Schwerpunkt aller Vertices im obersten
+    ``band``-Anteil der Ausdehnung genommen. Das ist genau die Flaeche, mit
+    der ein Glied am Nachbarglied anliegt.
+    """
+    if mesh.is_empty:
+        return (0.0, 0.0, 0.0)
+    length = _dot(direction, direction) ** 0.5
+    if length < 1e-9:
+        direction = (0.0, 1.0, 0.0)
+        length = 1.0
+    d = (direction[0] / length, direction[1] / length, direction[2] / length)
+    values = [_dot(p, d) for p in mesh.positions]
+    hi = max(values)
+    lo = min(values)
+    tol = max(1e-6, abs(band) * abs(hi - lo))
+    selected = [p for p, v in zip(mesh.positions, values) if v >= hi - tol]
+    n = float(len(selected)) or 1.0
+    return (sum(p[0] for p in selected) / n,
+            sum(p[1] for p in selected) / n,
+            sum(p[2] for p in selected) / n)
+
+
+def _proximal_point_local(mesh: MeshData, joint_rot: Matrix3,
+                          up_world: Tuple[float, float, float] = (0.0, 1.0, 0.0),
+                          inward_world: Optional[Tuple[float, float, float]] = None
+                          ) -> Tuple[float, float, float]:
+    """Lokaler Punkt eines Segments, der an das Eltern-Gelenk gehoert.
+
+    ``joint_rot`` ist die Welt-Orientierung des Gelenks (Eltern-Attachment).
+    Ein Segment ohne eigenes RigAttachment wird so eingesetzt, dass seine
+    obere Deckflaeche (im Gelenk-Frame) exakt auf dem Gelenk liegt - so
+    bleibt die Naht geschlossen, statt dass eine geratene Konstante
+    (frueher ``0,3 * scale``) das Glied nach unten/unten verschiebt.
+
+    ``inward_world`` (optional): Richtung zum Koerper. Damit wird der Punkt
+    zusaetzlich an die *Innenkante* des Segments geschoben - Arme sitzen
+    seitlich am Torso (Schulter-Attachment an der Arm-Innenkante), nicht
+    mittig ueber dem Gelenk (sonst steckt der halbe Arm im Torso).
+    """
+    inverse = _mat3_transpose(joint_rot)
+    up_local = _mat3_vec(inverse, up_world)
+    point = _face_center(mesh, up_local)
+    if inward_world is None or mesh.is_empty:
+        return point
+    inward_local = _mat3_vec(inverse, inward_world)
+    length = _dot(inward_local, inward_local) ** 0.5
+    if length < 1e-9:
+        return point
+    direction = (inward_local[0] / length, inward_local[1] / length,
+                 inward_local[2] / length)
+    extreme = max(_dot(p, direction) for p in mesh.positions)
+    delta = extreme - _dot(point, direction)
+    return (point[0] + direction[0] * delta,
+            point[1] + direction[1] * delta,
+            point[2] + direction[2] * delta)
+
+
+def _distal_point_local(mesh: MeshData, joint_rot: Matrix3,
+                        up_world: Tuple[float, float, float] = (0.0, 1.0, 0.0)
+                        ) -> Tuple[float, float, float]:
+    """Gegenstueck zu :func:`_proximal_point_local` (untere Deckflaeche)."""
+    up_local = _mat3_vec(_mat3_transpose(joint_rot), up_world)
+    return _face_center(mesh, (-up_local[0], -up_local[1], -up_local[2]))
+
+
+def _attachment_matches_face(mesh: MeshData,
+                             position: Tuple[float, float, float],
+                             joint_rot: Matrix3,
+                             face: str = "top") -> bool:
+    """Liegt ein Attachment an der erwarteten Deckflaeche des Segments?
+
+    R15-Attachments fuer das *Eltern*-Gelenk liegen am oberen Ende eines
+    Glieds (face="top"), das fuer das *Kind* am unteren (face="bottom").
+    Ein Attachment mitten im Teil - typisch fuer konvertierte Bundles mit
+    Platzhalter ``(0,0,0)`` - wuerde das Segment halb ueberlappen lassen und
+    den Drehpunkt in die Teilmitte legen; es wird daher wie ein fehlendes
+    Attachment behandelt.
+    """
+    if mesh.is_empty:
+        return False
+    axis_local = _mat3_vec(_mat3_transpose(joint_rot), (0.0, 1.0, 0.0))
+    length = _dot(axis_local, axis_local) ** 0.5
+    if length < 1e-9:
+        return True
+    direction = (axis_local[0] / length, axis_local[1] / length,
+                 axis_local[2] / length)
+    projections = [_dot(p, direction) for p in mesh.positions]
+    extent = max(projections) - min(projections)
+    center = (max(projections) + min(projections)) / 2.0
+    value = _dot(position, direction)
+    margin = 0.20 * extent
+    if face == "bottom":
+        return value < center - margin
+    return value > center + margin
+
+
+def _attachment_is_plausible(mesh: MeshData,
+                             position: Tuple[float, float, float]) -> bool:
+    """Liegt ein Attachment ueberhaupt am Mesh?
+
+    Manche konvertierten Bundles tragen Platzhalter-Attachments weit
+    ausserhalb der Geometrie. Wird so ein Wert uebernommen, dreht die Pose
+    das Teil spaeter um einen Punkt, der neben dem Koerper liegt ("Drehpunkt
+    verrutscht"). Solche Attachments werden verworfen und aus der Geometrie
+    abgeleitet.
+    """
+    if mesh.is_empty:
+        return False
+    lo, hi = mesh.bbox()
+    size = mesh.size()
+    tol = max(0.05, 0.15 * max(size))
+    for i in range(3):
+        if position[i] < lo[i] - tol or position[i] > hi[i] + tol:
+            return False
+    return True
+
+
 def has_rig_attachments(segments_by_part: Dict[str, List[Dict[str, Any]]], head_mp: Optional[Dict[str, Any]] = None) -> bool:
     """True, sobald mindestens ein Koerperteil oder Kopf echte RigAttachments besitzt."""
     for segs in segments_by_part.values():
@@ -782,6 +914,92 @@ def assemble_r15_rig(
             wpos = (origin[0] + ra[0], origin[1] + ra[1], origin[2] + ra[2])
             world_atts[aname] = (wpos, _mat3_mul(rot, arot))
 
+    joint_spans: Dict[str, float] = {}
+    notes: List[str] = []
+
+    def _dist3(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> float:
+        return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2) ** 0.5
+
+    def _chain_child_attachment(
+        seg_name: str,
+        att_name: str,
+        parent_att: Tuple[Tuple[float, float, float], Matrix3],
+        face: str = "top",
+        inward_world: Optional[Tuple[float, float, float]] = None,
+    ) -> Tuple[Tuple[float, float, float], Matrix3]:
+        """Attachment eines Kind-Segments - notfalls aus der Geometrie.
+
+        Ein fehlendes oder unplausibles (weit ausserhalb des Meshes
+        liegendes) RigAttachment wird durch die obere Deckflaeche des
+        Segments im Gelenk-Frame ersetzt. Damit liegt das Segment immer
+        bündig am Gelenk, statt um einen geratenen Betrag daneben zu haengen.
+        """
+        mesh, atts, _transparent = seg_lookup[seg_name]
+        own = atts.get(att_name)
+        if own is not None and _attachment_is_plausible(mesh, own[0]) and \
+                _attachment_matches_face(mesh, own[0], parent_att[1], face):
+            return own
+        if own is None:
+            reason = "fehlt"
+        elif not _attachment_is_plausible(mesh, own[0]):
+            reason = "liegt ausserhalb des Meshes"
+        else:
+            reason = "liegt mitten im Segment (Platzhalter)"
+        notes.append(
+            f"Segment '{seg_name}': Attachment '{att_name}' {reason} - "
+            "Anschluss aus der Mesh-Geometrie abgeleitet (Naht bleibt zu).")
+        point = (_proximal_point_local(mesh, parent_att[1], inward_world=inward_world)
+                 if face == "top" else _distal_point_local(mesh, parent_att[1]))
+        return (point, IDENTITY_MAT3)
+
+    def _chain_next_joint(
+        seg_name: str,
+        att_name: str,
+        parent_att: Tuple[Tuple[float, float, float], Matrix3],
+    ) -> Tuple[Tuple[float, float, float], Matrix3]:
+        """Naechstes Gelenk aus dem eben platzierten Segment.
+
+        Ist das Attachment vorhanden und liegt es wirklich *unterhalb* des
+        Eltern-Gelenks, wird es uebernommen (exakte Roblox-Semantik). Fehlt
+        es oder klebt es als Platzhalter mitten im Teil (Abstand < 25 % der
+        Segmenthoehe), wird das Gelenk an die untere Deckflaeche gelegt -
+        sonst waere z. B. der Ellbogen mitten im Unterarm (falscher Drehpunkt).
+        """
+        placed = placed_seg_mesh.get(seg_name)
+        att = world_atts.get(att_name)
+        if placed is not None:
+            # Welt-"oben" des Gelenk-Frames: R15-Attachments zeigen mit +Y
+            # nach oben, das Glied laeuft nach -Y.
+            up = _mat3_vec(parent_att[1], (0.0, 1.0, 0.0))
+            projections = [_dot(p, up) for p in placed.positions]
+            extent = max(projections) - min(projections) if projections else 0.0
+            center = (max(projections) + min(projections)) / 2.0 if projections else 0.0
+            if att is not None:
+                span = _dist3(att[0], parent_att[0])
+                joint_proj = _dot(att[0], up)
+                too_close = span < max(0.02, 0.25 * extent)
+                # Ein Gelenk, das nicht unterhalb der Segmentmitte liegt, ist
+                # ein Platzhalter (z. B. (0,0,0) bei konvertierten Bundles) -
+                # damit wuerde der Unterarm mitten im Oberarm drehen.
+                above_center = joint_proj > center - 0.10 * extent
+                if too_close or above_center:
+                    reason = ("liegt mitten im Segment"
+                              if above_center and not too_close
+                              else "liegt zu nah am Elterngelenk")
+                    notes.append(
+                        f"Gelenk '{att_name}' {reason} (Platzhalter-Attachment) - "
+                        "an die Segment-Unterkante gesetzt.")
+                    att = None
+            if att is None:
+                att = (_face_center(placed, (0.0, -1.0, 0.0)), parent_att[1])
+                world_atts[att_name] = att
+            joint_spans[att_name] = _dist3(att[0], parent_att[0])
+        if att is None:
+            # Kein platziertes Segment: konservativ gerade nach unten.
+            att = ((parent_att[0][0], parent_att[0][1] - 0.45,
+                    parent_att[0][2]), parent_att[1])
+        return att
+
     # 1) Torso (LowerTorso -> WaistRigAttachment -> UpperTorso)
     if "LowerTorso" in seg_lookup and "UpperTorso" in seg_lookup:
         lt_m, lt_a, lt_tr = seg_lookup["LowerTorso"]
@@ -795,7 +1013,9 @@ def assemble_r15_rig(
         joint_pos["UpperTorso"] = waist_att[0]
         joint_frames["UpperTorso"] = waist_att[1]
         rot_ut, ut_origin = _attach_placement(
-            waist_att, ut_a.get("WaistRigAttachment", ((0.0, -0.8 * sh, 0.0), IDENTITY_MAT3)))
+            waist_att,
+            _chain_child_attachment("UpperTorso", "WaistRigAttachment", waist_att,
+                                    face="bottom"))
         register_segment("UpperTorso", ut_m, ut_a, ut_origin, rot_ut, not ut_tr)
         segment_driver["UpperTorso"] = "UpperTorso"
         torso_named = [(n, placed_seg_mesh[n]) for n in ("UpperTorso", "LowerTorso")
@@ -848,38 +1068,45 @@ def assemble_r15_rig(
         joint_pos[u_name] = shoulder_att[0]
         joint_frames[u_name] = shoulder_att[1]
 
-        if u_name in seg_lookup and l_name in seg_lookup and h_name in seg_lookup:
-            um, ua, utr = seg_lookup[u_name]
-            lm, la, ltr = seg_lookup[l_name]
-            hm, ha, htr = seg_lookup[h_name]
+        # Alle vorhandenen Segmente aneinanderhaengen - fehlt z. B. nur die
+        # Hand, bleibt der Arm aus Ober-/Unterarm bestehen (frueher wurde
+        # daraus ein Quader). Fehlende/platzhalterhafte Attachments werden
+        # aus der Geometrie abgeleitet, damit die Naht geschlossen bleibt.
+        chain = [(u_name, sh_att_name), (l_name, el_att_name), (h_name, wr_att_name)]
+        if any(name in seg_lookup for name, _att in chain):
+            parent_att = shoulder_att
+            for index, (seg_name, att_name) in enumerate(chain):
+                if index > 0:
+                    joint_pos[seg_name] = parent_att[0]
+                    joint_frames[seg_name] = parent_att[1]
+                if seg_name in seg_lookup:
+                    # Nur das Schultersegment sitzt an seiner Innenkante am
+                    # Torso; Unterarm/Hand haengen mittig am Gelenk (sonst
+                    # wandert der Arm mit jedem Segment weiter nach aussen).
+                    inward = (-sign, 0.0, 0.0) if index == 0 else None
+                    rot_s, origin_s = _attach_placement(
+                        parent_att,
+                        _chain_child_attachment(seg_name, att_name, parent_att,
+                                                inward_world=inward))
+                    mesh_s, atts_s, tr_s = seg_lookup[seg_name]
+                    register_segment(seg_name, mesh_s, atts_s, origin_s, rot_s, not tr_s)
+                    segment_driver[seg_name] = seg_name
+                    if index + 1 < len(chain):
+                        next_att_name = chain[index + 1][1]
+                        parent_att = _chain_next_joint(
+                            seg_name, next_att_name, parent_att)
+                elif index + 1 < len(chain):
+                    # Segment fehlt: naechstes Gelenk ans Ende des letzten
+                    # vorhandenen Segments legen (kein Pivot im Nichts).
+                    previous = next((n for n, _a in reversed(chain[:index])
+                                     if n in placed_seg_mesh), None)
+                    if previous is not None:
+                        joint_pos[chain[index + 1][0]] = _face_center(
+                            placed_seg_mesh[previous], (0.0, -1.0, 0.0))
+                        joint_frames.setdefault(chain[index + 1][0], parent_att[1])
 
-            rot_u, u_orig = _attach_placement(
-                shoulder_att, ua.get(sh_att_name, ((0.0, 0.3 * sh, 0.0), IDENTITY_MAT3)))
-            register_segment(u_name, um, ua, u_orig, rot_u, not utr)
-            segment_driver[u_name] = u_name
-
-            elbow_att = world_atts.get(
-                el_att_name,
-                ((shoulder_att[0][0], shoulder_att[0][1] - 0.6 * sh, shoulder_att[0][2]), IDENTITY_MAT3))
-            joint_pos[l_name] = elbow_att[0]
-            joint_frames[l_name] = elbow_att[1]
-            rot_l, l_orig = _attach_placement(
-                elbow_att, la.get(el_att_name, ((0.0, 0.35 * sh, 0.0), IDENTITY_MAT3)))
-            register_segment(l_name, lm, la, l_orig, rot_l, not ltr)
-            segment_driver[l_name] = l_name
-
-            wrist_att = world_atts.get(
-                wr_att_name,
-                ((elbow_att[0][0], elbow_att[0][1] - 0.7 * sh, elbow_att[0][2]), IDENTITY_MAT3))
-            joint_pos[h_name] = wrist_att[0]
-            joint_frames[h_name] = wrist_att[1]
-            rot_h, h_orig = _attach_placement(
-                wrist_att, ha.get(wr_att_name, ((0.0, 0.15 * sh, 0.0), IDENTITY_MAT3)))
-            register_segment(h_name, hm, ha, h_orig, rot_h, not htr)
-            segment_driver[h_name] = h_name
-
-            arm_named = [(n, placed_seg_mesh[n]) for n in (u_name, l_name, h_name)
-                         if placed_seg_vis[n]]
+            arm_named = [(n, placed_seg_mesh[n]) for n, _att in chain
+                         if n in placed_seg_mesh and placed_seg_vis[n]]
             arm_mesh, arm_spans = _merge_with_spans(arm_named)
             body_meshes[part_name] = arm_mesh
             segment_spans[part_name] = arm_spans
@@ -908,36 +1135,35 @@ def assemble_r15_rig(
         joint_pos[u_name] = hip_att[0]
         joint_frames[u_name] = hip_att[1]
 
-        if u_name in seg_lookup and l_name in seg_lookup and f_name in seg_lookup:
-            um, ua, utr = seg_lookup[u_name]
-            lm, la, ltr = seg_lookup[l_name]
-            fm, fa, ftr = seg_lookup[f_name]
+        # Wie bei den Armen: vorhandene Segmente nahtlos aneinanderhaengen,
+        # fehlende Attachments aus der Geometrie ableiten (Huefte/Knie/Fuss).
+        chain = [(u_name, hip_att_name), (l_name, knee_att_name),
+                 (f_name, ankle_att_name)]
+        if any(name in seg_lookup for name, _att in chain):
+            parent_att = hip_att
+            for index, (seg_name, att_name) in enumerate(chain):
+                if index > 0:
+                    joint_pos[seg_name] = parent_att[0]
+                    joint_frames[seg_name] = parent_att[1]
+                if seg_name in seg_lookup:
+                    rot_s, origin_s = _attach_placement(
+                        parent_att, _chain_child_attachment(seg_name, att_name, parent_att))
+                    mesh_s, atts_s, tr_s = seg_lookup[seg_name]
+                    register_segment(seg_name, mesh_s, atts_s, origin_s, rot_s, not tr_s)
+                    segment_driver[seg_name] = seg_name
+                    if index + 1 < len(chain):
+                        parent_att = _chain_next_joint(
+                            seg_name, chain[index + 1][1], parent_att)
+                elif index + 1 < len(chain):
+                    previous = next((n for n, _a in reversed(chain[:index])
+                                     if n in placed_seg_mesh), None)
+                    if previous is not None:
+                        joint_pos[chain[index + 1][0]] = _face_center(
+                            placed_seg_mesh[previous], (0.0, -1.0, 0.0))
+                        joint_frames.setdefault(chain[index + 1][0], parent_att[1])
 
-            rot_u, u_orig = _attach_placement(
-                hip_att, ua.get(hip_att_name, ((0.0, 0.4 * sh, 0.0), IDENTITY_MAT3)))
-            register_segment(u_name, um, ua, u_orig, rot_u, not utr)
-            segment_driver[u_name] = u_name
-
-            knee_att = world_atts.get(
-                knee_att_name, ((hip_att[0][0], hip_att[0][1] - 0.8 * sh, hip_att[0][2]), IDENTITY_MAT3))
-            joint_pos[l_name] = knee_att[0]
-            joint_frames[l_name] = knee_att[1]
-            rot_l, l_orig = _attach_placement(
-                knee_att, la.get(knee_att_name, ((0.0, 0.4 * sh, 0.0), IDENTITY_MAT3)))
-            register_segment(l_name, lm, la, l_orig, rot_l, not ltr)
-            segment_driver[l_name] = l_name
-
-            ankle_att = world_atts.get(
-                ankle_att_name, ((knee_att[0][0], knee_att[0][1] - 0.8 * sh, knee_att[0][2]), IDENTITY_MAT3))
-            joint_pos[f_name] = ankle_att[0]
-            joint_frames[f_name] = ankle_att[1]
-            rot_f, f_orig = _attach_placement(
-                ankle_att, fa.get(ankle_att_name, ((0.0, 0.1 * sh, 0.0), IDENTITY_MAT3)))
-            register_segment(f_name, fm, fa, f_orig, rot_f, not ftr)
-            segment_driver[f_name] = f_name
-
-            leg_named = [(n, placed_seg_mesh[n]) for n in (u_name, l_name, f_name)
-                         if placed_seg_vis[n]]
+            leg_named = [(n, placed_seg_mesh[n]) for n, _att in chain
+                         if n in placed_seg_mesh and placed_seg_vis[n]]
             leg_mesh, leg_spans = _merge_with_spans(leg_named)
             body_meshes[part_name] = leg_mesh
             segment_spans[part_name] = leg_spans
@@ -962,8 +1188,15 @@ def assemble_r15_rig(
     head_r = 0.60 * shead
     if head_mp is not None:
         hm_loc, ha_loc, _htr = _scale_part_local(head_mp, s_head)
-        rot_h, h_orig = _attach_placement(
-            neck_att, ha_loc.get("NeckRigAttachment", ((0.0, -0.5 * shead, 0.0), IDENTITY_MAT3)))
+        head_att = ha_loc.get("NeckRigAttachment")
+        if head_att is None or not _attachment_is_plausible(hm_loc, head_att[0]):
+            # Kein brauchbares Hals-Attachment: Kopf mit seiner Unterkante
+            # (Kinn/Unterseite) exakt auf das Halsgelenk setzen.
+            head_att = (_distal_point_local(hm_loc, neck_att[1]), IDENTITY_MAT3)
+            notes.append(
+                "Kopf: Attachment 'NeckRigAttachment' fehlt oder ist unplausibel - "
+                "Kopf-Unterkante auf das Halsgelenk gesetzt.")
+        rot_h, h_orig = _attach_placement(neck_att, head_att)
         register_segment("Head", hm_loc, ha_loc, h_orig, rot_h, True)
         segment_driver["Head"] = "Head"
         if not headless:
@@ -1054,6 +1287,8 @@ def assemble_r15_rig(
         metrics=rig_metrics,
         scales_body=s_body,
         scales_head=s_head,
+        notes=notes,
+        joint_spans=joint_spans,
     )
 
 

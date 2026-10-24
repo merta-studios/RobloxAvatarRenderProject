@@ -90,6 +90,15 @@ ACCESSORY_CATEGORIES = {
 }
 
 
+#: Animationstypen, die eine *Pose* beschreiben (nicht nur eine Bewegung).
+#:   56 = PoseAnimation (die "Pose" aus dem Avatar-Editor),
+#:   51 = IdleAnimation (Standpose eines Animationspakets),
+#:   48-55 = uebrige Clip-Typen eines Animationspakets.
+POSE_ANIMATION_TYPES = {56, 51}
+ANIMATION_PACK_TYPES = {48, 49, 50, 51, 52, 53, 54, 55, 56}
+EMOTE_ANIMATION_TYPE = 61
+
+
 class RobloxError(RuntimeError):
     """Fehler, der den Lauf beenden sollte (z. B. unbekannter Username)."""
 
@@ -309,6 +318,121 @@ def fetch_asset_details(client: HttpClient, asset_id: int) -> Dict[str, Any]:
         except (json.JSONDecodeError, TypeError, ValueError):
             pass
     return {"assetTypeId": 0, "name": ""}
+
+
+# ---------------------------------------------------------------------------
+# Ausgeruestete Pose des Accounts
+# ---------------------------------------------------------------------------
+
+
+def equipped_pose_candidates(avatar: Dict[str, Any],
+                             warnings: Optional[List[str]] = None
+                             ) -> List[Dict[str, Any]]:
+    """Kandidaten fuer die **ausgeruestete Pose** aus den Avatar-Daten.
+
+    Reihenfolge (erster Treffer gewinnt):
+
+    1. ``PoseAnimation`` (56) bzw. ``IdleAnimation`` (51) aus den
+       ausgeruesteten Assets - das ist die "Pose", die der Avatar-Editor
+       unter *Posen* fuehrt und die Roblox auf dem Profilbild zeigt.
+    2. das ausgeruestete Emote (Slot 1, danach die uebrigen Slots) -
+       Roblox nutzt genau dieses Emote fuer das Profilbild, wenn keine
+       eigene Pose gewaehlt wurde.
+
+    Rueckgabe: Liste aus ``{"asset_id", "kind", "name", "source"}`` mit
+    ``kind`` = ``"pose"`` | ``"idle"`` | ``"emote"``.
+    """
+    avatar = avatar or {}
+    found: List[Dict[str, Any]] = []
+
+    def push(asset_id: Any, kind: str, source: str, name: str = "") -> None:
+        try:
+            aid = int(asset_id or 0)
+        except (TypeError, ValueError):
+            return
+        if aid <= 0:
+            return
+        if any(item["asset_id"] == aid for item in found):
+            return
+        found.append({"asset_id": aid, "kind": kind, "source": source,
+                      "name": name or ""})
+
+    assets = [a for a in (avatar.get("assets") or []) if isinstance(a, dict)]
+    typed: List[tuple] = []
+    for asset in assets:
+        at = asset.get("assetType") or {}
+        tid = 0
+        if isinstance(at, dict) and at.get("id"):
+            tid = int(at.get("id") or 0)
+        typed.append((tid, asset.get("id"), asset.get("name") or ""))
+
+    for wanted, kind in ((56, "pose"), (51, "idle")):
+        for tid, aid, name in typed:
+            if tid == wanted:
+                push(aid, kind, ASSET_TYPE_NAMES.get(wanted, "Animation"), name)
+    # Reine Bewegungs-Clips (Walk/Run/Jump ...) sind keine *Pose* und werden
+    # bewusst nicht verwendet - sie kosten nur Downloadzeit und liefern eine
+    # Lauf-/Sprung-Haltung statt der Standpose.
+    emotes = [e for e in (avatar.get("emotes") or []) if isinstance(e, dict)]
+    def slot(item: Dict[str, Any]) -> int:
+        try:
+            return int(item.get("position") or 99)
+        except (TypeError, ValueError):
+            return 99
+    for emote in sorted(emotes, key=slot):
+        push(emote.get("assetId"), "emote",
+             f"Emote-Slot {slot(emote)}" if slot(emote) != 99 else "Emote",
+             emote.get("assetName") or "")
+
+    if not found and warnings is not None:
+        warnings.append(
+            "Ausgeruestete Pose: die Avatar-API liefert weder eine Pose-/Idle-"
+            "Animation noch ein ausgeruestetes Emote - es wird die Stand-Pose "
+            "gerendert.")
+    return found
+
+
+def fetch_equipped_pose_candidates(client: HttpClient,
+                                   avatar: Dict[str, Any],
+                                   user_id: Optional[int] = None,
+                                   warnings: Optional[List[str]] = None,
+                                   max_checks: int = 12
+                                   ) -> List[Dict[str, Any]]:
+    """Wie :func:`equipped_pose_candidates`, mit Nachladen bei mageren Daten.
+
+    Liefert ``/v1/users/{id}/avatar`` keine Pose/Emotes (z. B. weil nur der
+    ``currently-wearing``-Fallback verfuegbar war), werden die getragenen
+    Asset-IDs aufgeloest und auf Animations-/Emote-Typen geprueft.
+    """
+    candidates = equipped_pose_candidates(avatar, warnings)
+    if candidates or client is None or user_id is None:
+        return candidates
+
+    resp = client.get(
+        f"https://avatar.roblox.com/v1/users/{user_id}/currently-wearing",
+        allow_status=(400, 403, 404, 429))
+    if not resp.ok:
+        return candidates
+    try:
+        ids = [int(v) for v in (resp.json().get("assetIds") or [])]
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return candidates
+
+    checked = 0
+    for asset_id in ids:
+        if checked >= max_checks:
+            break
+        checked += 1
+        details = fetch_asset_details(client, asset_id)
+        tid = int(details.get("assetTypeId") or 0)
+        if tid in POSE_ANIMATION_TYPES or tid == EMOTE_ANIMATION_TYPE:
+            kind = {56: "pose", 51: "idle"}.get(tid, "emote")
+            candidates.append({
+                "asset_id": asset_id, "kind": kind,
+                "source": f"getragen ({ASSET_TYPE_NAMES.get(tid, tid)})",
+                "name": details.get("name") or "",
+            })
+    return candidates
 
 
 # ---------------------------------------------------------------------------

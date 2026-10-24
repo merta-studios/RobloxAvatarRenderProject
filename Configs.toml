@@ -81,6 +81,30 @@ drehung_grad = 0
 #
 #     Schlägt das Laden fehl (falsche ID, Netzwerk), wird automatisch die
 #     Stand-Pose gerendert und eine Warnung ins Log geschrieben.
+#
+#  d) Ausgerüstete Pose des Accounts (automatisch):
+#
+#         pose = "ausgeruestet"
+#
+#     Die Pipeline liest die Pose, die der Account gerade trägt, direkt aus
+#     dem Avatar und wendet sie an – ohne Asset-ID im Config-File. Gesucht
+#     wird in dieser Reihenfolge:
+#       1. PoseAnimation (Asset-Typ 56, „Avatar Pose“ aus dem Marktplatz),
+#       2. IdleAnimation (51, Standard-Idle, falls kein Pose-Animation-Teil
+#          ausgerüstet ist),
+#       3. die ausgerüsteten Emotes in Slot-Reihenfolge.
+#     Die erste Variante, die sich laden lässt, wird gerendert; welche es
+#     war, steht im Log (`ausgeruestet: …`) und im Manifest unter
+#     `render.pose_details`. Optional:
+#         pose = "ausgeruestet:emote"  → nur Emotes berücksichtigen
+#         pose = "ausgeruestet:idle"   → nur PoseAnimation/IdleAnimation
+#     `emote_zeit` wählt auch hier den Frame (Standard: Vorschau-Frame bei
+#     Emotes, Anfang der Animation bei Posen/Idle). `emote_datei` hat
+#     Vorrang und rendert stattdessen die lokale Datei.
+#     Hinweis: Roblox veröffentlicht für fremde Accounts keinen Endpunkt für
+#     die individuell gewählte Thumbnail-Pose/Kamera – die ausgerüstete Pose
+#     lässt sich aber für jeden Account aus den getragenen Assets ableiten,
+#     weil sie dort als echte Assets gelistet sind.
 pose = "emote:112758073578333"
 
 
