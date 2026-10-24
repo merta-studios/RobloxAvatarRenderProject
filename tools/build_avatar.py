@@ -1728,6 +1728,88 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
         if jflines:
             ci_notice("Diagnose 2c/6 Gelenk-Frames", " | ".join(jflines))
 
+        # 2d) Mesh-Hauptachse vs. Attachment-Linie je Segment: Wenn die
+        #     Geometrie anders ausgerichtet ist als die Gelenkkette
+        #     (Attachments), rotiert die Pose um anatomisch falsche Punkte.
+        axis_lines: List[str] = []
+
+        def _principal_axis(mesh) -> Optional[Tuple[float, float, float]]:
+            """Hauptachse der Vertex-Verteilung (Potenz-Iteration)."""
+            pts = mesh.positions
+            if len(pts) < 8:
+                return None
+            n = float(len(pts))
+            cx = sum(p[0] for p in pts) / n
+            cy = sum(p[1] for p in pts) / n
+            cz = sum(p[2] for p in pts) / n
+            a00 = sum((p[0] - cx) ** 2 for p in pts) / n
+            a11 = sum((p[1] - cy) ** 2 for p in pts) / n
+            a22 = sum((p[2] - cz) ** 2 for p in pts) / n
+            a01 = sum((p[0] - cx) * (p[1] - cy) for p in pts) / n
+            a02 = sum((p[0] - cx) * (p[2] - cz) for p in pts) / n
+            a12 = sum((p[1] - cy) * (p[2] - cz) for p in pts) / n
+            v = (0.0, 1.0, 0.0)
+            for _ in range(48):
+                v = (
+                    a00 * v[0] + a01 * v[1] + a02 * v[2],
+                    a01 * v[0] + a11 * v[1] + a12 * v[2],
+                    a02 * v[0] + a12 * v[1] + a22 * v[2],
+                )
+                ln = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+                if ln < 1e-12:
+                    return None
+                v = (v[0] / ln, v[1] / ln, v[2] / ln)
+            return v
+
+        # Segmentname -> zwei RigAttachments (Kette)
+        _seg_chain = {
+            "UpperTorso": ("WaistRigAttachment", "NeckRigAttachment"),
+            "LowerTorso": ("RootRigAttachment", "WaistRigAttachment"),
+            "LeftUpperArm": ("LeftShoulderRigAttachment", "LeftElbowRigAttachment"),
+            "RightUpperArm": ("RightShoulderRigAttachment", "RightElbowRigAttachment"),
+            "LeftLowerArm": ("LeftElbowRigAttachment", "LeftWristRigAttachment"),
+            "RightLowerArm": ("RightElbowRigAttachment", "RightWristRigAttachment"),
+            "LeftUpperLeg": ("LeftHipRigAttachment", "LeftKneeRigAttachment"),
+            "RightUpperLeg": ("RightHipRigAttachment", "RightKneeRigAttachment"),
+            "LeftLowerLeg": ("LeftKneeRigAttachment", "LeftAnkleRigAttachment"),
+            "RightLowerLeg": ("RightKneeRigAttachment", "RightAnkleRigAttachment"),
+            "LeftFoot": ("LeftAnkleRigAttachment", None),
+            "RightFoot": ("RightAnkleRigAttachment", None),
+            "Head": ("NeckRigAttachment", None),
+        }
+        for _rig_name, _segs in sorted(r15_segments_by_part.items()):
+            for mp in _segs:
+                label = mp.get("label") or "?"
+                chain = _seg_chain.get(label)
+                mesh = mp.get("mesh")
+                if not chain or mesh is None or mesh.is_empty:
+                    continue
+                atts = mp.get("attachments") or {}
+                a1 = atts.get(chain[0])
+                a2 = atts.get(chain[1]) if chain[1] else None
+                axis = _principal_axis(mesh)
+                if axis is None or a1 is None or a1.get("position") is None:
+                    continue
+                if a2 is None or a2.get("position") is None:
+                    continue
+                p1 = [float(v) for v in a1["position"]]
+                p2 = [float(v) for v in a2["position"]]
+                d = [p2[i] - p1[i] for i in range(3)]
+                dl = math.sqrt(sum(v * v for v in d))
+                if dl < 1e-6:
+                    continue
+                d = [v / dl for v in d]
+                dot = abs(axis[0] * d[0] + axis[1] * d[1] + axis[2] * d[2])
+                angle = math.degrees(math.acos(max(-1.0, min(1.0, dot))))
+                axis_lines.append(
+                    f"{label}: achse=({axis[0]:+.2f},{axis[1]:+.2f},"
+                    f"{axis[2]:+.2f}) kette=({d[0]:+.2f},{d[1]:+.2f},"
+                    f"{d[2]:+.2f}) winkel={angle:.1f}deg")
+        if axis_lines:
+            for _i in range(0, len(axis_lines), 6):
+                ci_notice(f"Diagnose 2d/6 Mesh-Achse vs Kette ({_i // 6 + 1})",
+                          " | ".join(axis_lines[_i:_i + 6]))
+
         arm: List[str] = []
         for side in ("Left", "Right"):
             sh = jp.get(f"{side}UpperArm")
