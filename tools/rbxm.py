@@ -654,11 +654,14 @@ def _parse_binary(data: bytes) -> List[Dict[str, Any]]:
     return entries
 
 
-def _parse_binary_records(data: bytes) -> Tuple[List[Dict[str, Any]], List[bytes]]:
+def _parse_binary_records(data: bytes,
+                          prop_log: Optional[List[str]] = None
+                          ) -> Tuple[List[Dict[str, Any]], List[bytes]]:
     """Liest alle Instanz-Records (mit ``Parent``-Verweisen) aus binaerem RBXM.
 
     Rueckgabe: (Records, dekomprimierte Chunk-Payloads). Die Baum-Verknuepfung
-    (``children``) macht :func:`parse_instances`.
+    (``children``) macht :func:`parse_instances`. ``prop_log`` sammelt
+    (Diagnose) eine Zeile je PROP-Chunk: Klasse, Property, Typ-ID, Anzahl.
     """
     if len(data) < 32 or not data.startswith(MAGIC):
         raise RbxmError("Keine RBXM-Datei (Magic '<roblox!' fehlt oder Datei zu kurz)")
@@ -722,6 +725,9 @@ def _parse_binary_records(data: bytes) -> Tuple[List[Dict[str, Any]], List[bytes
                 continue
             recs = cls["records"]
             key = prop_name.lower()
+            if prop_log is not None:
+                prop_log.append("PROP %s.%s typ=0x%02x n=%d"
+                                % (cls["name"], prop_name, type_id, len(recs)))
             values: Optional[List[Any]] = None
             try:
                 if key in _STRING_PROPS and type_id in (_T_STRING, _T_SHARED_STRING, _T_CONTENT):
@@ -940,7 +946,9 @@ def extract_assets(data: bytes) -> List[Dict[str, Any]]:
     raise RbxmError("Weder RBXM (binaer) noch RBXMX (XML) erkannt")
 
 
-def parse_instances(data: bytes) -> List[Dict[str, Any]]:
+def parse_instances(data: bytes,
+                    prop_log: Optional[List[str]] = None
+                    ) -> List[Dict[str, Any]]:
     """Komplette Instanz-Hierarchie aus RBXM/RBXMX - Wurzel-Instanzen.
 
     Fuer Emote-Posen (tools/emote_pose.py): im Gegensatz zu
@@ -955,7 +963,7 @@ def parse_instances(data: bytes) -> List[Dict[str, Any]]:
     if not data:
         raise RbxmError("Leere RBXM-Daten")
     if data[:len(MAGIC)] == MAGIC:
-        records, _payloads = _parse_binary_records(data)
+        records, _payloads = _parse_binary_records(data, prop_log)
     else:
         head = data[:512].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
         if head.startswith(b"<roblox") or head.startswith(b"<?xml"):
