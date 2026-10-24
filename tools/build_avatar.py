@@ -1434,24 +1434,41 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     bounds_lo = [1e9, 1e9, 1e9]
     bounds_hi = [-1e9, -1e9, -1e9]
     per_part_bounds: Dict[str, Tuple[List[float], List[float]]] = {}
+    per_part_geom: Dict[str, Dict[str, Any]] = {}
     for part in parts:
         path = os.path.join(out_dir, part["obj"])
         p_lo = [1e9, 1e9, 1e9]
         p_hi = [-1e9, -1e9, -1e9]
+        verts: List[Tuple[float, float, float]] = []
+        faces_idx: List[Tuple[int, int, int]] = []
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 for line in fh:
                     if line.startswith("v "):
                         _, x, y, z = line.split()
-                        for i, val in enumerate((float(x), float(y), float(z))):
+                        px, py, pz = float(x), float(y), float(z)
+                        verts.append((px, py, pz))
+                        for i, val in enumerate((px, py, pz)):
                             bounds_lo[i] = min(bounds_lo[i], val)
                             bounds_hi[i] = max(bounds_hi[i], val)
                             p_lo[i] = min(p_lo[i], val)
                             p_hi[i] = max(p_hi[i], val)
+                    elif line.startswith("f "):
+                        pieces = line.split()[1:]
+                        try:
+                            ia = int(pieces[0].split("/")[0]) - 1
+                            ib = int(pieces[1].split("/")[0]) - 1
+                            ic = int(pieces[2].split("/")[0]) - 1
+                        except (ValueError, IndexError):
+                            continue
+                        faces_idx.append((ia, ib, ic))
         except OSError:
             continue
         if p_lo[0] <= p_hi[0]:
             per_part_bounds[str(part["name"])] = (p_lo, p_hi)
+            per_part_geom[str(part["name"])] = {
+                "verts": verts, "faces": faces_idx,
+            }
     if bounds_lo[0] > bounds_hi[0]:
         bounds_lo, bounds_hi = [-1, 0, -1], [1, 5, 1]
 
@@ -1533,7 +1550,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     # CI-Diagnose als Annotations (ausserhalb von GitHub Actions still)
     emit_ci_diagnosis(manifest, per_part_bounds, pose_ctx,
                       rig_avatar if use_r15_rig else None, accessory_diag,
-                      r15_segments_by_part)
+                      r15_segments_by_part, per_part_geom)
 
     log("")
     log(f"Fertig: {manifest['stats']['parts']} Teile "
@@ -1597,7 +1614,8 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
                       pose_ctx: Optional[avatar_pose.PoseContext],
                       rig_avatar: Optional[Any],
                       accessory_diag: List[Dict[str, Any]],
-                      r15_segments_by_part: Dict[str, List[Dict[str, Any]]]) -> None:
+                      r15_segments_by_part: Dict[str, List[Dict[str, Any]]],
+                      per_part_geom: Optional[Dict[str, Dict[str, Any]]] = None) -> None:
     """Stellt den Analyse-Zustand eines Renders als Annotations bereit."""
     if os.environ.get("GITHUB_ACTIONS") != "true":
         return
@@ -1669,6 +1687,51 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
                   "; ".join(chunk[:half]) or "-")
         ci_notice("Diagnose 5/6 Teile nach Pose (2/2)",
                   "; ".join(chunk[half:]) or "-")
+
+    # 4b) Segmente je Körperteil: Vertex-/Face-Zahlen + BBox je Span -
+    #     zeigt, ob ein Segment Geometrie ohne sichtbare Faces hat oder
+    #     an einer falschen Position landet.
+    if rig_avatar is not None and per_part_geom:
+        spans_map = getattr(rig_avatar, "segment_spans", None) or {}
+        for part_name in sorted(spans_map):
+            spans = spans_map[part_name]
+            geom = per_part_geom.get(part_name)
+            if not geom or not spans:
+                continue
+            verts = geom["verts"]
+            faces = geom["faces"]
+
+            def _area(a: int, b: int, c: int) -> float:
+                pa, pb, pc = verts[a], verts[b], verts[c]
+                ux, uy, uz = (pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2])
+                vx, vy, vz = (pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2])
+                cx = uy * vz - uz * vy
+                cy = uz * vx - ux * vz
+                cz = ux * vy - uy * vx
+                return 0.5 * math.sqrt(cx * cx + cy * cy + cz * cz)
+
+            degen = sum(1 for a, b, c in faces if _area(a, b, c) < 1e-10)
+            seg_bits: List[str] = []
+            for seg_name, v0, v1 in spans:
+                v0 = max(0, min(v0, len(verts)))
+                v1 = max(0, min(v1, len(verts)))
+                sub = verts[v0:v1]
+                n_faces = sum(
+                    1 for a, b, c in faces
+                    if v0 <= min(a, b, c) and max(a, b, c) < v1)
+                if sub:
+                    sx = [p[0] for p in sub]; sy = [p[1] for p in sub]
+                    sz = [p[2] for p in sub]
+                    bbox_txt = (f"x[{min(sx):.2f}..{max(sx):.2f}]"
+                                f" y[{min(sy):.2f}..{max(sy):.2f}]"
+                                f" z[{min(sz):.2f}..{max(sz):.2f}]")
+                else:
+                    bbox_txt = "leer"
+                seg_bits.append(
+                    f"{seg_name}: {len(sub)} v, {n_faces} f, {bbox_txt}")
+            ci_notice(f"Diagnose 5b/6 Segmente {part_name}",
+                      f"{len(verts)} v, {len(faces)} f, {degen} degeneriert"
+                      f" (Welt nach Pose): " + (" | ".join(seg_bits) or "-"))
 
     # 5) Accessoires inkl. Layered Clothing
     if accessory_diag:
