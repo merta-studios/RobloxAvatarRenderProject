@@ -831,8 +831,41 @@ def parse_curve_animation(roots: Sequence[Dict[str, Any]]) -> Optional[Dict[str,
                     "name": rec.get("name") or "",
                     "laenge": _curve_length(gelenke),
                     "marker": marker,
-                    "marker_debug": marker_debug}
+                    "marker_debug": marker_debug,
+                    "key_zeiten": _union_key_times(gelenke)}
     return None
+
+
+def _union_key_times(gelenke: Dict[str, Dict[str, Any]]) -> List[float]:
+    """Vereinigung aller Kanal-Key-Zeiten, dedup (1e-4), sortiert.
+
+    Rekonstruiert die Keyframe-Zeiten der KeyframeSequence, die Roblox'
+    KeyframeSequenceProvider serverseitig aus der CurveAnimation generiert
+    (rbx-native convert.rs ``key_times``): pro Gelenk die Vereinigung ueber
+    alle sechs Kanaele, overall vereinigt - der Katalog rendert den
+    mittleren dieser Keyframes.
+    """
+    zeiten: List[float] = []
+
+    def scan(curves: Dict[str, List[Dict[str, Any]]]) -> None:
+        for keys in curves.values():
+            zeiten.extend(k["time"] for k in keys)
+
+    for entry in gelenke.values():
+        if entry.get("position"):
+            scan(entry["position"].get("achsen") or {})
+        rot = entry.get("rotation")
+        if rot:
+            if rot.get("art") == "euler":
+                scan(rot.get("achsen") or {})
+            else:
+                zeiten.extend(k["time"] for k in rot.get("keys") or [])
+    zeiten.sort()
+    out: List[float] = []
+    for t in zeiten:
+        if not out or t - out[-1] >= 1e-4:
+            out.append(t)
+    return out
 
 
 def _curve_length(gelenke: Dict[str, Dict[str, Any]]) -> float:
@@ -915,7 +948,9 @@ def select_sample_time(laenge: float, thumbnail_time: Optional[float]) -> float:
 def select_curve_frame(laenge: float,
                        thumbnail_time: Optional[float],
                        marker: Optional[List[Dict[str, Any]]],
-                       zeit: Optional[float] = None) -> Tuple[float, str]:
+                       zeit: Optional[float] = None,
+                       key_zeiten: Optional[List[float]] = None
+                       ) -> Tuple[float, str]:
     """Abtastzeitpunkt einer CurveAnimation waehlen (Roblox-Regeln).
 
     Rangfolge:
@@ -928,7 +963,11 @@ def select_curve_frame(laenge: float,
        den mittleren Keyframe (``emoteKeyframes[ceil(n/2)]``). Die Namen der
        urspruenglichen Keyframes reisen als Marker - der mittlere Marker
        rekonstruiert also den mittleren Keyframe der Original-Sequenz.
-    4. Halbe Dauer (``EmoteUtility.GetThumbnailKeyframeFromCurve``-Fallback).
+    4. **Mittlerer Keyframe der generierten KeyframeSequence**: ohne Marker
+       ist die beste Rekonstruktion die Vereinigung aller Kanal-Key-Zeiten
+       (rbx-native ``convert.rs key_times`` - genau die Zeiten, an denen
+       Roblox' Konverter Keyframes setzt).
+    5. Halbe Dauer (``EmoteUtility.GetThumbnailKeyframeFromCurve``-Fallback).
 
     Rueckgabe: ``(zeit_s, beschreibung_der_auswahl)``.
     """
@@ -942,6 +981,12 @@ def select_curve_frame(laenge: float,
         return t, (f"mittlerer benannter Keyframe ({mid + 1}/{len(marker)}: "
                    f"'{marker[mid]['name']}' bei "
                    f"{_fmt_de(marker[mid]['time'])} s, Roblox-Katalog-Regel)")
+    if key_zeiten:
+        mid = (len(key_zeiten) - 1) // 2  # emoteKeyframes[ceil(n/2)]
+        t = max(0.0, min(key_zeiten[mid], laenge))
+        return t, (f"mittlerer Keyframe der generierten KeyframeSequence "
+                   f"({mid + 1}/{len(key_zeiten)} bei {_fmt_de(t)} s, "
+                   f"Roblox-Katalog-Regel)")
     return laenge / 2.0, "halbe Dauer (Roblox-Fallback)"
 
 
@@ -1127,7 +1172,9 @@ def load_emote_pose(emote_id: Optional[int] = None,
        Configs.toml), dann Thumbnail-Metadaten (``ThumbnailTime`` bzw.
        ``ThumbnailKeyframe``), dann der mittlere benannte Keyframe
        (MarkerCurve ``NamedKeyframeEvent`` - Roblox-Katalog-Regel), dann
-       Roblox-Fallback (Mittel-Keyframe / halbe Dauer).
+       der mittlere Keyframe der generierten KeyframeSequence (Vereinigung
+       der Kanal-Key-Zeiten), dann Roblox-Fallback (Mittel-Keyframe /
+       halbe Dauer).
     5. Pose-CFrames extrahieren und in das interne Pose-Format uebersetzen.
 
     Rueckgabe: ``(pose_dict, einstellungen, info)``. Fehler -> :class:`EmoteError`.
@@ -1216,8 +1263,10 @@ def load_emote_pose(emote_id: Optional[int] = None,
         if marker:
             info["marker"] = [(m["name"], round(m["time"], 4)) for m in marker]
         info["marker_debug"] = clip.get("marker_debug") or []
+        key_zeiten = clip.get("key_zeiten") or []
+        info["key_zeiten"] = [round(t, 4) for t in key_zeiten]
         t, auswahl = select_curve_frame(laenge, meta.get("ThumbnailTime"),
-                                        marker, zeit)
+                                        marker, zeit, key_zeiten)
         info["auswahl"] = auswahl
         info["zeit_s"] = t
         posen = sample_curve_animation(clip, t)

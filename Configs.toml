@@ -61,12 +61,16 @@ drehung_grad = 0
 #     das Katalog-Vorschaubild zeigt – deterministisch über die Daten, die
 #     Roblox selbst dafür im Emote-Asset ablegt (ThumbnailKeyframe bzw.
 #     ThumbnailTime). Ohne diese Werte gilt Roblox' eigene Regel:
-#     der MITTLERE KEYFRAME – bei CurveAnimations der mittlere benannte
-#     Keyframe (die Namen der ursprünglichen Keyframes reisen als
-#     MarkerCurve "NamedKeyframeEvent" im Asset), bei klassischen
-#     Emotes der Mittel-Keyframe; nur ohne jede Keyframe-Info die halbe
-#     Emote-Dauer. Moderne UGC-Emotes (CurveAnimations) werden genauso
-#     unterstützt wie klassische KeyframeSequence-Emotes.
+#     der MITTLERE KEYFRAME – bei CurveAnimations zunächst der mittlere
+#     benannte Keyframe (die Namen der ursprünglichen Keyframes reisen
+#     als MarkerCurve "NamedKeyframeEvent" im Asset mit), und wenn das
+#     Emote gar keine benannten Keyframes hat (wie viele UGC-Tänze),
+#     der mittlere Keyframe der aus den Kanal-Keys generierten
+#     KeyframeSequence (exakt die Zeiten, an denen Roblox' Konverter
+#     Keyframes setzt); bei klassischen Emotes der Mittel-Keyframe;
+#     nur ohne jede Keyframe-Info die halbe Emote-Dauer. Moderne
+#     UGC-Emotes (CurveAnimations) werden genauso unterstützt wie
+#     klassische KeyframeSequence-Emotes.
 #
 #     Optional dazu (siehe auch 3b/3c unten):
 #         emote_zeit  = Zeitpunkt in Sekunden, falls ein anderer Frame als
@@ -126,7 +130,7 @@ emote_datei = ""
 #  automatisch wieder auf false. So rendert es nicht bei jeder kleinen
 #  Änderung erneut – einfach auf true stellen, wenn ein neues Bild gewünscht
 #  ist.
-render_bei_aenderung = false
+render_bei_aenderung = true
 
 
 # -----------------------------------------------------------------------------

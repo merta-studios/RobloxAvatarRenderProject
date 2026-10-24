@@ -722,13 +722,18 @@ def test_load_emote_pose_curve_animation(tmp_path, no_network):
     assert pose_dict["oberer_torso"]["rotation"][0] == pytest.approx(20.0)
 
 
-def test_load_emote_pose_curve_fallback_halbe_dauer(tmp_path, no_network):
+def test_load_emote_pose_curve_mittlerer_keyframe(tmp_path, no_network):
+    """Ohne Thumbnail-Metadaten und Marker: mittlerer Keyframe der
+    generierten KeyframeSequence (Vereinigung der Kanal-Keys, Roblox-
+    Katalog-Regel)."""
     no_network[987654321] = xml_curve_animation().encode()
     datei = _write(tmp_path, "emote.rbxmx", xml_emote_asset())
     _pose, _settings, info = emote_pose.load_emote_pose(
         emote_id=7, client=FakeClient(), datei=datei, log=lambda m: None)
-    assert info["zeit_s"] == pytest.approx(1.0)  # haelfte von 2 s
-    assert "halbe Dauer" in info["auswahl"]
+    assert info["key_zeiten"] == [0.0, 2.0]
+    # ceil(2/2) = 1 -> erster Keyframe (0.0 s)
+    assert info["zeit_s"] == pytest.approx(0.0)
+    assert "mittlerer Keyframe der generierten KeyframeSequence" in info["auswahl"]
 
 
 def test_load_emote_pose_clip_direkt_ohne_animation(tmp_path):
@@ -927,32 +932,44 @@ def test_decode_marker_curve_sortiert_und_rot():
     assert emote_pose.decode_marker_curve(struct.pack("<III", 99, 0, 0)) == []
 
 
-@pytest.mark.parametrize("laenge,thumb,marker,zeit,expected_t,expected_txt", [
+@pytest.mark.parametrize("laenge,thumb,marker,zeit,keys,expected_t,expected_txt", [
     # manueller Override gewinnt
-    (4.0, None, [{"name": "A", "time": 1.0}], 3.0, 3.0, "emote_zeit"),
+    (4.0, None, [{"name": "A", "time": 1.0}], 3.0, None, 3.0, "emote_zeit"),
     # ThumbnailTime gewinnt vor Markern
-    (4.0, 0.5, [{"name": "A", "time": 1.0}], None, 0.5, "ThumbnailTime"),
+    (4.0, 0.5, [{"name": "A", "time": 1.0}], None, [0.0, 2.0], 0.5,
+     "ThumbnailTime"),
     # mittlerer benannter Keyframe (ungerade Anzahl: 2/3)
     (4.87, None, [{"name": "A", "time": 0.0},
                   {"name": "B", "time": 1.2},
-                  {"name": "C", "time": 4.8}], None, 1.2,
+                  {"name": "C", "time": 4.8}], None, [0.0, 2.4, 4.8], 1.2,
      "mittlerer benannter Keyframe (2/3: 'B'"),
     # gerade Anzahl: ceil(4/2) = 2 -> Index 1
     (4.0, None, [{"name": "A", "time": 0.0}, {"name": "B", "time": 1.0},
                  {"name": "C", "time": 2.0}, {"name": "D", "time": 3.0}],
-     None, 1.0, "mittlerer benannter Keyframe (2/4: 'B'"),
+     None, [0.0, 1.0, 2.0, 3.0], 1.0, "mittlerer benannter Keyframe (2/4: 'B'"),
     # ungueltige ThumbnailTime -> Marker-Regel
-    (4.0, 9.0, [{"name": "A", "time": 3.0}], None, 3.0,
+    (4.0, 9.0, [{"name": "A", "time": 3.0}], None, None, 3.0,
      "mittlerer benannter Keyframe"),
-    # ohne Marker: halbe Dauer
-    (4.0, None, [], None, 2.0, "halbe Dauer"),
-    (4.0, None, None, None, 2.0, "halbe Dauer"),
+    # ohne Marker: mittlerer Key der Vereinigung (ungerade: 2/3 -> 1.2)
+    (4.8, None, [], None, [0.0, 1.2, 4.8], 1.2,
+     "mittlerer Keyframe der generierten KeyframeSequence (2/3"),
+    # ohne Marker, gerade Anzahl: ceil(4/2) = 2 -> Index 1
+    (4.8, None, None, None, [0.0, 1.0, 3.0, 4.8], 1.0,
+     "mittlerer Keyframe der generierten KeyframeSequence (2/4"),
+    # Key-Zeiten jenseits der Dauer werden begrenzt (mittlerer Key 5.0 > 2.0)
+    (2.0, None, [], None, [0.0, 5.0, 9.0], 2.0,
+     "mittlerer Keyframe der generierten KeyframeSequence"),
+    # ohne Marker und ohne Keys: halbe Dauer
+    (4.0, None, [], None, [], 2.0, "halbe Dauer"),
+    (4.0, None, None, None, None, 2.0, "halbe Dauer"),
     # Marker jenseits der Dauer wird auf die Dauer begrenzt
-    (2.0, None, [{"name": "A", "time": 9.0}], None, 2.0,
+    (2.0, None, [{"name": "A", "time": 9.0}], None, None, 2.0,
      "mittlerer benannter Keyframe"),
 ])
-def test_select_curve_frame(laenge, thumb, marker, zeit, expected_t, expected_txt):
-    t, beschreibung = emote_pose.select_curve_frame(laenge, thumb, marker, zeit)
+def test_select_curve_frame(laenge, thumb, marker, zeit, keys,
+                            expected_t, expected_txt):
+    t, beschreibung = emote_pose.select_curve_frame(
+        laenge, thumb, marker, zeit, keys)
     assert t == pytest.approx(expected_t)
     assert expected_txt in beschreibung
 
@@ -1001,3 +1018,34 @@ def test_parse_curve_animation_binaer_marker_prop_log():
     assert any("MarkerCurve.ValuesAndTimes" in line and "typ=0x01" in line
                for line in prop_log)
     assert any("CurveAnimation.Name" in line for line in prop_log)
+
+
+def test_union_key_times_vereinigt_und_dedup():
+    """Vereinigung aller Kanal-Key-Zeiten = Keyframe-Zeiten der KFS, die
+    Roblox' Konverter aus der CurveAnimation generiert."""
+    pos_keys = [{"time": 0.0, "value": 1.0}, {"time": 1.2, "value": 2.0}]
+    rot_keys = [{"time": 0.6, "value": 3.0}, {"time": 1.2, "value": 4.0},
+                {"time": 4.8, "value": 5.0}]
+    gelenke = {
+        "UpperTorso": {
+            "position": {"achsen": {"X": pos_keys, "Y": [], "Z": []}},
+            "rotation": {"art": "euler", "achsen": {"X": rot_keys},
+                         "keys": []},
+        },
+        "Head": {
+            "position": None,
+            # fast identische Zeit (Delta < 1e-4) wird dedupliziert
+            "rotation": {"art": "euler", "achsen": {"Y": [
+                {"time": 0.60005, "value": 9.0},
+                {"time": 2.0, "value": 8.0}]},
+                "keys": []},
+        },
+    }
+    zeiten = emote_pose._union_key_times(gelenke)
+    assert zeiten == pytest.approx([0.0, 0.6, 1.2, 2.0, 4.8])
+    # Quaternion-Rotation steuert ihre Key-Zeiten bei
+    gelenke_q = {"Head": {"position": None,
+                          "rotation": {"art": "quaternion",
+                                       "achsen": {},
+                                       "keys": [{"time": 3.0}]}}}
+    assert emote_pose._union_key_times(gelenke_q) == pytest.approx([3.0])
