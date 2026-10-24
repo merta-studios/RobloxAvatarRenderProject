@@ -416,6 +416,12 @@ def _apply_property(record: Dict[str, Any], prop_name: str, value: Any) -> None:
         record["weight"] = float(value)
     elif key == "rotationorder" and isinstance(value, (int, float)) and not isinstance(value, bool):
         record["rotation_order"] = int(value)
+    elif key == "attachmentpos" and isinstance(value, tuple) and len(value) == 3:
+        record["hat_attachment_pos"] = value
+    elif key == "attachmentforward" and isinstance(value, tuple) and len(value) == 3:
+        record["hat_attachment_forward"] = value
+    elif key == "attachmentup" and isinstance(value, tuple) and len(value) == 3:
+        record["hat_attachment_up"] = value
     elif key == "valuesandtimes" and isinstance(value, (bytes, bytearray)):
         record["values_and_times"] = bytes(value)
     elif key == "loop" and isinstance(value, bool):
@@ -480,6 +486,29 @@ def _assemble(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             cur = cur.get("Parent")
         return None
 
+    def enclosing_hat_mount(rec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Legacy-Hut (Klasse Hat, vor der Accessoire-Aera): Mounting über
+        AttachmentPos/AttachmentForward/AttachmentUp am Hat-Objekt, oft zwei
+        Ebenen ueber dem Mesh (SpecialMesh -> Handle-Part -> Hat)."""
+        cur = rec
+        while cur is not None:
+            if cur.get("hat_attachment_pos") is not None:
+                return {
+                    "pos": cur["hat_attachment_pos"],
+                    "forward": cur.get("hat_attachment_forward"),
+                    "up": cur.get("hat_attachment_up"),
+                }
+            cur = cur.get("Parent")
+        return None
+
+    def rbxm_ancestry(rec: Dict[str, Any]) -> str:
+        names = [rec.get("class") or "?"]
+        cur = rec.get("Parent")
+        while cur is not None and len(names) < 5:
+            names.append(cur.get("class") or "?")
+            cur = cur.get("Parent")
+        return "/".join(names)
+
     def collect_part_metadata(rec: Dict[str, Any]) -> Dict[str, Any]:
         """Attachments, OriginalSize, ScaleType und Wrap-Daten sammeln."""
         sources = [rec]
@@ -539,6 +568,8 @@ def _assemble(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "scale_type": scale_type,
             "attachments": attachments,
             "accessory_attachment_point": enclosing_attachment_point(rec),
+            "hat_mount": enclosing_hat_mount(rec),
+            "rbxm_ancestry": rbxm_ancestry(rec),
             "import_origin": rec.get("import_origin"),
             "wrap_layer": wrap_layer,
             "wrap_target": wrap_target,
@@ -632,7 +663,8 @@ def _assemble(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 _STRING_PROPS = ({"name", "meshid", "value", "animationid"} | _TEXTURE_PROPS
                  | _TEXTURE_OVERLAY_PROPS | _CAGE_MESH_PROPS)
-_VECTOR3_PROPS = {"size", "scale", "offset", "vertex", "value"}
+_VECTOR3_PROPS = {"size", "scale", "offset", "vertex", "value",
+                  "attachmentpos", "attachmentforward", "attachmentup"}
 _CFRAME_PROPS = {"cframe", "attachmentpoint", "importorigin", "referenceorigin"}
 _FLOAT_PROPS = {"transparency", "puffiness", "time", "weight", "value",
                 "authoredhipheight"}

@@ -274,6 +274,73 @@ def _obj_max_axis(path):
     return max(hi[i] - lo[i] for i in range(3))
 
 
+def _obj_bbox(path):
+    lo = [1e18] * 3
+    hi = [-1e18] * 3
+    for line in path.read_text().splitlines():
+        if line.startswith("v "):
+            for i, value in enumerate(line.split()[1:4]):
+                lo[i] = min(lo[i], float(value))
+                hi[i] = max(hi[i], float(value))
+    return lo, hi
+
+
+def test_legacy_hat_exakt_geschweisst(monkeypatch, tmp_path):
+    """Legacy-Hut (Klasse Hat, 2011-Aera): Handle OHNE Attachment-Kind.
+
+    Roblox schweisst solche Hueten klassisch mit C0 = (0, headSize.Y/2, 0)
+    am Kopf und C1 aus AttachmentPos/Forward/Up des Hat-Objekts: die Mesh-
+    Vertices sind relativ zum Anbringpunkt authoriert und bleiben in
+    Originalgroesse. Regressionstest fuer den Chestnut Bun (62724852),
+    der vorher per Heuristik auf 1,85 Studs Zielgroesse gestreckt und
+    ueber dem Kopf zentriert wurde."""
+    avatar = {
+        "playerAvatarType": "R15",
+        "scales": dict(roblox_api.DEFAULT_SCALES),
+        "bodyColors": dict(roblox_api.DEFAULT_BODY_COLORS),
+        "assets": [{"id": 52, "name": "Chestnut Bun",
+                    "assetType": {"id": 41, "name": "Hair"}}],
+    }
+    # Bun-Mesh wie 2011 authoriert: relativ zum Anbringpunkt (0,0,0),
+    # Box x[0..0.8] y[0..0.5] z[0..0.8], AttachmentPos Mitte der Unterseite.
+    bun = roblox_mesh.make_box(0.8, 0.5, 0.8).transform(1.0, (0.4, 0.25, 0.4))
+    hat = {"class": "Hat",
+           "props": {"Name": "Chestnut Bun",
+                     "AttachmentPos": (0.4, 0.0, 0.4),
+                     "AttachmentForward": (0.0, 0.0, -1.0),
+                     "AttachmentUp": (0.0, 1.0, 0.0)},
+           "Parent": None}
+    handle = {"class": "Part",
+              "props": {"Name": "Handle", "size": (1.0, 1.0, 1.0),
+                        "CFrame": (0.0, 3.0, 0.0)},
+              "Parent": 0}
+    smesh = {"class": "SpecialMesh",
+             "props": {"Name": "Mesh", "MeshId": "rbxassetid://52001",
+                       "scale": (1.0, 1.0, 1.0)},
+             "Parent": 1}
+    downloads = {
+        52: make_rbxm([hat, handle, smesh]),
+        52001: encode_v2(bun),
+    }
+    _install_fakes(monkeypatch, avatar, downloads)
+
+    manifest = build_avatar.build("MertaStudios", str(tmp_path), verbose=False)
+
+    hut = next(p for p in manifest["parts"] if p["kind"] == "accessory")
+    lo, hi = _obj_bbox(tmp_path / hut["obj"])
+    # Originalgroesse erhalten - frueher wurde auf 1,85 Studs gestreckt.
+    assert max(hi[i] - lo[i] for i in range(3)) == pytest.approx(0.8, abs=0.05)
+    # Anbringpunkt = Kopf-Top: die Unterseite des Buns sitzt in der
+    # Kopf-Top-Region (head_center + 0,6 * headScale +/- Toleranz fuer die
+    # leicht abweichende Kopf-Mitte des synthetischen Standardkoerpers)
+    # statt ueber dem Kopf zu schweben oder im Hals zu versinken.
+    anchor_y = manifest["metrics"]["head_center_y"]
+    assert lo[1] == pytest.approx(anchor_y + 0.6, abs=0.3)
+    assert hi[1] - lo[1] == pytest.approx(0.5, abs=0.05)
+    assert any("Legacy-Weld" in (p.get("note") or "")
+               for p in manifest["parts"] if p["kind"] == "accessory")
+
+
 def test_riesiges_mesh_wird_neu_skaliert(monkeypatch, tmp_path):
     avatar = {
         "playerAvatarType": "R15",
