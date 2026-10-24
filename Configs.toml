@@ -22,7 +22,7 @@
 # -----------------------------------------------------------------------------
 #  Der Name aus der Roblox-Profil-URL, z. B. "MertaStudios".
 #  (Ein "https://www.roblox.com/users/123456/profile"-Link funktioniert auch.)
-username = "Djselena2013"
+username = "SunsetSiya"
 
 
 # -----------------------------------------------------------------------------
@@ -130,7 +130,7 @@ emote_datei = ""
 #  automatisch wieder auf false. So rendert es nicht bei jeder kleinen
 #  Änderung erneut – einfach auf true stellen, wenn ein neues Bild gewünscht
 #  ist.
-render_bei_aenderung = false
+render_bei_aenderung = true
 
 
 # -----------------------------------------------------------------------------
