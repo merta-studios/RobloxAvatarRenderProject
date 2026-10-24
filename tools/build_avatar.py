@@ -1556,7 +1556,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     write_summary(os.path.join(out_dir, "summary.md"), manifest)
 
     # CI-Diagnose als Annotations (ausserhalb von GitHub Actions still)
-    emit_ci_diagnosis(manifest, per_part_bounds, pose_ctx,
+    emit_ci_diagnosis(manifest, per_part_bounds, pose_ctx, pose_info,
                       rig_avatar if use_r15_rig else None, accessory_diag,
                       r15_segments_by_part, per_part_geom)
 
@@ -1620,6 +1620,7 @@ def _fmt_bnds(bnds) -> str:
 def emit_ci_diagnosis(manifest: Dict[str, Any],
                       per_part_bounds: Dict[str, Any],
                       pose_ctx: Optional[avatar_pose.PoseContext],
+                      pose_info: Optional[Dict[str, Any]],
                       rig_avatar: Optional[Any],
                       accessory_diag: List[Dict[str, Any]],
                       r15_segments_by_part: Dict[str, List[Dict[str, Any]]],
@@ -1684,6 +1685,30 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
                          f"trans=({tx:.2f},{ty:.2f},{tz:.2f})")
         ci_notice("Diagnose 4/6 Pose je Knochen", " | ".join(lines) or "neutral")
 
+        # 3b) rohe Motor6D-Transformationswerte (T aus dem Emote) je Knochen
+        raw = []
+        for bone in avatar_pose.BONE_ORDER:
+            spec = pose_ctx.pose.get(bone) or {}
+            motor = spec.get("motor")
+            if not motor:
+                continue
+            t_off, r_mat = motor
+            ex, ey, ez = _mat3_euler_deg(r_mat)
+            raw.append(f"{bone} T=({float(t_off[0]):.3f},{float(t_off[1]):.3f},"
+                       f"{float(t_off[2]):.3f}) rot=({ex:.1f},{ey:.1f},{ez:.1f})")
+        ci_notice("Diagnose 4b/6 Motor6D roh (Emote-Transform)",
+                  " | ".join(raw) or "keine Motor-Werte")
+
+        # 3c) Emote-Auswahl: welcher Frame, nach welcher Regel
+        emo = (pose_info or {}).get("emote") or {}
+        if emo:
+            ci_notice(
+                "Diagnose 4c/6 Emote-Auswahl",
+                f"emote_id={emo.get('emote_id')} name='{emo.get('name')}' "
+                f"typ={emo.get('typ')} keyframes={emo.get('keyframes')} "
+                f"frame={emo.get('frame')} zeit_s={emo.get('zeit_s')} "
+                f"auswahl='{emo.get('auswahl')}' gelenke={emo.get('gelenke')}")
+
     # 4) Teil-Bounding-Boxen NACH der Pose (Weltkoordinaten der OBJs)
     if per_part_bounds:
         chunk: List[str] = []
@@ -1701,6 +1726,9 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
     #     an einer falschen Position landet.
     if rig_avatar is not None and per_part_geom:
         spans_map = getattr(rig_avatar, "segment_spans", None) or {}
+        # Bind-BBoxen je Span (aus dem un-poseden Rig-Mesh) fuer Offline-
+        # Nachrechnung der Pose.
+        bind_meshes = getattr(rig_avatar, "body_meshes", None) or {}
         for part_name in sorted(spans_map):
             spans = spans_map[part_name]
             geom = per_part_geom.get(part_name)
@@ -1708,6 +1736,8 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
                 continue
             verts = geom["verts"]
             faces = geom["faces"]
+            bind_verts = (bind_meshes.get(part_name).positions
+                          if bind_meshes.get(part_name) is not None else [])
 
             def _area(a: int, b: int, c: int) -> float:
                 pa, pb, pc = verts[a], verts[b], verts[c]
@@ -1727,6 +1757,15 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
                 n_faces = sum(
                     1 for a, b, c in faces
                     if v0 <= min(a, b, c) and max(a, b, c) < v1)
+                bind_sub = bind_verts[v0:v1] if bind_verts else []
+                if bind_sub:
+                    bx = [p[0] for p in bind_sub]; by = [p[1] for p in bind_sub]
+                    bz = [p[2] for p in bind_sub]
+                    bind_txt = (f" bind x[{min(bx):.2f}..{max(bx):.2f}]"
+                                f" y[{min(by):.2f}..{max(by):.2f}]"
+                                f" z[{min(bz):.2f}..{max(bz):.2f}]")
+                else:
+                    bind_txt = ""
                 if sub:
                     sx = [p[0] for p in sub]; sy = [p[1] for p in sub]
                     sz = [p[2] for p in sub]
@@ -1736,10 +1775,24 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
                 else:
                     bbox_txt = "leer"
                 seg_bits.append(
-                    f"{seg_name}: {len(sub)} v, {n_faces} f, {bbox_txt}")
+                    f"{seg_name}: {len(sub)} v, {n_faces} f, {bbox_txt}{bind_txt}")
             ci_notice(f"Diagnose 5b/6 Segmente {part_name}",
                       f"{len(verts)} v, {len(faces)} f, {degen} degeneriert"
                       f" (Welt nach Pose): " + (" | ".join(seg_bits) or "-"))
+
+    # 4c) Gelenk-Frames (C0-Rotationen): nur bei nicht-kanonischen
+    #     Attachment-Frames wirkt eine Emote-Rotation nicht in Weltachsen.
+    if rig_avatar is not None:
+        jf = getattr(rig_avatar, "joint_frames", None) or {}
+        jf_bits = []
+        for k, m in sorted(jf.items()):
+            ex, ey, ez = _mat3_euler_deg(m)
+            if abs(ex) < 0.05 and abs(ey) < 0.05 and abs(ez) < 0.05:
+                continue
+            jf_bits.append(f"{k} rot=({ex:.1f},{ey:.1f},{ez:.1f})deg")
+        ci_notice("Diagnose 5c/6 Gelenk-Frames (C0-Rotation)",
+                  (" | ".join(jf_bits)) if jf_bits
+                  else "alle Gelenk-Frames Identity (kanonisch)")
 
     # 5) Accessoires inkl. Layered Clothing
     if accessory_diag:
