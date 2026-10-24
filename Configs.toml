@@ -95,7 +95,7 @@ pose = "emote:4272351660"
 #            wird der Keyframe genommen, der diesem Zeitpunkt am nächsten
 #            liegt. So lässt sich z. B. die "ausdrucksstärkste" Haltung
 #            eines Tanz-Emotes einfrieren.
-emote_zeit = -1
+emote_zeit = 0.0
 
 
 # -----------------------------------------------------------------------------
