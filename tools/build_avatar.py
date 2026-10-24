@@ -1609,6 +1609,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 k: [round(c, 3) for c in v]
                 for k, v in (getattr(rig_avatar, "joint_positions", {}) or {}).items()
             },
+            "segment_rohdaten": dict(getattr(rig_avatar, "segment_info", {}) or {}),
             "segmente": {
                 seg: {"bbox_min": [round(c, 3) for c in mesh.bbox()[0]],
                       "bbox_max": [round(c, 3) for c in mesh.bbox()[1]]}
