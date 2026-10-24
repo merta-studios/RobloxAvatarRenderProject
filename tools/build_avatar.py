@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import math
 import os
 import sys
 from typing import Any, Dict, List, Optional, Tuple
@@ -1298,6 +1299,14 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
 
     used_filenames = set()
     accessory_assets = 0
+    accessory_diag: List[Dict[str, Any]] = []
+    # Layered Clothing (WrapLayer): folgt der Pose nicht (Cage-Deformation ist
+    # offline nicht reproduzierbar) - deshalb standardmaessig auslassen.
+    layered_clothing_modus = str(
+        render_cfg.get("layered_clothing") or "auslassen").strip().lower()
+    if layered_clothing_modus not in ("auslassen", "starr"):
+        layered_clothing_modus = "auslassen"
+    layered_ausgelassen: List[Dict[str, Any]] = []
     for mesh_part in mesh_parts:
         if id(mesh_part) in consumed:
             continue
@@ -1308,8 +1317,22 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         if int(mesh_part["type_id"]) == HEAD_ASSET_TYPE:
             continue  # nur ein Kopf wird verwendet
 
+        if layered_clothing_modus == "auslassen" and mesh_part.get("wrap_layer"):
+            # Layered Clothing haelt der Pose nicht stand (keine Cage-
+            # Deformation offline) - bewusst nicht rendern.
+            layered_ausgelassen.append({
+                "asset_id": mesh_part["asset_id"],
+                "name": mesh_part["label"] or mesh_part["type_name"],
+                "asset_type": mesh_part["type_name"],
+                "reason": ("Layered Clothing (WrapLayer) folgt der Pose nicht "
+                           "und wird ausgelassen (layered_clothing = "
+                           "'auslassen')"),
+            })
+            continue
+
         placed_acc: Optional[roblox_mesh.MeshData] = None
         note = ""
+        acc_mode = "?"
         if mesh_part["mesh"].skinning is not None:
             skinned = roblox_mesh.skin_mesh_to_rig(
                 mesh_part["mesh"],
@@ -1317,6 +1340,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             )
             if skinned is not None and not skinned.is_empty:
                 placed_acc = skinned
+                acc_mode = "skinning"
                 sz = placed_acc.size()
                 note = (
                     f"{mesh_part['type_name']}: per Linear-Blend-Skinning "
@@ -1328,8 +1352,10 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             welded = avatar_rig.weld_accessory(mesh_part, rig_avatar)
             if welded is not None:
                 placed_acc, note = welded
+                acc_mode = "weld"
 
         if placed_acc is None:
+            acc_mode = "fallback"
             placed_acc, note = avatar_rig.place_accessory(
                 mesh_part["mesh"], int(mesh_part["type_id"]), metrics,
                 size_hint=mesh_part.get("rbxm_size"),
@@ -1345,6 +1371,14 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             mesh_part["label"] or mesh_part["type_name"],
             warnings,
         )
+        _acc_layout = avatar_rig.ACCESSORY_LAYOUT.get(int(mesh_part["type_id"]), {})
+        accessory_diag.append({
+            "label": mesh_part["label"] or mesh_part["type_name"],
+            "type": mesh_part["type_name"],
+            "wrap": bool(mesh_part.get("wrap_layer")),
+            "anchor": str(_acc_layout.get("anchor") or "?"),
+            "mode": acc_mode,
+        })
         # Accessoires/Kleidung werden mitgedreht und mitverschoben: starre
         # Zuordnung zum passenden Knochen (Hut -> Kopf, Gear -> rechte Hand,
         # Rucksack -> oberer Torso ...).
@@ -1390,11 +1424,20 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         })
         accessory_assets += 1
 
+    if layered_ausgelassen:
+        warnings.append(
+            f"{len(layered_ausgelassen)} Layered-Clothing-Accessoires nicht "
+            f"gerendert (layered_clothing = '{layered_clothing_modus}'): "
+            + ", ".join(str(item["name"]) for item in layered_ausgelassen))
+
     # ---- Manifest ---------------------------------------------------------
     bounds_lo = [1e9, 1e9, 1e9]
     bounds_hi = [-1e9, -1e9, -1e9]
+    per_part_bounds: Dict[str, Tuple[List[float], List[float]]] = {}
     for part in parts:
         path = os.path.join(out_dir, part["obj"])
+        p_lo = [1e9, 1e9, 1e9]
+        p_hi = [-1e9, -1e9, -1e9]
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 for line in fh:
@@ -1403,8 +1446,12 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                         for i, val in enumerate((float(x), float(y), float(z))):
                             bounds_lo[i] = min(bounds_lo[i], val)
                             bounds_hi[i] = max(bounds_hi[i], val)
+                            p_lo[i] = min(p_lo[i], val)
+                            p_hi[i] = max(p_hi[i], val)
         except OSError:
             continue
+        if p_lo[0] <= p_hi[0]:
+            per_part_bounds[str(part["name"])] = (p_lo, p_hi)
     if bounds_lo[0] > bounds_hi[0]:
         bounds_lo, bounds_hi = [-1, 0, -1], [1, 5, 1]
 
@@ -1458,6 +1505,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         "textures": textures,
         "skipped": skipped,
         "ignored": ignored,
+        "layered_ausgelassen": layered_ausgelassen,
         "warnings": warnings,
         "stats": {
             "parts": len(parts),
@@ -1470,6 +1518,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             # Animationen stehen getrennt unter ignored_animations.
             "failed": len(skipped),
             "ignored_animations": len(ignored),
+            "layered_ausgelassen": len(layered_ausgelassen),
             "ausruestung_uebersprungen": sum(
                 1 for item in ignored
                 if item.get("asset_type") == "Gear"
@@ -1481,18 +1530,168 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     write_json(os.path.join(out_dir, "avatar.json"), avatar_raw)
     write_summary(os.path.join(out_dir, "summary.md"), manifest)
 
+    # CI-Diagnose als Annotations (ausserhalb von GitHub Actions still)
+    emit_ci_diagnosis(manifest, per_part_bounds, pose_ctx,
+                      rig_avatar if use_r15_rig else None, accessory_diag,
+                      r15_segments_by_part)
+
     log("")
     log(f"Fertig: {manifest['stats']['parts']} Teile "
         f"({accessory_assets} Accessoires, {body_parts_from_mesh} Koerperteile "
         f"aus echten Meshes, {len(textures)} Texturen), "
         f"{len(skipped)} Assets fehlgeschlagen, "
-        f"{len(ignored)} Animationen ignoriert")
+        f"{len(ignored)} Animationen ignoriert"
+        + (f", {len(layered_ausgelassen)} Layered Clothing ausgelassen"
+           if layered_ausgelassen else ""))
     log(f"Höhe: {fmt_de(manifest['metrics']['height'])} Studs (typisch 5–6), "
         f"Bounding-Box: {manifest['bbox']['min']} .. {manifest['bbox']['max']}")
     if warnings:
         for w in warnings:
             log(f"  ! {w}")
     return manifest
+
+
+# --------------------------------------------------------------------------- #
+# CI-Diagnose: Render-Zustand als GitHub-Annotations                          #
+# --------------------------------------------------------------------------- #
+# Die Notices erscheinen im Workflow-Run als Annotations und sind danach ueber
+# die Check-Run-API abrufbar. So laesst sich ein gerenderter Avatar auch ohne
+# Zugriff auf die Run-Logs analysieren (Gelenke, Pose, Layered Clothing).
+
+def _ci_escape(text: Any) -> str:
+    return (str(text).replace("%", "%25").replace("\r", "%0D")
+            .replace("\n", "%0A").replace(":", "%3A"))
+
+
+def ci_notice(title: str, message: str) -> None:
+    """GitHub-Notice-Annotation ausgeben (ausserhalb von CI still)."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    print(f"::notice title={_ci_escape(title)}::{_ci_escape(message)}")
+
+
+def _mat3_euler_deg(m) -> Tuple[float, float, float]:
+    """Rotationsmatrix (zeilenweise) -> Euler-Winkel in Grad (R = Rz*Ry*Rx)."""
+    r10, r00 = m[1][0], m[0][0]
+    r20, r21, r22 = m[2][0], m[2][1], m[2][2]
+    sy = math.hypot(r00, r10)
+    if sy < 1e-9:
+        x = math.degrees(math.atan2(-r21, r22))
+        y = math.degrees(math.atan2(-r20, sy))
+        z = 0.0
+    else:
+        x = math.degrees(math.atan2(r21, r22))
+        y = math.degrees(math.atan2(-r20, sy))
+        z = math.degrees(math.atan2(r10, r00))
+    return x, y, z
+
+
+def _fmt_bnds(bnds) -> str:
+    lo, hi = bnds
+    return (f"x[{lo[0]:.2f}..{hi[0]:.2f}] y[{lo[1]:.2f}..{hi[1]:.2f}]"
+            f" z[{lo[2]:.2f}..{hi[2]:.2f}]")
+
+
+def emit_ci_diagnosis(manifest: Dict[str, Any],
+                      per_part_bounds: Dict[str, Any],
+                      pose_ctx: Optional[avatar_pose.PoseContext],
+                      rig_avatar: Optional[Any],
+                      accessory_diag: List[Dict[str, Any]],
+                      r15_segments_by_part: Dict[str, List[Dict[str, Any]]]) -> None:
+    """Stellt den Analyse-Zustand eines Renders als Annotations bereit."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    s = manifest["stats"]
+
+    # 1) Aufbau (inkl. R15-Segmente je Koerperteil mit Transparenz)
+    seg_txt = "; ".join(
+        f"{rig_name}: " + ", ".join(
+            f"{mp.get('label') or '?'}(tr={float(mp.get('transparency') or 0.0):g})"
+            for mp in segs)
+        for rig_name, segs in sorted(r15_segments_by_part.items()))
+    ci_notice(
+        "Diagnose 1/6 Aufbau",
+        f"r15_rig={rig_avatar is not None}; Koerperteile {s['body_parts']} "
+        f"({s['body_parts_from_mesh']} echte Meshes), Accessoires "
+        f"{s['accessories']}, fehlgeschlagen {s['failed']}, "
+        f"ignoriert {s['ignored_animations']}; Typ {manifest['avatar_type']}; "
+        f"Hoehe {manifest['metrics']['height']} Studs; Segmente: "
+        + (seg_txt or "keine"))
+
+    # 2) Gelenke in Bind-Pose (aus RigAttachments)
+    if rig_avatar is not None:
+        jp = getattr(rig_avatar, "joint_positions", None) or {}
+        jtxt = "; ".join(
+            f"{k}=({v[0]:.2f},{v[1]:.2f},{v[2]:.2f})"
+            for k, v in sorted(jp.items()))
+        ci_notice("Diagnose 2/6 Gelenke Bind-Pose", jtxt or "keine")
+
+        arm: List[str] = []
+        for side in ("Left", "Right"):
+            sh = jp.get(f"{side}UpperArm")
+            el = jp.get(f"{side}LowerArm")
+            wr = jp.get(f"{side}Hand")
+            if sh and el:
+                d = tuple(el[i] - sh[i] for i in range(3))
+                arm.append(f"{side} Schulter->Ellbogen="
+                           f"({d[0]:.2f},{d[1]:.2f},{d[2]:.2f})")
+                if wr:
+                    d2 = tuple(wr[i] - el[i] for i in range(3))
+                    arm.append(f"{side} Ellbogen->Handgelenk="
+                               f"({d2[0]:.2f},{d2[1]:.2f},{d2[2]:.2f})")
+        ci_notice("Diagnose 3/6 Bind-Arm-Richtungen", " | ".join(arm) or "keine")
+
+    # 3) effektiv angewendete Pose je Knochen (Welt-Transformation)
+    if pose_ctx is not None and pose_ctx.active:
+        lines: List[str] = []
+        for bone in avatar_pose.BONE_ORDER:
+            t = pose_ctx.transforms.get(bone)
+            if t is None:
+                continue
+            rot = pose_ctx.rotations.get(bone)
+            ex, ey, ez = _mat3_euler_deg(rot) if rot else (0.0, 0.0, 0.0)
+            tx, ty, tz = t[0][3], t[1][3], t[2][3]
+            if (abs(ex) < 0.05 and abs(ey) < 0.05 and abs(ez) < 0.05
+                    and abs(tx) + abs(ty) + abs(tz) < 1e-6):
+                continue
+            lines.append(f"{bone} rot=({ex:.1f},{ey:.1f},{ez:.1f})deg "
+                         f"trans=({tx:.2f},{ty:.2f},{tz:.2f})")
+        ci_notice("Diagnose 4/6 Pose je Knochen", " | ".join(lines) or "neutral")
+
+    # 4) Teil-Bounding-Boxen NACH der Pose (Weltkoordinaten der OBJs)
+    if per_part_bounds:
+        chunk: List[str] = []
+        for name in sorted(per_part_bounds):
+            chunk.append(f"{name} {_fmt_bnds(per_part_bounds[name])}")
+        # Nachrichtenbegrenzung: in zwei Haeften teilen
+        half = (len(chunk) + 1) // 2
+        ci_notice("Diagnose 5/6 Teile nach Pose (1/2)",
+                  "; ".join(chunk[:half]) or "-")
+        ci_notice("Diagnose 5/6 Teile nach Pose (2/2)",
+                  "; ".join(chunk[half:]) or "-")
+
+    # 5) Accessoires inkl. Layered Clothing
+    if accessory_diag:
+        entries = [
+            f"{a['label']} ({a['type']}, Anker {a['anchor']}, "
+            f"Modus {a['mode']}, wrap={'ja' if a['wrap'] else 'nein'})"
+            for a in accessory_diag
+        ]
+        for i in range(0, len(entries), 6):
+            ci_notice(f"Diagnose 6/6 Accessoires ({i // 6 + 1})",
+                      " | ".join(entries[i:i + 6]))
+    layered = [a for a in accessory_diag if a.get("wrap")]
+    ci_notice(
+        "Diagnose 6/6 Layered Clothing",
+        (", ".join(f"{a['label']} ({a['type']}, Modus {a['mode']})"
+                   for a in layered)
+         if layered else "kein WrapLayer-Accessoire erkannt")
+        + " - Layered Clothing wird aktuell starr mit einem Knochen "
+          "mitbewegt (keine Cage-Deformation)")
+    if manifest.get("warnings"):
+        for i in range(0, len(manifest["warnings"]), 3):
+            ci_notice(f"Diagnose Warnungen ({i // 3 + 1})",
+                      " | ".join(manifest["warnings"][i:i + 3]))
 
 
 def write_summary(path: str, manifest: Dict[str, Any]) -> None:
@@ -1533,6 +1732,18 @@ def write_summary(path: str, manifest: Dict[str, Any]) -> None:
             for item in manifest["ignored"]
         )
         lines += ["", "## Ignoriert (Animationen/Audio, werden nicht gerendert)", "", names]
+    if manifest.get("layered_ausgelassen"):
+        names = ", ".join(
+            f"{item.get('name') or item.get('asset_id')} ({item.get('asset_type', '')})"
+            for item in manifest["layered_ausgelassen"]
+        )
+        lines += ["",
+                  "## Layered Clothing (nicht gerendert)",
+                  "",
+                  "Folgende Kleidungsstücke schmiegen sich im Spiel per Cage-Deformation "
+                  "an den Körper – das ist offline nicht reproduzierbar, deshalb werden "
+                  "sie ausgelassen (`layered_clothing` = `\"auslassen\"` in der Configs.toml):",
+                  "", names]
     if manifest["warnings"]:
         lines += ["", "## Hinweise", ""]
         lines += [f"* {w}" for w in manifest["warnings"]]

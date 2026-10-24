@@ -123,6 +123,7 @@ Werte werden vor dem Render geprüft (`tools/render_config.py`,
 | `render_bei_aenderung` | `true` = nach diesem Push sofort rendern. Der Workflow setzt den Wert nach erfolgreichem Render automatisch auf `false`. |
 | `hintergrund_url` | URL (oder lokaler Pfad) zu einem Hintergrundbild, `"hdri"` für die HDRI-Umgebung (Standard) oder `"transparent"` für einen durchsichtigen Hintergrund. |
 | `hintergrund_glossy` | `true` = Hintergrund glänzt wie der Avatar, `false` = matt. |
+| `layered_clothing` | `"auslassen"` (Standard) = Layered Clothing (Kleidung, die sich im Spiel eng anschmiegt) wird nicht gerendert – sie kann Posen offline nicht folgen. `"starr"` = trotzdem rendern, dreht dann nur starr mit. |
 
 Das Hintergrundbild wird in Blender auf eine Fläche gelegt, die exakt hinter
 dem Avatar sitzt und bis zum Bildrand reicht.

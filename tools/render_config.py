@@ -34,6 +34,7 @@ DEFAULTS: Dict[str, Any] = {
     "render_bei_aenderung": False,
     "hintergrund_url": "hdri",
     "hintergrund_glossy": False,
+    "layered_clothing": "auslassen",
     "posen_datei": POSES_FILENAME,
     # Emote-Posen (pose = "emote:<asset-id>"):
     #   emote_zeit   -1 = Frame automatisch (ThumbnailKeyframe/ThumbnailTime
@@ -332,6 +333,24 @@ def load_config(path: str = CONFIG_FILENAME,
     config["hintergrund_glossy"] = _flag(
         "hintergrund_glossy", config["hintergrund_glossy"])
 
+    # Layered Clothing (WrapLayer-Accessoires): folgt der Pose nicht, weil die
+    # Cage-Deformation des Roblox-Clients offline nicht reproduzierbar ist.
+    #   "auslassen" = Layered Clothing gar nicht rendern (Default)
+    #   "starr"     = starr am Anker-Knochen mitdrehen (altes Verhalten)
+    lc_raw = _text("layered_clothing", config["layered_clothing"]).strip().lower()
+    lc_alias = {
+        "mitrendern": "starr", "mit_render": "starr", "rendern": "starr",
+        "weglassen": "auslassen", "ohne": "auslassen", "aus": "auslassen",
+    }
+    lc_modus = lc_alias.get(lc_raw, lc_raw)
+    if lc_modus not in ("auslassen", "starr"):
+        raise ConfigError(
+            "'layered_clothing' muss 'auslassen' oder 'starr' sein "
+            "(Layered Clothing weglassen bzw. starr mitdrehen), gefunden: "
+            f"{lc_raw!r}."
+        )
+    config["layered_clothing"] = lc_modus
+
     emote_zeit = _number("emote_zeit", config["emote_zeit"])
     if emote_zeit < MIN_EMOTE_ZEIT or emote_zeit > MAX_EMOTE_ZEIT:
         raise ConfigError(
@@ -482,6 +501,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"Config OK: {config['username']} | Drehung {config['drehung_grad']:g}° | "
           f"Pose {config['pose']} (Ausschnitt/Kamera stehen in der Pose) | "
           f"Render bei Aenderung: {config['render_bei_aenderung']} | "
+          f"Layered Clothing: {config['layered_clothing']} | "
           f"Hintergrund: {'transparent' if config['_transparent'] else ('HDRI' if config['_hdri'] else config['hintergrund_url'])}"
           f"{'' if config['_hdri'] or config['_transparent'] else (' (glossy)' if config['hintergrund_glossy'] else ' (matt)')}")
     return 0

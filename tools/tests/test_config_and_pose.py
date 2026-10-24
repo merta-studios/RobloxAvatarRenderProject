@@ -341,3 +341,25 @@ def test_hintergrund_sonderwerte(tmp_path):
         str(_write_config(tmp_path, hintergrund_url="https://example.com/bg.jpg")))
     assert bild["_transparent"] is False
     assert bild["_hdri"] is False
+
+
+def test_layered_clothing_default_und_werte(tmp_path):
+    # Ohne Schluessel gilt 'auslassen' (sichere Rueckfallebene).
+    fehlt = render_config.load_config(str(_write_config(tmp_path)))
+    assert fehlt["layered_clothing"] == "auslassen"
+
+    starr = render_config.load_config(
+        str(_write_config(tmp_path, layered_clothing="starr")))
+    assert starr["layered_clothing"] == "starr"
+
+    # Synonyme werden normalisiert, Gross-/Kleinschreibung ist egal.
+    alias = render_config.load_config(
+        str(_write_config(tmp_path, layered_clothing="MitRendern")))
+    assert alias["layered_clothing"] == "starr"
+
+
+def test_layered_clothing_unzulaessiger_wert_wird_abgelehnt(tmp_path):
+    with pytest.raises(render_config.ConfigError) as exc:
+        render_config.load_config(
+            str(_write_config(tmp_path, layered_clothing="viereck")))
+    assert "layered_clothing" in str(exc.value)
