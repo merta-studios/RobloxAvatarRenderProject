@@ -37,6 +37,7 @@ import math
 import os
 import sys
 import time
+from typing import List
 
 import bpy
 from mathutils import Vector
@@ -1301,6 +1302,7 @@ def emit_projection_notices(cam, imported_parts, manifest, base_dir: str,
         pys = [int(round((1.0 - p[1]) * res_y)) for p in proj]
         return min(pxs), max(pxs), min(pys), max(pys)
 
+    proj_bits: List[str] = []
     for obj, part in imported_parts:
         name = str((part or {}).get("name") or obj.name)
         mw = obj.matrix_world
@@ -1326,7 +1328,13 @@ def emit_projection_notices(cam, imported_parts, manifest, base_dir: str,
                     bits.append(f"{seg} ({v1 - v0} v) px x[{r[0]}..{r[1]}] "
                                 f"y[{r[2]}..{r[3]}]")
         if bits:
-            _ci_notice(f"Projektion {name}", " | ".join(bits))
+            # EIN Sammel-Notice statt je Teil: GitHub beschneidet die
+            # Annotation-Liste pro Check-Run (~20) - Einzel-Notices
+            # verdraengten die Diagnose-Notices 4b/4c.
+            proj_bits.append(f"{name}: " + " | ".join(bits))
+    for _i in range(0, len(proj_bits), 4):
+        _ci_notice(f"Projektion Teile ({_i // 4 + 1})",
+                   " || ".join(proj_bits[_i:_i + 4]))
 
 
 def background_plane_geometry(cam_location, forward, tan_h: float, tan_v: float,
