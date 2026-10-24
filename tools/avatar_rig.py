@@ -989,10 +989,17 @@ def assemble_r15_rig(
                 # ein Platzhalter (z. B. (0,0,0) bei konvertierten Bundles) -
                 # damit wuerde der Unterarm mitten im Oberarm drehen.
                 above_center = joint_proj > center - 0.10 * extent
-                if too_close or above_center:
-                    reason = ("liegt mitten im Segment"
-                              if above_center and not too_close
-                              else "liegt zu nah am Elterngelenk")
+                # Wichtig fuer konvertierte Bundles: liegt das Gelenk gar
+                # nicht am Segment (Attachment fuer eine andere Mesh-Skalierung
+                # authored), klafft zwischen Ober- und Unterglied eine Luecke.
+                # Dann auf die tatsaechliche Unterkante setzen.
+                off_mesh = not _attachment_is_plausible(placed, att[0])
+                if too_close or above_center or off_mesh:
+                    reason = ("liegt ausserhalb des Segments"
+                              if off_mesh and not too_close and not above_center
+                              else ("liegt mitten im Segment"
+                                    if above_center and not too_close
+                                    else "liegt zu nah am Elterngelenk"))
                     notes.append(
                         f"Gelenk '{att_name}' {reason} (Platzhalter-Attachment) - "
                         "an die Segment-Unterkante gesetzt.")
