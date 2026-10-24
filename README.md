@@ -85,6 +85,7 @@ Ergebnis im Build-Ordner: `manifest.json`, `parts/*.obj`, `textures/*`,
 | `render_bei_aenderung` | `true` = nach dem Push rendern (Workflow setzt danach auf `false`) |
 | `hintergrund_url` | Bild-URL/Pfad, `"hdri"` (Standard) oder `"transparent"` |
 | `hintergrund_glossy` | `true` = glänzend wie der Avatar, `false` = matt |
+| `layered_clothing` | `"auslassen"` (Standard) = Layered Clothing wird nicht gerendert; `"starr"` = starr am Anker-Knochen mitgedreht |
 
 In `Posen.toml` beschreibt jede Pose mit sprechenden Delta-Werten, wie sich
 die Gelenke gegenüber der Stand-Pose verändern (z. B. am Oberarm

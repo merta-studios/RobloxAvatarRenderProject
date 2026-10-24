@@ -123,7 +123,7 @@ emote_datei = ""
 #  automatisch wieder auf false. So rendert es nicht bei jeder kleinen
 #  Änderung erneut – einfach auf true stellen, wenn ein neues Bild gewünscht
 #  ist.
-render_bei_aenderung = false
+render_bei_aenderung = true
 
 
 # -----------------------------------------------------------------------------
@@ -157,3 +157,19 @@ hintergrund_url = "transparent"
 #  false = der Hintergrund ist matt (hohe Rauheit, kaum Spiegelung), damit
 #          das Bild ruhig und gut lesbar bleibt.
 hintergrund_glossy = false
+
+
+# -----------------------------------------------------------------------------
+#  8) Layered Clothing (Kleidung, die sich im Spiel eng an den Körper schmiegt)
+# -----------------------------------------------------------------------------
+#  Roblox verformt solche Kleidung im Client über eine Cage-Deformation –
+#  genauso kann sie offline nicht nachgebaut werden. Sie würde daher in
+#  Posen starr am Körper kleben bleiben und nicht mit den Armen/Beinen
+#  mitgehen. Zwei Möglichkeiten:
+#
+#      "auslassen"  = Layered Clothing wird GAR NICHT gerendert (Default).
+#                     Der Körper selbst bleibt vollständig sichtbar.
+#      "starr"      = Layered Clothing wird mitgerendert, dreht aber nur
+#                     starr mit seinem Anker-Knochen mit (alter Zustand –
+#                     bei Posen können Ärmel/Schöße dann falsch stehen).
+layered_clothing = "auslassen"
