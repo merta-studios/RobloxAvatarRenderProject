@@ -768,11 +768,23 @@ def parse_curve_animation(roots: Sequence[Dict[str, Any]]) -> Optional[Dict[str,
         # Benannte Keyframes (MarkerCurve "NamedKeyframeEvent") direkt unter
         # der CurveAnimation: die Namen der urspruenglichen KeyframeSequence.
         marker: List[Dict[str, Any]] = []
+        marker_debug: List[str] = []
         for child in _iter_tree(rec.get("children") or ()):
             if (child.get("class") == "MarkerCurve"
                     and (child.get("name") or "") == "NamedKeyframeEvent"):
-                marker = decode_marker_curve(child.get("values_and_times") or b"")
+                blob = child.get("values_and_times") or b""
+                marker = decode_marker_curve(blob)
+                marker_debug = [
+                    "MarkerCurve gefunden: blob=%d B" % len(blob),
+                    "hex=" + bytes(blob[:96]).hex(),
+                    "props=" + ",".join(sorted(
+                        k for k in child.keys()
+                        if k not in ("children", "Parent"))),
+                    "decode=%d Marker" % len(marker),
+                ]
                 break
+        if not marker_debug:
+            marker_debug = ["keine MarkerCurve 'NamedKeyframeEvent' gefunden"]
         for folder in _iter_tree(rec.get("children") or ()):
             if folder.get("class") != "Folder":
                 continue
@@ -818,7 +830,8 @@ def parse_curve_animation(roots: Sequence[Dict[str, Any]]) -> Optional[Dict[str,
             return {"typ": "curves", "gelenke": gelenke,
                     "name": rec.get("name") or "",
                     "laenge": _curve_length(gelenke),
-                    "marker": marker}
+                    "marker": marker,
+                    "marker_debug": marker_debug}
     return None
 
 
@@ -1124,8 +1137,9 @@ def load_emote_pose(emote_id: Optional[int] = None,
             print(msg, flush=True)
 
     data = _read_emote_bytes(datei, emote_id, client, log)
+    prop_log: List[str] = []
     try:
-        roots = rbxm.parse_instances(data)
+        roots = rbxm.parse_instances(data, prop_log)
     except rbxm.RbxmError as exc:
         raise EmoteError(f"Emote-Daten sind kein lesbares RBXM/RBXMX: {exc}") from exc
 
@@ -1150,8 +1164,9 @@ def load_emote_pose(emote_id: Optional[int] = None,
                 "noch eine Animation mit AnimationId gefunden - vermutlich keine "
                 "Emote-Asset-ID.")
         data = _download_clip_bytes(next_id, client, log)
+        prop_log = []
         try:
-            roots = rbxm.parse_instances(data)
+            roots = rbxm.parse_instances(data, prop_log)
         except rbxm.RbxmError as exc:
             raise EmoteError(
                 f"Animations-Asset {next_id} ist kein lesbares RBXM/RBXMX: {exc}"
@@ -1200,6 +1215,7 @@ def load_emote_pose(emote_id: Optional[int] = None,
         marker = clip.get("marker") or []
         if marker:
             info["marker"] = [(m["name"], round(m["time"], 4)) for m in marker]
+        info["marker_debug"] = clip.get("marker_debug") or []
         t, auswahl = select_curve_frame(laenge, meta.get("ThumbnailTime"),
                                         marker, zeit)
         info["auswahl"] = auswahl
@@ -1213,6 +1229,12 @@ def load_emote_pose(emote_id: Optional[int] = None,
     info["gelenke"] = sorted(pose_dict)
     info["gelenke_anzahl"] = len(pose_dict)
     info["unbekannte_gelenke"] = unbekannt
+    # PROP-Chunk-Tabelle des (letzten) Assets, gekuerzt auf die fuer die
+    # Marker-Diagnose relevanten Klassen (rbxm-Diagnose 4c).
+    markant = [l for l in prop_log
+               if any(c in l for c in ("MarkerCurve.", "CurveAnimation.",
+                                       "AnimationRigData"))]
+    info["prop_log"] = markant[:40] + [f"(insgesamt {len(prop_log)} PROP-Chunks)"]
     if unbekannt:
         log("      ! Nicht-R15-Gelenke im Emote (ignoriert): "
             + ", ".join(sorted(set(unbekannt))))

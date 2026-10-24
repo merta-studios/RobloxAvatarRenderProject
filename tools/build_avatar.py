@@ -1711,6 +1711,10 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
                 f"gelenke={emo.get('gelenke')} "
                 f"thumbnail={emo.get('thumbnail')} "
                 f"marker={emo.get('marker')}")
+            if emo.get("typ") == "curves":
+                ci_notice("Diagnose 4c/6 Emote-Marker",
+                          f"debug={emo.get('marker_debug')} "
+                          f"prop_log={emo.get('prop_log')}")
             struktur = str(emo.get("struktur") or "")
             if struktur:
                 for i in range(0, min(len(struktur), 3600), 1800):

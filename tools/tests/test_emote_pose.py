@@ -973,3 +973,31 @@ def test_parse_curve_animation_liest_benannte_keyframes():
     assert clip is not None and clip["typ"] == "curves"
     assert [m["name"] for m in clip["marker"]] == ["Start", "Hauptpose", "Ende"]
     assert [m["time"] for m in clip["marker"]] == pytest.approx([0.0, 1.2, 4.8])
+    assert clip["marker_debug"] and "decode=3 Marker" in clip["marker_debug"][3]
+
+
+def test_parse_curve_animation_binaer_marker_prop_log():
+    """Binaeres RBXM, ValuesAndTimes als String-Typ 0x01 (wie rbx-native
+    schreibt): Marker landen im Clip, prop_log protokolliert den Chunk."""
+    blob = encode_float_curve([(0.0, 1.0, 1, 0, 0, 0)])
+    marker_blob = encode_marker_curve([("A", 0.0), ("B", 1.0), ("C", 2.0)])
+    instances = [
+        {"class": "CurveAnimation", "props": {"Name": "Clip"}, "Parent": None},
+        {"class": "Folder", "props": {"Name": "UpperTorso"}, "Parent": 0},
+        {"class": "EulerRotationCurve", "props": {"Name": "Rotation"},
+         "Parent": 1},
+        {"class": "FloatCurve", "props": {"Name": "X",
+                                          "ValuesAndTimes": blob}, "Parent": 2},
+        {"class": "MarkerCurve", "props": {"Name": "NamedKeyframeEvent",
+                                           "ValuesAndTimes": marker_blob},
+         "Parent": 0},
+    ]
+    data = make_rbxm(instances, prop_types={"ValuesAndTimes": "bytes"})
+    prop_log = []
+    roots = rbxm.parse_instances(data, prop_log)
+    clip = emote_pose.parse_curve_animation(roots)
+    assert clip is not None and clip["typ"] == "curves"
+    assert [m["name"] for m in clip["marker"]] == ["A", "B", "C"]
+    assert any("MarkerCurve.ValuesAndTimes" in line and "typ=0x01" in line
+               for line in prop_log)
+    assert any("CurveAnimation.Name" in line for line in prop_log)
