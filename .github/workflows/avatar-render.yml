@@ -381,6 +381,24 @@ jobs:
             "https://x-access-token:${PUSH_TOKEN}@github.com/${REPO}.git" HEAD:renders
           echo "Im Branch 'renders' veroeffentlicht: latest.png + ${SAFE_NAME}.png"
 
+          # Zusaetzlich das Manifest in einen eigenen Branch: so lassen sich
+          # Gelenke, Rig-Audit und Warnungen ueber die GitHub-API ansehen
+          # (der renders-Branch bleibt reines Bild, Artifacts sind auf dem
+          # Handy nicht herunterladbar).
+          if [ -f build/manifest.json ]; then
+            DBG="$(mktemp -d)"
+            cp build/manifest.json "$DBG/manifest.json"
+            git -C "$DBG" init -q
+            git -C "$DBG" checkout -q --orphan render-debug
+            git -C "$DBG" add -A
+            git -C "$DBG" -c user.name="github-actions[bot]" \
+                          -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "Manifest: ${SAFE_NAME} (Run ${GITHUB_RUN_ID})"
+            git -C "$DBG" push --force \
+              "https://x-access-token:${PUSH_TOKEN}@github.com/${REPO}.git" HEAD:render-debug
+            echo "Manifest im Branch 'render-debug' veroeffentlicht."
+          fi
+
       - name: 9) Release "avatar-render-latest" aktualisieren
         env:
           GH_TOKEN: ${{ secrets.AUTO_MERGE_TOKEN || secrets.GITHUB_TOKEN }}
