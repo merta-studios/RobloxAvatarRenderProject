@@ -502,7 +502,9 @@ def setup_pose(config: Dict[str, Any],
                 f"Emote-Pose '{pose_name}' konnte nicht geladen werden ({exc}) - "
                 "es wird die Stand-Pose gerendert.")
             return None, info
-        context = avatar_pose.PoseContext(pose_dict, joints, settings=settings)
+        context = avatar_pose.PoseContext(
+            pose_dict, joints, settings=settings,
+            rig=rig_avatar if use_r15_rig else None)
         info["aktiv"] = context.active
         info["einstellungen"] = settings
         info["details"] = emote_pose.emote_summary(emote_info)
@@ -530,7 +532,9 @@ def setup_pose(config: Dict[str, Any],
         return None, info
 
     settings = entry.get("einstellungen") or dict(avatar_pose.POSE_SETTING_DEFAULTS)
-    context = avatar_pose.PoseContext(entry["teile"], joints, settings=settings)
+    context = avatar_pose.PoseContext(
+        entry["teile"], joints, settings=settings,
+        rig=rig_avatar if use_r15_rig else None)
     info["aktiv"] = context.active
     info["einstellungen"] = settings
     info["details"] = avatar_pose.pose_summary(context.pose, settings)

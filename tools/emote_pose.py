@@ -27,11 +27,13 @@ und zwar deterministisch ueber die Daten, die Roblox selbst dafuer benutzt
     bzw. ``ThumbnailTime=0`` ins Asset - UGC-Emotes zeigen also meist den
     ersten Frame, kuratierte Roblox-Emotes eigene Werte (z. B. 31, 70).
 
-* Die Pose-Anwendung folgt der RCC-Formel ``joint.C1 = joint.C1 *
-  pose.CFrame:inverse()``: entspricht einem Motor6D-Transform. Mit den
-  RigAttachments als Pivot und identischen Rest-Orientierungen der Teile
-  laesst sich das exakt als "Drehung um das Gelenk + Positions-Delta"
-  ausdruecken - genau das Format, das ``avatar_pose.PoseContext`` hebelt.
+* Die Pose-Anwendung folgt der Roblox-Motor6D-Semantik
+  (``Thumbnailing/EmoteUtility.lua``, verifiziert am echten Rig-Dump):
+  ``joint.Transform = pose.CFrame`` und
+  ``part1 = part0 * C0 * Transform * C1^-1`` mit ``C0``/``C1`` = Eltern-/
+  Kind-RigAttachment-CFrame. Der Pose-CFrame ist also ein Transform im
+  Frame des Eltern-Attachments - ``avatar_pose.PoseContext`` setzt ihn mit
+  den Bind-Attachment-Frames des Rigs exakt um.
 
 CurveAnimations (Pflicht fuer moderne UGC-Emotes) werden als
 ``FloatCurve``-``ValuesAndTimes``-Blobs gelesen und mit derselben
@@ -818,11 +820,11 @@ def pose_cframes_to_pose_dict(posen: Dict[str, CFrame]
     * ``HumanoidRootPart``-Posen (Root-Motion) werden mit ``LowerTorso``
       kombiniert - unser Wurzelknochen ist ``unterer_torso``.
     * Unbekannte Namen (z. B. R6-``Torso``) werden gemeldet, aber uebergangen.
-    * Mathematik: RCC wendet ``C1' = C1 * pose^-1`` an, d. h. das Teil
-      bekommt lokal ``T(pivot) * pose * T(-pivot)``. Unser PoseContext baut
-      ``T(offset) * T(pivot) * R * T(-pivot)`` - mit identischen Rest-
-      Orientierungen ist das mit ``R = pose.R`` und ``offset = pose.t``
-      exakt dieselbe Transformation.
+    * Mathematik: der Pose-CFrame IST der Motor6D-Transform ``T`` in
+      ``part1 = part0 * C0 * T * C1^-1``. Er wird daher zusaetzlich zu den
+      Euler-Grad als ``motor`` (Position + Rotationsmatrix) durchgereicht
+      und vom PoseContext im Frame des Eltern-Attachments (C0) angewandt.
+      Ohne Rig-Frame entspricht das exakt ``T(t) * T(pivot) * R * T(-pivot)``.
     """
     posen = dict(posen)
     root = posen.pop("HumanoidRootPart", None)
@@ -853,6 +855,10 @@ def pose_cframes_to_pose_dict(posen: Dict[str, CFrame]
             "rotation": euler,
             "verschiebung": offset,
             "felder": {"drehung_grad": winkel},
+            # Exakter Motor6D-Transform (Position + Rotationsmatrix) in der
+            # Reihenfolge von _read_pose_values: Pose-Anwendung damit im
+            # C0-Frame des Gelenks (Roblox: child = parent * C0 * T * C1^-1).
+            "motor": (offset, rot),
         }
     return out, unbekannt
 

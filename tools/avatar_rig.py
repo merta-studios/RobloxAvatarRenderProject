@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from avatar_uv import apply_limb_box_uvs, apply_torso_box_uvs
-from roblox_mesh import MeshData, make_box, make_sphere, rotation_between
+from roblox_mesh import MeshData, make_box, make_sphere
 from roblox_api import brick_color_hex, hex_to_rgb
 
 # AssetTypeId -> Layout fuer Accessoires
@@ -607,15 +607,71 @@ def _merge_world_meshes(meshes: List[MeshData], source_version: str = "r15-rigge
 
 @dataclass
 class RiggedAvatar:
-    """Welt-Raum-Ergebnis des Attachment-basierten R15-Rigs."""
+    """Welt-Raum-Ergebnis des Attachment-basierten R15-Rigs.
+
+    ``joint_frames``/``segment_driver``/``segment_spans`` bilden die
+    Motor6D-Semantik ab, mit der Roblox Charaktere aufbaut und animiert
+    (``Humanoid:BuildRigFromAttachments`` bzw. die RCC-Formel
+    ``part1 = part0 * C0 * Transform * C1^-1``):
+
+    * ``joint_frames``: Bind-Welt-Orientierung des koinzidierenden
+      Attachment-Frames je Gelenk (= C0-Frame, Schlüssel wie
+      ``joint_positions``). Posen-Transformationen sind in DIESEM Frame
+      definiert, nicht in Weltachsen.
+    * ``segment_driver``: R15-Segment -> Name des Gelenks, an dem es hängt
+      (``None`` = Wurzel ``LowerTorso``).
+    * ``segment_spans``: Koerperteil -> [(Segment, Vertex-Start, Vertex-Ende)]
+      im zusammengefuegten Mesh - erlaubt pose-Anwendung STARR je Segment
+      statt weicher Vertex-Verformung (R15 ohne Skinning ist starr).
+    """
 
     body_meshes: Dict[str, MeshData] = field(default_factory=dict)
     head_mesh: Optional[MeshData] = None
     world_attachments: Dict[str, Tuple[Tuple[float, float, float], Matrix3]] = field(default_factory=dict)
     joint_positions: Dict[str, Tuple[float, float, float]] = field(default_factory=dict)
+    joint_frames: Dict[str, Matrix3] = field(default_factory=dict)
+    segment_driver: Dict[str, Optional[str]] = field(default_factory=dict)
+    segment_spans: Dict[str, List[Tuple[str, int, int]]] = field(default_factory=dict)
     metrics: BodyMetrics = field(default_factory=BodyMetrics)
     scales_body: Tuple[float, float, float] = (1.0, 1.0, 1.0)
     scales_head: Tuple[float, float, float] = (1.0, 1.0, 1.0)
+
+
+def _attach_placement(
+    parent_att: Tuple[Tuple[float, float, float], Matrix3],
+    child_att: Tuple[Tuple[float, float, float], Matrix3],
+) -> Tuple[Matrix3, Tuple[float, float, float]]:
+    """Motor6D-Montage zweier RigAttachments (Roblox-Semantik).
+
+    ``Humanoid:BuildRigFromAttachments()`` baut jeden Motor aus
+    ``C0 = Eltern-Attachment.CFrame`` und ``C1 = Kind-Attachment.CFrame``;
+    im Bind-Zustand (``Transform = Identitaet``) gilt
+    ``child_world = parent_world * C0 * C1^-1`` - beide Attachment-Frames
+    koinzidieren also exakt, Position UND Orientierung. Genau diese
+    Platzierung liefert diese Funktion: ``(Rotation, Ursprung)`` fuer
+    ``register_segment``. Keine geratenen Winkel, keine Offsets.
+    """
+    p_pos, p_rot = parent_att
+    c_pos, c_rot = child_att
+    rot = _mat3_mul(p_rot, _mat3_transpose(c_rot))
+    rotated = _mat3_vec(rot, c_pos)
+    origin = (p_pos[0] - rotated[0], p_pos[1] - rotated[1], p_pos[2] - rotated[2])
+    return rot, origin
+
+
+def _merge_with_spans(
+    named_meshes: List[Tuple[str, MeshData]],
+    source_version: str = "r15-rigged",
+) -> Tuple[MeshData, List[Tuple[str, int, int]]]:
+    """Segment-Meshes zusammenfuegen und Vertex-Spannen je Segment notieren."""
+    merged = _merge_world_meshes([m for _, m in named_meshes], source_version)
+    spans: List[Tuple[str, int, int]] = []
+    base = 0
+    for name, m in named_meshes:
+        count = 0 if m.is_empty else len(m.positions)
+        spans.append((name, base, base + count))
+        base += count
+    return merged, spans
 
 
 def _scale_part_local(
@@ -695,6 +751,9 @@ def assemble_r15_rig(
 
     world_atts: Dict[str, Tuple[Tuple[float, float, float], Matrix3]] = {}
     joint_pos: Dict[str, Tuple[float, float, float]] = {}
+    joint_frames: Dict[str, Matrix3] = {}
+    segment_driver: Dict[str, Optional[str]] = {}
+    segment_spans: Dict[str, List[Tuple[str, int, int]]] = {}
     placed_seg_mesh: Dict[str, MeshData] = {}
     placed_seg_vis: Dict[str, bool] = {}
 
@@ -719,15 +778,21 @@ def assemble_r15_rig(
         lt_m, lt_a, lt_tr = seg_lookup["LowerTorso"]
         ut_m, ut_a, ut_tr = seg_lookup["UpperTorso"]
         register_segment("LowerTorso", lt_m, lt_a, (0.0, 0.0, 0.0), IDENTITY_MAT3, not lt_tr)
-        joint_pos["LowerTorso"] = world_atts.get("RootRigAttachment", ((0.0, 0.0, 0.0), IDENTITY_MAT3))[0]
-        waist_world = world_atts.get("WaistRigAttachment", ((0.0, 0.2 * sh, 0.0), IDENTITY_MAT3))[0]
-        ut_waist = ut_a.get("WaistRigAttachment", ((0.0, -0.8 * sh, 0.0), IDENTITY_MAT3))[0]
-        ut_origin = (waist_world[0] - ut_waist[0], waist_world[1] - ut_waist[1], waist_world[2] - ut_waist[2])
-        register_segment("UpperTorso", ut_m, ut_a, ut_origin, IDENTITY_MAT3, not ut_tr)
-        joint_pos["UpperTorso"] = waist_world
-        torso_mesh = _merge_world_meshes(
-            [m for n, m in (("UpperTorso", placed_seg_mesh["UpperTorso"]), ("LowerTorso", placed_seg_mesh["LowerTorso"])) if placed_seg_vis[n]]
-        )
+        segment_driver["LowerTorso"] = None
+        root_att = world_atts.get("RootRigAttachment", ((0.0, 0.0, 0.0), IDENTITY_MAT3))
+        joint_pos["LowerTorso"] = root_att[0]
+        joint_frames["LowerTorso"] = root_att[1]
+        waist_att = world_atts.get("WaistRigAttachment", ((0.0, 0.2 * sh, 0.0), IDENTITY_MAT3))
+        joint_pos["UpperTorso"] = waist_att[0]
+        joint_frames["UpperTorso"] = waist_att[1]
+        rot_ut, ut_origin = _attach_placement(
+            waist_att, ut_a.get("WaistRigAttachment", ((0.0, -0.8 * sh, 0.0), IDENTITY_MAT3)))
+        register_segment("UpperTorso", ut_m, ut_a, ut_origin, rot_ut, not ut_tr)
+        segment_driver["UpperTorso"] = "UpperTorso"
+        torso_named = [(n, placed_seg_mesh[n]) for n in ("UpperTorso", "LowerTorso")
+                       if placed_seg_vis[n]]
+        torso_mesh, torso_spans = _merge_with_spans(torso_named)
+        segment_spans["torso"] = torso_spans
     else:
         # Standard-Blocky-Torso mit exakten R15-Attachments
         tw, th, td = 2.0 * sw, 2.0 * sh, 1.0 * sd
@@ -753,87 +818,74 @@ def assemble_r15_rig(
         world_atts.update(default_torso_atts)
         joint_pos["LowerTorso"] = (0.0, 0.0, 0.0)
         joint_pos["UpperTorso"] = (0.0, 0.2 * sh, 0.0)
+        joint_frames["LowerTorso"] = IDENTITY_MAT3
+        joint_frames["UpperTorso"] = IDENTITY_MAT3
         torso_mesh = torso_box
 
     body_meshes: Dict[str, MeshData] = {"torso": torso_mesh}
 
-    # 2) Arme (Shoulder -> Elbow -> Wrist; A-Pose wird auf natuerliches Herabhaengen rotiert)
+    # 2) Arme: exakte Motor6D-Montage ueber Shoulder-/Elbow-/WristRigAttachment
+    #    (child = parent * C0 * C1^-1, s. _attach_placement). Die Attachments
+    #    koinzidieren danach exakt - Gelenke bleiben nahtlos, egal ob das Paket
+    #    kanonisch (Arme haengen von selbst senkrecht) oder anders skulptiert
+    #    ist. Roblox wendet beim Charakter-Aufbau KEINE zusaetzliche A-Pose-
+    #    Korrektur an; geratene Drehwinkel/Offsets wuerden die Naht zerstoeren.
     for part_name, side, sign in (("rechts_arm", "Right", 1.0), ("links_arm", "Left", -1.0)):
         u_name, l_name, h_name = f"{side}UpperArm", f"{side}LowerArm", f"{side}Hand"
         sh_att_name = f"{side}ShoulderRigAttachment"
         el_att_name = f"{side}ElbowRigAttachment"
         wr_att_name = f"{side}WristRigAttachment"
-        shoulder_w = world_atts.get(sh_att_name, ((sign * 1.0 * sw, 1.4 * sh, 0.0), IDENTITY_MAT3))[0]
-        joint_pos[u_name] = shoulder_w
-
-        # Schulter leicht nach außen schieben, damit Arm-Volumen nicht in Torso schneidet
-        # (echte UpperTorso-Meshes haben Schulter bei exakt Torso-Rand; das Arm-Mesh
-        # ragt sonst 0.5 Studs nach innen in den Torso - „schief in den Körper“)
-        shoulder_w = (shoulder_w[0] + sign * 0.060, shoulder_w[1], shoulder_w[2])
+        shoulder_att = world_atts.get(sh_att_name, ((sign * 1.0 * sw, 1.4 * sh, 0.0), IDENTITY_MAT3))
+        joint_pos[u_name] = shoulder_att[0]
+        joint_frames[u_name] = shoulder_att[1]
 
         if u_name in seg_lookup and l_name in seg_lookup and h_name in seg_lookup:
             um, ua, utr = seg_lookup[u_name]
             lm, la, ltr = seg_lookup[l_name]
             hm, ha, htr = seg_lookup[h_name]
 
-            # Senkrecht leicht nach außen (30° statt 20°) - vorher 20° ließ Innenkante noch im Torso
-            d_upper_target = (sign * 0.5000, -0.8660, 0.0)
-            d_lower_target = (sign * 0.3420, -0.9397, -0.02)
-
-            rot_u = IDENTITY_MAT3
-            if sh_att_name in ua and el_att_name in ua:
-                du = (
-                    ua[el_att_name][0][0] - ua[sh_att_name][0][0],
-                    ua[el_att_name][0][1] - ua[sh_att_name][0][1],
-                    ua[el_att_name][0][2] - ua[sh_att_name][0][2],
-                )
-                len_u = (du[0] ** 2 + du[1] ** 2 + du[2] ** 2) ** 0.5
-                horiz_u = (du[0] ** 2 + du[2] ** 2) ** 0.5
-                if len_u > 0.15 and horiz_u > 0.28 * len_u:
-                    rot_u = rotation_between(du, d_upper_target)
-
-            u_sh_r = _mat3_vec(rot_u, ua.get(sh_att_name, ((0.0, 0.3 * sh, 0.0), IDENTITY_MAT3))[0])
-            u_orig = (shoulder_w[0] - u_sh_r[0], shoulder_w[1] - u_sh_r[1], shoulder_w[2] - u_sh_r[2])
+            rot_u, u_orig = _attach_placement(
+                shoulder_att, ua.get(sh_att_name, ((0.0, 0.3 * sh, 0.0), IDENTITY_MAT3)))
             register_segment(u_name, um, ua, u_orig, rot_u, not utr)
+            segment_driver[u_name] = u_name
 
-            elbow_w = world_atts.get(el_att_name, (shoulder_w[0], shoulder_w[1] - 0.6 * sh, shoulder_w[2]))[0]
-            joint_pos[l_name] = elbow_w
-
-            rot_l = rot_u
-            if el_att_name in la and wr_att_name in la:
-                dl = (
-                    la[wr_att_name][0][0] - la[el_att_name][0][0],
-                    la[wr_att_name][0][1] - la[el_att_name][0][1],
-                    la[wr_att_name][0][2] - la[el_att_name][0][2],
-                )
-                len_l = (dl[0] ** 2 + dl[1] ** 2 + dl[2] ** 2) ** 0.5
-                horiz_l = (dl[0] ** 2 + dl[2] ** 2) ** 0.5
-                if len_l > 0.15 and horiz_l > 0.28 * len_l:
-                    rot_l = rotation_between(dl, d_lower_target)
-
-            l_el_r = _mat3_vec(rot_l, la.get(el_att_name, ((0.0, 0.35 * sh, 0.0), IDENTITY_MAT3))[0])
-            l_orig = (elbow_w[0] - l_el_r[0], elbow_w[1] - l_el_r[1], elbow_w[2] - l_el_r[2])
+            elbow_att = world_atts.get(
+                el_att_name,
+                ((shoulder_att[0][0], shoulder_att[0][1] - 0.6 * sh, shoulder_att[0][2]), IDENTITY_MAT3))
+            joint_pos[l_name] = elbow_att[0]
+            joint_frames[l_name] = elbow_att[1]
+            rot_l, l_orig = _attach_placement(
+                elbow_att, la.get(el_att_name, ((0.0, 0.35 * sh, 0.0), IDENTITY_MAT3)))
             register_segment(l_name, lm, la, l_orig, rot_l, not ltr)
+            segment_driver[l_name] = l_name
 
-            wrist_w = world_atts.get(wr_att_name, (elbow_w[0], elbow_w[1] - 0.7 * sh, elbow_w[2]))[0]
-            joint_pos[h_name] = wrist_w
+            wrist_att = world_atts.get(
+                wr_att_name,
+                ((elbow_att[0][0], elbow_att[0][1] - 0.7 * sh, elbow_att[0][2]), IDENTITY_MAT3))
+            joint_pos[h_name] = wrist_att[0]
+            joint_frames[h_name] = wrist_att[1]
+            rot_h, h_orig = _attach_placement(
+                wrist_att, ha.get(wr_att_name, ((0.0, 0.15 * sh, 0.0), IDENTITY_MAT3)))
+            register_segment(h_name, hm, ha, h_orig, rot_h, not htr)
+            segment_driver[h_name] = h_name
 
-            h_wr_r = _mat3_vec(rot_l, ha.get(wr_att_name, ((0.0, 0.15 * sh, 0.0), IDENTITY_MAT3))[0])
-            h_orig = (wrist_w[0] - h_wr_r[0], wrist_w[1] - h_wr_r[1], wrist_w[2] - h_wr_r[2])
-            register_segment(h_name, hm, ha, h_orig, rot_l, not htr)
-
-            vis_arm = [placed_seg_mesh[n] for n in (u_name, l_name, h_name) if placed_seg_vis[n]]
-            body_meshes[part_name] = _merge_world_meshes(vis_arm)
+            arm_named = [(n, placed_seg_mesh[n]) for n in (u_name, l_name, h_name)
+                         if placed_seg_vis[n]]
+            arm_mesh, arm_spans = _merge_with_spans(arm_named)
+            body_meshes[part_name] = arm_mesh
+            segment_spans[part_name] = arm_spans
         else:
             aw, ah, ad = 1.0 * sw, 2.0 * sh, 1.0 * sd
             torso_half_w = torso_mesh.size()[0] / 2.0
-            cx = sign * (max(abs(shoulder_w[0]), torso_half_w) + aw / 2.0 + 0.055)
-            cy = shoulder_w[1] + 0.4 * sh - ah / 2.0
-            cz = shoulder_w[2]
+            cx = sign * (max(abs(shoulder_att[0][0]), torso_half_w) + aw / 2.0 + 0.055)
+            cy = shoulder_att[0][1] + 0.4 * sh - ah / 2.0
+            cz = shoulder_att[0][2]
             body_meshes[part_name] = apply_limb_box_uvs(make_box(aw, ah, ad, (cx, cy, cz)))
             joint_pos[u_name] = (cx, cy + 0.6 * sh, cz)
             joint_pos[l_name] = (cx, cy - 0.1 * sh, cz)
             joint_pos[h_name] = (cx, cy - 0.75 * sh, cz)
+            joint_frames[l_name] = IDENTITY_MAT3
+            joint_frames[h_name] = IDENTITY_MAT3
             world_atts.setdefault(f"{side}ShoulderAttachment", ((cx, cy + ah / 2.0, cz), IDENTITY_MAT3))
             world_atts.setdefault(f"{side}GripAttachment", ((cx, cy - ah / 2.0 + 0.1 * sh, cz), IDENTITY_MAT3))
 
@@ -843,75 +895,68 @@ def assemble_r15_rig(
         hip_att_name = f"{side}HipRigAttachment"
         knee_att_name = f"{side}KneeRigAttachment"
         ankle_att_name = f"{side}AnkleRigAttachment"
-        hip_w = world_atts.get(hip_att_name, ((sign * 0.5 * sw, -0.2 * sh, 0.0), IDENTITY_MAT3))[0]
-        joint_pos[u_name] = hip_w
+        hip_att = world_atts.get(hip_att_name, ((sign * 0.5 * sw, -0.2 * sh, 0.0), IDENTITY_MAT3))
+        joint_pos[u_name] = hip_att[0]
+        joint_frames[u_name] = hip_att[1]
 
         if u_name in seg_lookup and l_name in seg_lookup and f_name in seg_lookup:
             um, ua, utr = seg_lookup[u_name]
             lm, la, ltr = seg_lookup[l_name]
             fm, fa, ftr = seg_lookup[f_name]
 
-            rot_u = IDENTITY_MAT3
-            if hip_att_name in ua and knee_att_name in ua:
-                du = (
-                    ua[knee_att_name][0][0] - ua[hip_att_name][0][0],
-                    ua[knee_att_name][0][1] - ua[hip_att_name][0][1],
-                    ua[knee_att_name][0][2] - ua[hip_att_name][0][2],
-                )
-                if du[1] < -0.2 and (du[0] ** 2 + du[2] ** 2) > 0.05 * (du[1] ** 2):
-                    rot_u = rotation_between(du, (0.0, -1.0, 0.0))
-
-            u_hip_r = _mat3_vec(rot_u, ua.get(hip_att_name, ((0.0, 0.4 * sh, 0.0), IDENTITY_MAT3))[0])
-            u_orig = (hip_w[0] - u_hip_r[0], hip_w[1] - u_hip_r[1], hip_w[2] - u_hip_r[2])
+            rot_u, u_orig = _attach_placement(
+                hip_att, ua.get(hip_att_name, ((0.0, 0.4 * sh, 0.0), IDENTITY_MAT3)))
             register_segment(u_name, um, ua, u_orig, rot_u, not utr)
+            segment_driver[u_name] = u_name
 
-            knee_w = world_atts.get(knee_att_name, (hip_w[0], hip_w[1] - 0.8 * sh, hip_w[2]))[0]
-            joint_pos[l_name] = knee_w
-
-            rot_l = IDENTITY_MAT3
-            if knee_att_name in la and ankle_att_name in la:
-                dl = (
-                    la[ankle_att_name][0][0] - la[knee_att_name][0][0],
-                    la[ankle_att_name][0][1] - la[knee_att_name][0][1],
-                    la[ankle_att_name][0][2] - la[knee_att_name][0][2],
-                )
-                if dl[1] < -0.2 and (dl[0] ** 2 + dl[2] ** 2) > 0.05 * (dl[1] ** 2):
-                    rot_l = rotation_between(dl, (0.0, -1.0, 0.0))
-
-            l_kn_r = _mat3_vec(rot_l, la.get(knee_att_name, ((0.0, 0.4 * sh, 0.0), IDENTITY_MAT3))[0])
-            l_orig = (knee_w[0] - l_kn_r[0], knee_w[1] - l_kn_r[1], knee_w[2] - l_kn_r[2])
+            knee_att = world_atts.get(
+                knee_att_name, ((hip_att[0][0], hip_att[0][1] - 0.8 * sh, hip_att[0][2]), IDENTITY_MAT3))
+            joint_pos[l_name] = knee_att[0]
+            joint_frames[l_name] = knee_att[1]
+            rot_l, l_orig = _attach_placement(
+                knee_att, la.get(knee_att_name, ((0.0, 0.4 * sh, 0.0), IDENTITY_MAT3)))
             register_segment(l_name, lm, la, l_orig, rot_l, not ltr)
+            segment_driver[l_name] = l_name
 
-            ankle_w = world_atts.get(ankle_att_name, (knee_w[0], knee_w[1] - 0.8 * sh, knee_w[2]))[0]
-            joint_pos[f_name] = ankle_w
+            ankle_att = world_atts.get(
+                ankle_att_name, ((knee_att[0][0], knee_att[0][1] - 0.8 * sh, knee_att[0][2]), IDENTITY_MAT3))
+            joint_pos[f_name] = ankle_att[0]
+            joint_frames[f_name] = ankle_att[1]
+            rot_f, f_orig = _attach_placement(
+                ankle_att, fa.get(ankle_att_name, ((0.0, 0.1 * sh, 0.0), IDENTITY_MAT3)))
+            register_segment(f_name, fm, fa, f_orig, rot_f, not ftr)
+            segment_driver[f_name] = f_name
 
-            f_an_r = fa.get(ankle_att_name, ((0.0, 0.1 * sh, 0.0), IDENTITY_MAT3))[0]
-            f_orig = (ankle_w[0] - f_an_r[0], ankle_w[1] - f_an_r[1], ankle_w[2] - f_an_r[2])
-            register_segment(f_name, fm, fa, f_orig, IDENTITY_MAT3, not ftr)
-
-            vis_leg = [placed_seg_mesh[n] for n in (u_name, l_name, f_name) if placed_seg_vis[n]]
-            body_meshes[part_name] = _merge_world_meshes(vis_leg)
+            leg_named = [(n, placed_seg_mesh[n]) for n in (u_name, l_name, f_name)
+                         if placed_seg_vis[n]]
+            leg_mesh, leg_spans = _merge_with_spans(leg_named)
+            body_meshes[part_name] = leg_mesh
+            segment_spans[part_name] = leg_spans
         else:
             lw, lh, ld = 1.0 * sw, 2.0 * sh, 1.0 * sd
-            cx = sign * max(abs(hip_w[0]), lw / 2.0 + 0.006)
-            cy = hip_w[1] - lh / 2.0
-            cz = hip_w[2]
+            cx = sign * max(abs(hip_att[0][0]), lw / 2.0 + 0.006)
+            cy = hip_att[0][1] - lh / 2.0
+            cz = hip_att[0][2]
             body_meshes[part_name] = apply_limb_box_uvs(make_box(lw, lh, ld, (cx, cy, cz)))
-            joint_pos[u_name] = (cx, hip_w[1], cz)
-            joint_pos[l_name] = (cx, hip_w[1] - 0.85 * sh, cz)
-            joint_pos[f_name] = (cx, hip_w[1] - 1.75 * sh, cz)
+            joint_pos[u_name] = (cx, hip_att[0][1], cz)
+            joint_pos[l_name] = (cx, hip_att[0][1] - 0.85 * sh, cz)
+            joint_pos[f_name] = (cx, hip_att[0][1] - 1.75 * sh, cz)
+            joint_frames[l_name] = IDENTITY_MAT3
+            joint_frames[f_name] = IDENTITY_MAT3
 
     # 4) Kopf (NeckRigAttachment) + dezenter Halskern
-    neck_w = world_atts.get("NeckRigAttachment", ((0.0, torso_mesh.bbox()[1][1], 0.0), IDENTITY_MAT3))[0]
-    joint_pos["Head"] = neck_w
+    neck_att = world_atts.get("NeckRigAttachment", ((0.0, torso_mesh.bbox()[1][1], 0.0), IDENTITY_MAT3))
+    joint_pos["Head"] = neck_att[0]
+    joint_frames["Head"] = neck_att[1]
 
     head_world: Optional[MeshData] = None
     head_r = 0.60 * shead
     if head_mp is not None:
         hm_loc, ha_loc, _htr = _scale_part_local(head_mp, s_head)
-        h_neck = ha_loc.get("NeckRigAttachment", ((0.0, -0.5 * shead, 0.0), IDENTITY_MAT3))[0]
-        h_orig = (neck_w[0] - h_neck[0], neck_w[1] - h_neck[1], neck_w[2] - h_neck[2])
-        register_segment("Head", hm_loc, ha_loc, h_orig, IDENTITY_MAT3, True)
+        rot_h, h_orig = _attach_placement(
+            neck_att, ha_loc.get("NeckRigAttachment", ((0.0, -0.5 * shead, 0.0), IDENTITY_MAT3)))
+        register_segment("Head", hm_loc, ha_loc, h_orig, rot_h, True)
+        segment_driver["Head"] = "Head"
         if not headless:
             head_world = placed_seg_mesh["Head"]
             head_center = head_world.center()
@@ -928,14 +973,14 @@ def assemble_r15_rig(
         world_atts.setdefault("FaceFrontAttachment", ((head_center[0], head_center[1], head_center[2] - head_r), IDENTITY_MAT3))
     elif not headless:
         head_r = 0.60 * shead
-        head_center = (neck_w[0], neck_w[1] + 0.5 * shead, neck_w[2])
+        head_center = (neck_att[0][0], neck_att[0][1] + 0.5 * shead, neck_att[0][2])
         head_world = make_sphere(head_r, 32, 22, head_center)
         world_atts["HatAttachment"] = ((head_center[0], head_center[1] + 0.6 * shead, head_center[2]), IDENTITY_MAT3)
         world_atts["HairAttachment"] = world_atts["HatAttachment"]
         world_atts["FaceCenterAttachment"] = (head_center, IDENTITY_MAT3)
         world_atts["FaceFrontAttachment"] = ((head_center[0], head_center[1], head_center[2] - head_r), IDENTITY_MAT3)
     else:
-        head_center = (neck_w[0], neck_w[1] + 0.5 * shead, neck_w[2])
+        head_center = (neck_att[0][0], neck_att[0][1] + 0.5 * shead, neck_att[0][2])
         world_atts["HatAttachment"] = ((head_center[0], head_center[1] + 0.6 * shead, head_center[2]), IDENTITY_MAT3)
         world_atts["HairAttachment"] = world_atts["HatAttachment"]
         world_atts["FaceCenterAttachment"] = (head_center, IDENTITY_MAT3)
@@ -948,7 +993,7 @@ def assemble_r15_rig(
             min(0.45 * sw, torso_mesh.size()[0] * 0.32),
             0.24 * sh,
             min(0.45 * sd, torso_mesh.size()[2] * 0.42),
-            (neck_w[0], neck_w[1] + 0.05 * sh, neck_w[2]),
+            (neck_att[0][0], neck_att[0][1] + 0.05 * sh, neck_att[0][2]),
         )
 
     # 5) Gesamtes Rig gemeinsam auf y = 0 stellen
@@ -994,6 +1039,9 @@ def assemble_r15_rig(
         head_mesh=head_world,
         world_attachments=world_atts,
         joint_positions=joint_pos,
+        joint_frames=joint_frames,
+        segment_driver=segment_driver,
+        segment_spans=segment_spans,
         metrics=rig_metrics,
         scales_body=s_body,
         scales_head=s_head,
