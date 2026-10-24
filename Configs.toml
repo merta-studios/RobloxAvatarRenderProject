@@ -60,10 +60,13 @@ drehung_grad = 0
 #     Die Pipeline lädt das Emote und wendet genau die Haltung an, die auch
 #     das Katalog-Vorschaubild zeigt – deterministisch über die Daten, die
 #     Roblox selbst dafür im Emote-Asset ablegt (ThumbnailKeyframe bzw.
-#     ThumbnailTime; ohne diese Werte gilt Roblox' eigene Fallback-Regel:
-#     Mittel-Keyframe bzw. halbe Emote-Dauer). Moderne UGC-Emotes
-#     (CurveAnimations) werden genauso unterstützt wie klassische
-#     KeyframeSequence-Emotes.
+#     ThumbnailTime). Ohne diese Werte gilt Roblox' eigene Regel:
+#     der MITTLERE KEYFRAME – bei CurveAnimations der mittlere benannte
+#     Keyframe (die Namen der ursprünglichen Keyframes reisen als
+#     MarkerCurve "NamedKeyframeEvent" im Asset), bei klassischen
+#     Emotes der Mittel-Keyframe; nur ohne jede Keyframe-Info die halbe
+#     Emote-Dauer. Moderne UGC-Emotes (CurveAnimations) werden genauso
+#     unterstützt wie klassische KeyframeSequence-Emotes.
 #
 #     Optional dazu (siehe auch 3b/3c unten):
 #         emote_zeit  = Zeitpunkt in Sekunden, falls ein anderer Frame als

@@ -1709,7 +1709,8 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
                 f"frame={emo.get('frame')} zeit_s={emo.get('zeit_s')} "
                 f"dauer_s={emo.get('dauer_s')} auswahl='{emo.get('auswahl')}' "
                 f"gelenke={emo.get('gelenke')} "
-                f"thumbnail={emo.get('thumbnail')}")
+                f"thumbnail={emo.get('thumbnail')} "
+                f"marker={emo.get('marker')}")
             struktur = str(emo.get("struktur") or "")
             if struktur:
                 for i in range(0, min(len(struktur), 3600), 1800):
