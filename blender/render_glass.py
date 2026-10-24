@@ -1362,14 +1362,13 @@ def emit_projection_notices(cam, imported_parts, manifest, base_dir: str,
             grid[cy][cx] |= ch_bit
     if any(any(c for c in row) for row in grid):
         lines = []
+        legend = {1: "H", 2: "A", 3: "X", 4: "#", 5: "h", 6: "a", 7: "@"}
         for row in grid:
-            line = "".join(
-                " " if c == 0 else
-                "H" if c == 1 else "A" if c == 2 else "HA" if c == 3 else
-                "#" if c == 4 else "H#" if c == 5 else "A#" if c == 6 else "#"
-                for c in row)
-            lines.append("|" + line + "|")
-        _ci_notice("Silhouette Teile", ", ".join(part_chars))
+            lines.append("|" + "".join(
+                " " if c == 0 else legend.get(c, "?") for c in row) + "|")
+        _ci_notice("Silhouette Teile", ", ".join(part_chars)
+                   + " | Zeichen: # nur Koerper, H Kopf, A Accessory,"
+                   " X Kopf+Acc, h Kopf+Koerper, a Acc+Koerper, @ alles")
         # Welt-BBox je Objekt (data.vertices * matrix_world) vs. rohe
         # OBJ-Datei-Werte (Import-Swap x,z,y) - deckt Zuordnungs-/Transform-
         # Fehler sofort auf.
@@ -1396,6 +1395,21 @@ def emit_projection_notices(cam, imported_parts, manifest, base_dir: str,
         for _i in range(0, len(box_bits), 3):
             _ci_notice(f"Silhouette BBox ({_i // 3 + 1})",
                        " || ".join(box_bits[_i:_i + 3]))
+        # Bild-BBox je Teil (u/v-Bereich 0..1, v=1 oben) - eindeutig lesbar.
+        img_bits: List[str] = []
+        for obj, part in imported_parts:
+            name = str((part or {}).get("name") or obj.name)
+            wpts = [tuple(obj.matrix_world @ v.co) for v in obj.data.vertices]
+            if not wpts:
+                continue
+            uv = _world_to_view(cam, wpts)
+            us = [p[0] for p in uv]
+            vs = [p[1] for p in uv]
+            img_bits.append(f"{name}: u[{min(us):.2f}..{max(us):.2f}] "
+                            f"v[{min(vs):.2f}..{max(vs):.2f}]")
+        for _i in range(0, len(img_bits), 3):
+            _ci_notice(f"Silhouette Bild-BBox ({_i // 3 + 1})",
+                       " || ".join(img_bits[_i:_i + 3]))
         for _i in range(0, len(lines), 10):
             _ci_notice(f"Silhouette ({_i // 10 + 1})",
                        "\n".join(lines[_i:_i + 10]))
