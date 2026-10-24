@@ -644,6 +644,8 @@ class RiggedAvatar:
     #: Platzierte Segment-Meshes (Weltraum, vor der Pose) je Instanzname -
     #: fuer das Diagnose-Manifest ("welches Teil sitzt wo?").
     placed_segments: Dict[str, MeshData] = field(default_factory=dict)
+    #: Rohdaten je Segment (Groessen + Attachments) fuer das Diagnose-Manifest.
+    segment_info: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 def _attach_placement(
@@ -886,11 +888,13 @@ def assemble_r15_rig(
     s_head = (shead, shead, shead)
 
     seg_lookup: Dict[str, Tuple[MeshData, Dict[str, Tuple[Tuple[float, float, float], Matrix3]], bool]] = {}
+    raw_parts: Dict[str, Dict[str, Any]] = {}
     for segs in segments_by_part.values():
         for mp in segs:
             lname = (mp.get("label") or "").strip()
             if lname and lname not in seg_lookup:
                 seg_lookup[lname] = _scale_part_local(mp, s_body)
+                raw_parts[lname] = mp
 
     world_atts: Dict[str, Tuple[Tuple[float, float, float], Matrix3]] = {}
     joint_pos: Dict[str, Tuple[float, float, float]] = {}
@@ -918,6 +922,18 @@ def assemble_r15_rig(
 
     joint_spans: Dict[str, float] = {}
     notes: List[str] = []
+    segment_info: Dict[str, Dict[str, Any]] = {}
+
+    for _seg_name, _entry in seg_lookup.items():
+        _raw = raw_parts.get(_seg_name, {})
+        segment_info[_seg_name] = {
+            "class": _raw.get("rbxm_class"),
+            "rbxm_size": ([round(float(v), 4) for v in _raw["rbxm_size"]]
+                          if _raw.get("rbxm_size") else None),
+            "mesh_size": [round(float(v), 4) for v in _entry[0].size()],
+            "attachments": {k: [round(float(c), 4) for c in v[0]]
+                            for k, v in _entry[1].items()},
+        }
 
     def _dist3(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> float:
         return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2) ** 0.5
@@ -1310,6 +1326,7 @@ def assemble_r15_rig(
         notes=notes,
         joint_spans=joint_spans,
         placed_segments=dict(placed_seg_mesh),
+        segment_info=segment_info,
     )
 
 
