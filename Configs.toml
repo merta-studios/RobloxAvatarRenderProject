@@ -22,7 +22,7 @@
 # -----------------------------------------------------------------------------
 #  Der Name aus der Roblox-Profil-URL, z. B. "MertaStudios".
 #  (Ein "https://www.roblox.com/users/123456/profile"-Link funktioniert auch.)
-username = "SunsetSiya"
+username = "MertaStudios"
 
 
 # -----------------------------------------------------------------------------
@@ -81,7 +81,7 @@ drehung_grad = 0
 #
 #     Schlägt das Laden fehl (falsche ID, Netzwerk), wird automatisch die
 #     Stand-Pose gerendert und eine Warnung ins Log geschrieben.
-pose = "emote:87757463565936"
+pose = "emote:112758073578333"
 
 
 # -----------------------------------------------------------------------------
