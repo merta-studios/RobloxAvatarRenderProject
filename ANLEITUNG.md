@@ -117,7 +117,7 @@ Werte werden vor dem Render geprüft (`tools/render_config.py`,
 | `username` | Roblox-Username (früher `username.txt`) |
 | `drehung_grad` | Seitliche Drehung: `0` = frontal, `90` = rechte Seite, `-90` = linke Seite. Nur −90 … 90 ist erlaubt. |
 | `pose` | `None` = Stand-Pose, ein Name aus `Posen.toml` (z. B. `Winken`) oder ein Emote: `emote:<Asset-ID>` (z. B. `emote:3576893107`) |
-| `emote_zeit` | `-1` (Standard) = Frame wie im Katalog-Vorschaubild; `>= 0` = Zeitpunkt in Sekunden |
+| `emote_zeit` | `-1` (Standard) = Frame wie im Katalog-Vorschaubild (ThumbnailTime bzw. mittlerer benannter Keyframe); `>= 0` = Zeitpunkt in Sekunden |
 | `emote_datei` | leer = Emote herunterladen; sonst Pfad zu einer lokalen `.rbxm`/`.rbxmx`-Datei |
 | *(Bildausschnitt)* | Steht **nicht** mehr in der Config: Jede Pose in `Posen.toml` definiert selbst, bis zu welchen Positionen man sehen kann (`sichtbar_oben_prozent`, `sichtbar_unten_prozent`, `kamera_abstand_studs`, `avatar_hoch_studs`). |
 | `render_bei_aenderung` | `true` = nach diesem Push sofort rendern. Der Workflow setzt den Wert nach erfolgreichem Render automatisch auf `false`. |

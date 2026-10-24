@@ -449,6 +449,54 @@ class _ByteReader:
         return struct.unpack("<f", self._read(4))[0]
 
 
+def decode_marker_curve(blob: bytes) -> List[Dict[str, Any]]:
+    """MarkerCurve-``ValuesAndTimes`` -> Marker (Zeit in s + Name).
+
+    Roblox speichert die *benannten Keyframes* einer Animation als
+    ``MarkerCurve`` mit dem Namen ``NamedKeyframeEvent`` (die Namen der
+    Keyframes einer KeyframeSequence "reisen" so in CurveAnimations, s.
+    rbx-native ``rbx_animation/src/curve/file.rs``).
+
+    Format (analog FloatCurve-``ValuesAndTimes``)::
+
+        u32 version (2)
+        u32 count
+        count * { null-terminierter Name }
+        u32 times_version (1)
+        u32 time_count (== count)
+        count * u32 ticks   # 2400 Ticks pro Sekunde
+    """
+    if not blob:
+        return []
+    try:
+        r = _ByteReader(blob)
+        version = r.u32()
+        if version != 2:
+            return []
+        count = r.u32()
+        if count > 10000:
+            return []
+        names: List[str] = []
+        for _ in range(count):
+            end = blob.find(b"\x00", r.pos)
+            if end < 0:
+                return []
+            names.append(blob[r.pos:end].decode("utf-8", errors="replace"))
+            r.pos = end + 1
+        times_version = r.u32()
+        time_count = r.u32()
+        if times_version != 1 or time_count != count:
+            return []
+        out = []
+        for i in range(count):
+            ticks = r.u32()
+            out.append({"time": ticks / 2400.0, "name": names[i]})
+        out.sort(key=lambda m: m["time"])
+        return out
+    except (EmoteError, struct.error, IndexError):
+        return []
+
+
 def decode_float_curve(blob: bytes) -> List[Dict[str, Any]]:
     """FloatCurve-``ValuesAndTimes`` -> Keys (zeitlich sortiert).
 
@@ -717,6 +765,14 @@ def parse_curve_animation(roots: Sequence[Dict[str, Any]]) -> Optional[Dict[str,
         if rec.get("class") != "CurveAnimation":
             continue
         gelenke: Dict[str, Dict[str, Any]] = {}
+        # Benannte Keyframes (MarkerCurve "NamedKeyframeEvent") direkt unter
+        # der CurveAnimation: die Namen der urspruenglichen KeyframeSequence.
+        marker: List[Dict[str, Any]] = []
+        for child in _iter_tree(rec.get("children") or ()):
+            if (child.get("class") == "MarkerCurve"
+                    and (child.get("name") or "") == "NamedKeyframeEvent"):
+                marker = decode_marker_curve(child.get("values_and_times") or b"")
+                break
         for folder in _iter_tree(rec.get("children") or ()):
             if folder.get("class") != "Folder":
                 continue
@@ -761,7 +817,8 @@ def parse_curve_animation(roots: Sequence[Dict[str, Any]]) -> Optional[Dict[str,
         if gelenke:
             return {"typ": "curves", "gelenke": gelenke,
                     "name": rec.get("name") or "",
-                    "laenge": _curve_length(gelenke)}
+                    "laenge": _curve_length(gelenke),
+                    "marker": marker}
     return None
 
 
@@ -840,6 +897,39 @@ def select_sample_time(laenge: float, thumbnail_time: Optional[float]) -> float:
     if 0.0 <= t <= laenge:
         return t
     return laenge / 2.0
+
+
+def select_curve_frame(laenge: float,
+                       thumbnail_time: Optional[float],
+                       marker: Optional[List[Dict[str, Any]]],
+                       zeit: Optional[float] = None) -> Tuple[float, str]:
+    """Abtastzeitpunkt einer CurveAnimation waehlen (Roblox-Regeln).
+
+    Rangfolge:
+
+    1. ``zeit``: manueller Override (``emote_zeit`` in der Configs.toml).
+    2. ``ThumbnailTime`` aus dem Emote-Asset (0..Dauer), falls gesetzt.
+    3. **Mittlerer benannter Keyframe** (MarkerCurve ``NamedKeyframeEvent``):
+       Roblox' Katalog-Thumbnail-Renderer (RCC ``AnimationSilhouette``)
+       konvertiert die CurveAnimation zu einer KeyframeSequence und rendert
+       den mittleren Keyframe (``emoteKeyframes[ceil(n/2)]``). Die Namen der
+       urspruenglichen Keyframes reisen als Marker - der mittlere Marker
+       rekonstruiert also den mittleren Keyframe der Original-Sequenz.
+    4. Halbe Dauer (``EmoteUtility.GetThumbnailKeyframeFromCurve``-Fallback).
+
+    Rueckgabe: ``(zeit_s, beschreibung_der_auswahl)``.
+    """
+    if zeit is not None:
+        return max(0.0, min(zeit, laenge)), f"emote_zeit {_fmt_de(zeit)} s"
+    if thumbnail_time is not None and 0.0 <= thumbnail_time <= laenge:
+        return float(thumbnail_time), f"ThumbnailTime {_fmt_de(thumbnail_time)} s"
+    if marker:
+        mid = (len(marker) - 1) // 2  # emoteKeyframes[ceil(n/2)] (1-basiert)
+        t = max(0.0, min(marker[mid]["time"], laenge))
+        return t, (f"mittlerer benannter Keyframe ({mid + 1}/{len(marker)}: "
+                   f"'{marker[mid]['name']}' bei "
+                   f"{_fmt_de(marker[mid]['time'])} s, Roblox-Katalog-Regel)")
+    return laenge / 2.0, "halbe Dauer (Roblox-Fallback)"
 
 
 def closest_keyframe_index(keyframes: List[Dict[str, Any]], zeit: float) -> int:
@@ -1021,8 +1111,10 @@ def load_emote_pose(emote_id: Optional[int] = None,
     3. Falls noetig der ``AnimationId`` folgen (KeyframeSequence- bzw.
        CurveAnimation-Asset nachladen, inkl. Weiterleitungen).
     4. Frame waehlen - Rangfolge: ``zeit`` (manueller Override aus der
-       Configs.toml), dann Thumbnail-Metadaten, dann Roblox-Fallback
-       (Mittel-Keyframe / halbe Dauer).
+       Configs.toml), dann Thumbnail-Metadaten (``ThumbnailTime`` bzw.
+       ``ThumbnailKeyframe``), dann der mittlere benannte Keyframe
+       (MarkerCurve ``NamedKeyframeEvent`` - Roblox-Katalog-Regel), dann
+       Roblox-Fallback (Mittel-Keyframe / halbe Dauer).
     5. Pose-CFrames extrahieren und in das interne Pose-Format uebersetzen.
 
     Rueckgabe: ``(pose_dict, einstellungen, info)``. Fehler -> :class:`EmoteError`.
@@ -1105,15 +1197,12 @@ def load_emote_pose(emote_id: Optional[int] = None,
     else:
         laenge = clip.get("laenge") or 0.0
         info["dauer_s"] = laenge
-        if zeit is not None:
-            t = max(0.0, min(zeit, laenge))
-            info["auswahl"] = f"emote_zeit {_fmt_de(zeit)} s"
-        else:
-            t = select_sample_time(laenge, meta.get("ThumbnailTime"))
-            if "ThumbnailTime" in meta and 0.0 <= meta["ThumbnailTime"] <= laenge:
-                info["auswahl"] = f"ThumbnailTime {_fmt_de(meta['ThumbnailTime'])} s"
-            else:
-                info["auswahl"] = "halbe Dauer (Roblox-Fallback)"
+        marker = clip.get("marker") or []
+        if marker:
+            info["marker"] = [(m["name"], round(m["time"], 4)) for m in marker]
+        t, auswahl = select_curve_frame(laenge, meta.get("ThumbnailTime"),
+                                        marker, zeit)
+        info["auswahl"] = auswahl
         info["zeit_s"] = t
         posen = sample_curve_animation(clip, t)
 

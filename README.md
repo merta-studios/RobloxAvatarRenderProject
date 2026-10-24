@@ -79,7 +79,7 @@ Ergebnis im Build-Ordner: `manifest.json`, `parts/*.obj`, `textures/*`,
 | `username` | Roblox-Username (früher `username.txt`) |
 | `drehung_grad` | Seitliche Drehung `-90 … 90`; `0` = frontal, `90` = rechte Seite |
 | `pose` | `None`, ein Name aus `Posen.toml` **oder ein Emote**: `emote:<Asset-ID>` (z. B. `emote:3576893107` – die Zahl aus der Katalog-URL; reine ID oder Katalog-URL gehen auch) |
-| `emote_zeit` | `-1` (Standard) = automatisch der Frame aus dem Katalog-Vorschaubild; `>= 0` = expliziter Zeitpunkt in Sekunden |
+| `emote_zeit` | `-1` (Standard) = automatisch der Frame aus dem Katalog-Vorschaubild (ThumbnailTime bzw. mittlerer benannter Keyframe); `>= 0` = expliziter Zeitpunkt in Sekunden |
 | `emote_datei` | leer = Emote über die Asset-ID laden; sonst Pfad zu einer lokalen `.rbxm`/`.rbxmx`-Emote-Datei |
 | *(Bildausschnitt)* | Steht nicht mehr hier – jede Pose in `Posen.toml` definiert selbst, was sichtbar ist (`sichtbar_oben_prozent` / `sichtbar_unten_prozent`, Kamera-Abstand, Avatar-Höhe) |
 | `render_bei_aenderung` | `true` = nach dem Push rendern (Workflow setzt danach auf `false`) |

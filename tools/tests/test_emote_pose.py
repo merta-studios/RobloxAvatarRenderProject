@@ -896,3 +896,80 @@ def test_build_avatar_emote_dry_run_ohne_datei_warnt(tmp_path):
                           'hintergrund_url = "transparent"\n')
     assert manifest["render"]["pose_aktiv"] is False
     assert any("Dry-Run" in w and "Emote" in w for w in manifest["warnings"])
+
+
+# ---------------------------------------------------------------------------
+# MarkerCurve "NamedKeyframeEvent": benannte Keyframes + Frame-Auswahl
+# ---------------------------------------------------------------------------
+
+def encode_marker_curve(markers):
+    """MarkerCurve-ValuesAndTimes-Blob (Version 2, Ticks 2400/s)."""
+    names = b"".join(m[0].encode() + b"\x00" for m in markers)
+    ticks = b"".join(struct.pack("<I", int(round(m[1] * 2400))) for m in markers)
+    return (struct.pack("<II", 2, len(markers)) + names
+            + struct.pack("<II", 1, len(markers)) + ticks)
+
+
+def test_decode_marker_curve():
+    blob = encode_marker_curve([("Start", 0.0), ("Pose", 1.25), ("Ende", 4.5)])
+    marker = emote_pose.decode_marker_curve(blob)
+    assert [m["name"] for m in marker] == ["Start", "Pose", "Ende"]
+    assert [m["time"] for m in marker] == pytest.approx([0.0, 1.25, 4.5])
+
+
+def test_decode_marker_curve_sortiert_und_rot():
+    # Unsortierte Eingabe wird zeitlich sortiert; Muell liefert [].
+    blob = encode_marker_curve([("B", 2.0), ("A", 0.5)])
+    marker = emote_pose.decode_marker_curve(blob)
+    assert [m["name"] for m in marker] == ["A", "B"]
+    assert emote_pose.decode_marker_curve(b"") == []
+    assert emote_pose.decode_marker_curve(b"\x99" * 12) == []
+    assert emote_pose.decode_marker_curve(struct.pack("<III", 99, 0, 0)) == []
+
+
+@pytest.mark.parametrize("laenge,thumb,marker,zeit,expected_t,expected_txt", [
+    # manueller Override gewinnt
+    (4.0, None, [{"name": "A", "time": 1.0}], 3.0, 3.0, "emote_zeit"),
+    # ThumbnailTime gewinnt vor Markern
+    (4.0, 0.5, [{"name": "A", "time": 1.0}], None, 0.5, "ThumbnailTime"),
+    # mittlerer benannter Keyframe (ungerade Anzahl: 2/3)
+    (4.87, None, [{"name": "A", "time": 0.0},
+                  {"name": "B", "time": 1.2},
+                  {"name": "C", "time": 4.8}], None, 1.2,
+     "mittlerer benannter Keyframe (2/3: 'B'"),
+    # gerade Anzahl: ceil(4/2) = 2 -> Index 1
+    (4.0, None, [{"name": "A", "time": 0.0}, {"name": "B", "time": 1.0},
+                 {"name": "C", "time": 2.0}, {"name": "D", "time": 3.0}],
+     None, 1.0, "mittlerer benannter Keyframe (2/4: 'B'"),
+    # ungueltige ThumbnailTime -> Marker-Regel
+    (4.0, 9.0, [{"name": "A", "time": 3.0}], None, 3.0,
+     "mittlerer benannter Keyframe"),
+    # ohne Marker: halbe Dauer
+    (4.0, None, [], None, 2.0, "halbe Dauer"),
+    (4.0, None, None, None, 2.0, "halbe Dauer"),
+    # Marker jenseits der Dauer wird auf die Dauer begrenzt
+    (2.0, None, [{"name": "A", "time": 9.0}], None, 2.0,
+     "mittlerer benannter Keyframe"),
+])
+def test_select_curve_frame(laenge, thumb, marker, zeit, expected_t, expected_txt):
+    t, beschreibung = emote_pose.select_curve_frame(laenge, thumb, marker, zeit)
+    assert t == pytest.approx(expected_t)
+    assert expected_txt in beschreibung
+
+
+def test_parse_curve_animation_liest_benannte_keyframes():
+    marker_blob = encode_marker_curve(
+        [("Start", 0.0), ("Hauptpose", 1.2), ("Ende", 4.8)])
+    marker_xml = (
+        '<Item class="MarkerCurve"><Properties>'
+        '<string name="Name">NamedKeyframeEvent</string>'
+        f'<BinaryString name="ValuesAndTimes">{_b64(marker_blob)}</BinaryString>'
+        '</Properties></Item>'
+    )
+    xml = xml_curve_animation().replace(
+        "</Item>\n</roblox>", marker_xml + "</Item>\n</roblox>")
+    roots = rbxm.parse_instances(xml.encode())
+    clip = emote_pose.parse_curve_animation(roots)
+    assert clip is not None and clip["typ"] == "curves"
+    assert [m["name"] for m in clip["marker"]] == ["Start", "Hauptpose", "Ende"]
+    assert [m["time"] for m in clip["marker"]] == pytest.approx([0.0, 1.2, 4.8])
