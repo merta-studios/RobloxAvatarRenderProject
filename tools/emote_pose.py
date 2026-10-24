@@ -297,6 +297,10 @@ def read_thumbnail_metadata(roots: Sequence[Dict[str, Any]]) -> Dict[str, float]
 
     Gesucht wird in den Kindern jeder ``Animation``-Instanz (dort legt sie
     Roblox' Publish-UI ab) und ersatzweise direkt unter den Wurzel-Instanzen.
+    Roblox' eigene Renderer lesen die Werte als direkte Kinder der geladenen
+    Wurzel-Instanz - je nach Upload-Weg koennen sie aber auch anders im Baum
+    landen. Deshalb werden fehlende Werte zusaetzlich im kompletten Baum
+    gesucht (erst gefundene Treffer gewinnen, gleiche Prioritaet wie bisher).
     Fehlt ein Wert, steht er nicht im Dict.
     """
     meta: Dict[str, float] = {}
@@ -314,8 +318,51 @@ def read_thumbnail_metadata(roots: Sequence[Dict[str, Any]]) -> Dict[str, float]
                 if value is not None:
                     meta[name] = value
         if len(meta) == len(THUMBNAIL_VALUE_NAMES):
-            break
+            return meta
+    # Letzte Instanz: kompletter Baum (findet auch bei unueblicher
+    # Verschachtelung noch die Werte).
+    for rec in _iter_tree(roots):
+        name = rec.get("name") or ""
+        if name in THUMBNAIL_VALUE_NAMES and name not in meta:
+            value = _record_value_num(rec)
+            if value is not None:
+                meta[name] = value
     return meta
+
+
+def describe_instance_tree(roots: Sequence[Dict[str, Any]],
+                           max_depth: int = 3,
+                           max_entries: int = 50) -> str:
+    """Kompakte Struktur-Beschreibung eines Instanz-Baums (Diagnose).
+
+    Listet Klasse und Namen der Instanzen bis ``max_depth`` Ebenen auf,
+    dazu die Werte aller Thumbnail-NumberValues im ganzen Baum.
+    """
+    parts: List[str] = []
+
+    def walk(rec: Dict[str, Any], depth: int) -> None:
+        if depth > max_depth or len(parts) >= max_entries:
+            return
+        cls = str(rec.get("class") or "?")
+        name = str(rec.get("name") or "")
+        value = _record_value_num(rec)
+        vtxt = (f"={_fmt_de(value)}" if value is not None else "")
+        indent = "." * depth
+        parts.append(f"{indent}{cls}[{name}]{vtxt}")
+        for child in rec.get("children") or ():
+            walk(child, depth + 1)
+
+    for root in roots:
+        walk(root, 0)
+    # Thumbnail-Werte immer vollstaendig dazunehmen (auch aus der Tiefe)
+    for rec in _iter_tree(roots):
+        name = str(rec.get("name") or "")
+        if name in THUMBNAIL_VALUE_NAMES:
+            value = _record_value_num(rec)
+            if value is not None:
+                parts.append(f"THUMB {name}={_fmt_de(value)}")
+    text = " | ".join(parts)
+    return text[:2000]
 
 
 # ---------------------------------------------------------------------------
@@ -990,6 +1037,9 @@ def load_emote_pose(emote_id: Optional[int] = None,
     except rbxm.RbxmError as exc:
         raise EmoteError(f"Emote-Daten sind kein lesbares RBXM/RBXMX: {exc}") from exc
 
+    struktur_parts: List[str] = [
+        f"Emote-Asset {emote_id}: " + describe_instance_tree(roots)]
+
     clip = parse_animation_clip(roots)
     meta = read_thumbnail_metadata(roots)
     hops = 0
@@ -1014,6 +1064,8 @@ def load_emote_pose(emote_id: Optional[int] = None,
             raise EmoteError(
                 f"Animations-Asset {next_id} ist kein lesbares RBXM/RBXMX: {exc}"
             ) from exc
+        struktur_parts.append(
+            f"Animations-Asset {next_id}: " + describe_instance_tree(roots))
         clip = parse_animation_clip(roots)
         if not meta:
             meta = read_thumbnail_metadata(roots)
@@ -1029,6 +1081,7 @@ def load_emote_pose(emote_id: Optional[int] = None,
         "name": clip.get("name") or "",
         "typ": clip["typ"],
         "thumbnail": meta,
+        "struktur": " // ".join(struktur_parts),
     }
 
     # ---- Frame waehlen (Roblox-Regeln, mit manuellem Override) ------------

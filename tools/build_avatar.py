@@ -1707,7 +1707,14 @@ def emit_ci_diagnosis(manifest: Dict[str, Any],
                 f"emote_id={emo.get('emote_id')} name='{emo.get('name')}' "
                 f"typ={emo.get('typ')} keyframes={emo.get('keyframes')} "
                 f"frame={emo.get('frame')} zeit_s={emo.get('zeit_s')} "
-                f"auswahl='{emo.get('auswahl')}' gelenke={emo.get('gelenke')}")
+                f"dauer_s={emo.get('dauer_s')} auswahl='{emo.get('auswahl')}' "
+                f"gelenke={emo.get('gelenke')} "
+                f"thumbnail={emo.get('thumbnail')}")
+            struktur = str(emo.get("struktur") or "")
+            if struktur:
+                for i in range(0, min(len(struktur), 3600), 1800):
+                    ci_notice(f"Diagnose 4d/6 Emote-Struktur ({i // 1800 + 1})",
+                              struktur[i:i + 1800])
 
     # 4) Teil-Bounding-Boxen NACH der Pose (Weltkoordinaten der OBJs)
     if per_part_bounds:
