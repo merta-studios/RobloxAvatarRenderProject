@@ -391,10 +391,19 @@ jobs:
           NOTES="Automatisch gerenderter Roblox-Avatar (**${USERNAME}**). Wird bei jedem erfolgreichen Lauf ersetzt – die Download-URL bleibt gleich und funktioniert auch auf dem Handy."
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" render_avatar.png --clobber
+            # Manifest (Gelenke, Rig-Audit, Warnungen) mitveroeffentlichen -
+            # damit laesst sich ein verschobenes Teil auch ohne Artifact
+            # nachvollziehen. Der renders-Branch bleibt reines Bild.
+            if [ -f build/manifest.json ]; then
+              gh release upload "$TAG" build/manifest.json --clobber
+            fi
             gh release edit "$TAG" --title "Avatar-Render (aktuell)" --notes "$NOTES"
           else
             gh release create "$TAG" render_avatar.png \
               --title "Avatar-Render (aktuell)" --notes "$NOTES"
+            if [ -f build/manifest.json ]; then
+              gh release upload "$TAG" build/manifest.json --clobber
+            fi
           fi
 
       - name: 10) Ergebnis in die Step Summary schreiben (nur das Bild)
