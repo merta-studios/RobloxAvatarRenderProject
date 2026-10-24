@@ -90,8 +90,10 @@ In `Posen.toml` beschreibt jede Pose mit sprechenden Delta-Werten, wie sich
 die Gelenke gegenüber der Stand-Pose verändern (z. B. am Oberarm
 `vor_hoch_schwingen_grad` und `vom_koerper_weg_grad` statt roher Achsen-Tripel),
 plus eigenem Bildausschnitt und Kamera-Abstand. Gedreht wird um die exakten
-Gelenk-Pivots aus den RigAttachments, überblendet wird volumen-erhaltend per
-Quaternionen.
+Gelenk-Pivots aus den RigAttachments; bei echten R15-Rigs wird jedes Segment
+**starr** um sein Gelenk transformiert (Motor6D-Semantik wie in Roblox –
+`part1 = part0 * C0 * Transform * C1⁻¹`), nur die Fallback-Quader ohne
+Attachment-Daten werden volumen-erhaltend per Quaternionen überblendet.
 
 **Emote-Posen** (`pose = "emote:<ID>"`): Die Pipeline lädt das Emote aus dem
 Roblox-Katalog und wendet exakt die Haltung an, die auch das

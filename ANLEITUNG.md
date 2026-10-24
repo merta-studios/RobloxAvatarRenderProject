@@ -245,12 +245,16 @@ Besonderheiten:
   `stats.ignored_animations`) – sie tauchen **nicht** als „übersprungen“ auf.
 * **R15-Segmente:** Körperteil-Bundles (z. B. Korblox) liefern pro Asset
   mehrere Segmente (`RightUpperArm`, `RightLowerLeg`, `RightFoot` …).
-  Die Pipeline wählt die R15-Segmente per Name aus und **stapelt sie
-  senkrecht** in der Stand-Pose (Obersegment oben, mit Mindestluft
-  zwischen den Stücken). Die RBXM-Positionen beschreiben dagegen die
-  *Bind-Pose* des Pakets (A-Pose, Arme schräg nach außen) – deren
-  Übernahme und das Pressen in die senkrechte Rig-Box war die Ursache
-  für verstellte/verrenkte Rig-Teile mit falscher Position und Rotation.
+  Haben die Segmente echte `*RigAttachment`-Daten, wird der Körper
+  **exakt wie Roblox** montiert: `Humanoid:BuildRigFromAttachments()`
+  baut jeden Motor6D aus `C0 = Eltern-Attachment.CFrame` und
+  `C1 = Kind-Attachment.CFrame`, d. h. Kind-Segment = `Eltern * C0 * C1⁻¹`
+  – beide Attachment-Frames (Position **und** Orientierung) koinzidieren
+  danach exakt. Das ergibt nahtlose Gelenke ohne geratene Winkel/Offsets;
+  Posen (Emotes) werden nach derselben Motor6D-Formel
+  (`part1 = part0 * C0 * Transform * C1⁻¹`, RCC `EmoteUtility.lua`)
+  **starr je Segment** im Frame des Eltern-Attachments angewandt.
+  Erst *ohne* Attachment-Daten greift der alte senkrechte Stapel-Fallback.
 * **CFrame-Rotationen:** Werden vollständig gelesen (explizite Matrix
   *und* die 24 Sonder-Rotationen der Binärspec) und bei Accessoires
   angewendet – ein um 90° gedrehtes Bruststück steht sonst seitlich

@@ -97,6 +97,9 @@ BONE_JOINT: Dict[str, str] = {
     "rechter_fuss": "RightFoot",
 }
 
+#: Umkehrung: R15-Gelenk-/Segmentname -> Knochen (starr je Segment anwenden).
+JOINT_BONE: Dict[str, str] = {joint: bone for bone, joint in BONE_JOINT.items()}
+
 #: Eltern zuerst (topologische Reihenfolge fuer die Matrizen).
 BONE_ORDER: Tuple[str, ...] = (
     "unterer_torso",
@@ -315,6 +318,54 @@ def _mat3_of(m: Mat4) -> Mat3:
             (m[2][0], m[2][1], m[2][2]))
 
 
+def _mat3_mul(a: Mat3, b: Mat3) -> Mat3:
+    return tuple(  # type: ignore[return-value]
+        tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3))
+        for i in range(3))
+
+
+def _mat3_transpose(m: Mat3) -> Mat3:
+    return ((m[0][0], m[1][0], m[2][0]),
+            (m[0][1], m[1][1], m[2][1]),
+            (m[0][2], m[1][2], m[2][2]))
+
+
+def _mat4_from(pos: Vec3, rot: Mat3) -> Mat4:
+    return (
+        (rot[0][0], rot[0][1], rot[0][2], pos[0]),
+        (rot[1][0], rot[1][1], rot[1][2], pos[1]),
+        (rot[2][0], rot[2][1], rot[2][2], pos[2]),
+        (0.0, 0.0, 0.0, 1.0),
+    )
+
+
+def _motor_local(motor: Tuple[Vec3, Mat3], pivot: Point,
+                 frame: Optional[Mat3]) -> Mat4:
+    """Motor6D-Transform -> lokale Welt-Transformation des Gelenks.
+
+    Roblox wertet Posen als ``child = parent * C0 * Transform * C1^-1`` aus;
+    auf Bind-Weltkoordinaten uebertragen heisst das (Herleitung ueber die
+    koinzidierenden Attachment-Frames): das Kind-Segment erhaelt delta
+    ``J * T * J^-1`` auf das Eltern-Delta, wobei ``J`` der Bind-Welt-Frame
+    des Eltern-Attachments ist (Position = Gelenkpivot, Rotation =
+    ``frame``) und ``T`` der Pose-CFrame (Position + Rotation). Ohne Rig
+    (``frame`` ist None) gilt ``J = (pivot, Identitaet)`` - dann ist das
+    exakt die bisherige Formel ``T(t) * T(pivot) * R * T(-pivot)``.
+    """
+    t, r = motor
+    jr = frame if frame is not None else (
+        (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    # A = J * T
+    a_pos = _add(pivot, _mat3_vec(jr, t))
+    a_rot = _mat3_mul(jr, r)
+    # local = A * J^-1  mit  J^-1 = (-jr^T * pivot, jr^T)
+    inv_rot = _mat3_transpose(jr)
+    inv_pos = _mat3_vec(inv_rot, (-pivot[0], -pivot[1], -pivot[2]))
+    pos = _add(a_pos, _mat3_vec(a_rot, inv_pos))
+    rot = _mat3_mul(a_rot, inv_rot)
+    return _mat4_from(pos, rot)
+
+
 def _mat3_vec(m: Mat3, v: Sequence[float]) -> Vec3:
     x, y, z = float(v[0]), float(v[1]), float(v[2])
     return (m[0][0] * x + m[0][1] * y + m[0][2] * z,
@@ -470,11 +521,17 @@ def normalize_pose(pose: Any, name: str = "Pose") -> Dict[str, Dict[str, Any]]:
             continue
         if isinstance(spec, dict) and "felder" in spec:
             # Bereits normalisiert (z. B. aus load_poses) - unveraendert durchreichen.
-            normalized[part] = {
+            entry = {
                 "rotation": tuple(float(v) for v in spec["rotation"]),
                 "verschiebung": tuple(float(v) for v in spec["verschiebung"]),
                 "felder": dict(spec["felder"]),
             }
+            motor = spec.get("motor")
+            if motor is not None:
+                # Motor6D-CFrame (Emotes): exakte Gelenk-Transformation
+                # (Position + Rotationsmatrix) direkt durchreichen.
+                entry["motor"] = motor
+            normalized[part] = entry
             continue
         normalized[part] = _check_part(part, spec, f"Pose '{name}'")
     return normalized
@@ -676,20 +733,49 @@ def chain_weights(point: Sequence[float],
 # Pose-Kontext
 # ---------------------------------------------------------------------------
 
+def _motor_is_active(motor: Any) -> bool:
+    """Motor6D-CFrame von der Identitaet unterscheidbar?"""
+    if not motor:
+        return False
+    try:
+        t, r = motor
+        if any(abs(float(v)) > 1e-9 for v in t):
+            return True
+        for i in range(3):
+            for j in range(3):
+                soll = 1.0 if i == j else 0.0
+                if abs(float(r[i][j]) - soll) > 1e-9:
+                    return True
+    except (TypeError, ValueError, IndexError):
+        return True
+    return False
+
+
 class PoseContext:
-    """Wendet eine (bereits validierte) Pose auf Welt-Meshes an."""
+    """Wendet eine (bereits validierte) Pose auf Welt-Meshes an.
+
+    Mit ``rig`` (ein ``avatar_rig.RiggedAvatar``) werden Koerperteile mit
+    echten R15-Segmenten STARR je Segment transformiert - exakt wie
+    Motor6D-Gelenke in Roblox (R15 ohne Skinning ist starr). Ohne ``rig``
+    (prozedurale Fallback-Geometrie) bleibt die bisherige weiche
+    Ketten-Verformung entlang der Gelenkpunkte.
+    """
 
     def __init__(self, pose: Dict[str, Dict[str, Any]],
                  joints: Dict[str, Point],
-                 settings: Optional[Dict[str, float]] = None):
-        # ``pose`` darf roh (sprechende Felder) oder normalisiert sein.
+                 settings: Optional[Dict[str, float]] = None,
+                 rig: Any = None):
+        # ``pose`` darf roh (sprechende Felder), normalisiert oder mit
+        # ``motor``-CFrames (Emotes) sein.
+        self.rig = rig
         self.pose = normalize_pose(pose) if pose else {}
         self.settings = {**POSE_SETTING_DEFAULTS, **(settings or {})}
         self.joints = self._resolve_joints(joints)
         self.avatar_offset: Vec3 = (0.0, float(self.settings["avatar_hoch_studs"]), 0.0)
         self.active = (
             any(any(abs(v) > 1e-9 for v in spec["rotation"]) or
-                any(abs(v) > 1e-9 for v in spec["verschiebung"])
+                any(abs(v) > 1e-9 for v in spec["verschiebung"]) or
+                _motor_is_active(spec.get("motor"))
                 for spec in self.pose.values())
             or any(abs(v) > 1e-9 for v in self.avatar_offset))
         self.transforms: Dict[str, Mat4] = {}
@@ -748,13 +834,23 @@ class PoseContext:
             rotation = spec.get("rotation", (0.0, 0.0, 0.0))
             offset = spec.get("verschiebung", (0.0, 0.0, 0.0))
             pivot = self.joints[BONE_JOINT[bone]]  # nach _resolve_joints immer da
-            # Drehung exakt um den Gelenk-Pivot; das Positions-Delta wirkt
-            # im Eltern-Raum (hoch/vor/aussen), verschiebt also den Pivot
-            # selbst - Kinder und Accessoires folgen nahtlos.
-            local = _mat4_mul(_translation(offset),
-                              _mat4_mul(_translation(pivot),
-                                        _mat4_mul(_euler_matrix(rotation),
-                                                  _translation((-pivot[0], -pivot[1], -pivot[2])))))
+            motor = spec.get("motor")
+            if motor is not None:
+                # Motor6D-Semantik (Emotes): Rotation im Frame des Eltern-
+                # Attachments (C0), nicht in Weltachsen. Ohne Rig-Frame
+                # exakt identisch zur klassischen Formel unten.
+                frame = None
+                if self.rig is not None:
+                    frame = self.rig.joint_frames.get(BONE_JOINT[bone])
+                local = _motor_local(motor, pivot, frame)
+            else:
+                # Drehung exakt um den Gelenk-Pivot; das Positions-Delta wirkt
+                # im Eltern-Raum (hoch/vor/aussen), verschiebt also den Pivot
+                # selbst - Kinder und Accessoires folgen nahtlos.
+                local = _mat4_mul(_translation(offset),
+                                  _mat4_mul(_translation(pivot),
+                                            _mat4_mul(_euler_matrix(rotation),
+                                                      _translation((-pivot[0], -pivot[1], -pivot[2])))))
             parent = BONE_PARENT[bone]
             world = _mat4_mul(self.transforms[parent], local) if parent else local
             if parent is None and any(abs(v) > 1e-9 for v in self.avatar_offset):
@@ -863,10 +959,48 @@ class PoseContext:
             source_version=mesh.source_version,
         )
 
+    def _apply_segment_spans(self, mesh: MeshData,
+                             spans: List[Tuple[str, int, int]]) -> MeshData:
+        """Starr je R15-Segment transformieren (Motor6D-Semantik).
+
+        Jedes Segment bekommt die Transformation ``transforms[bone]`` seines
+        Gelenks - Rotation exakt um das Bind-Attachment, Verkettung ueber
+        die Eltern-Gelenke. Kein weiches Verformen: R15-Teile sind starr,
+        dadurch bleiben die Gelenke auch bei starken Posen nahtlos.
+        """
+        positions: List[Vec3] = list(mesh.positions)
+        has_normals = len(mesh.normals) == len(mesh.positions)
+        normals: List[Vec3] = list(mesh.normals) if has_normals else []
+        for seg_name, start, end in spans:
+            if end <= start:
+                continue
+            bone = JOINT_BONE.get(seg_name)
+            if bone is None:
+                continue
+            transform = self.transforms[bone]
+            rotation = self.rotations[bone]
+            for i in range(start, end):
+                positions[i] = _mat4_point(transform, positions[i])
+                if has_normals:
+                    n = normals[i]
+                    normals[i] = _normalize(_mat3_vec(rotation, n), n)
+        return MeshData(
+            positions=positions,
+            normals=normals if has_normals else [],
+            uvs=list(mesh.uvs),
+            faces=list(mesh.faces),
+            colors=list(mesh.colors) if mesh.colors else None,
+            source_version=mesh.source_version,
+        )
+
     def apply_body(self, part_name: str, mesh: MeshData) -> MeshData:
         """Verformt ein Koerperteil (torso, Arme, Beine, Kopf, Hals)."""
         if not self.active or mesh.is_empty:
             return mesh
+        if self.rig is not None:
+            spans = self.rig.segment_spans.get(part_name)
+            if spans:
+                return self._apply_segment_spans(mesh, spans)
         chain = PART_CHAINS.get(part_name)
         if chain is None:
             return mesh
