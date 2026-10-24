@@ -345,9 +345,31 @@ jobs:
           if [ -z "$SAFE_NAME" ]; then SAFE_NAME="avatar"; fi
 
           TMP="$(mktemp -d)"
-          # Ergebnis = nur das Bild. Keine Analyse-/Diagnosedateien mehr.
+          # Ergebnis = nur das Bild. Das Manifest bleibt aus dem Branch
+          # heraus (keine Analyse-Dateien), wandert aber in die Step Summary.
           cp render_avatar.png "$TMP/latest.png"
           cp render_avatar.png "$TMP/${SAFE_NAME}.png"
+          if [ -f build/manifest.json ]; then
+            python3 - build/manifest.json >> "$GITHUB_STEP_SUMMARY" <<'PYEOF'
+          import json, sys
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          audit = (data.get("rig_audit") or {})
+          print("\n### Rig-Audit\n")
+          spans = audit.get("joint_spans") or {}
+          if spans:
+              print("| Gelenk | Abstand zum Elterngelenk (Studs) |")
+              print("| --- | --- |")
+              for key in sorted(spans):
+                  print(f"| `{key}` | {spans[key]:.3f} |")
+          for note in (audit.get("hinweise") or [])[:20]:
+              print(f"* {note}")
+          warnings = data.get("warnings") or []
+          if warnings:
+              print("\n### Warnungen\n")
+              for warning in warnings[:20]:
+                  print(f"* {warning}")
+          PYEOF
+          fi
 
           git -C "$TMP" init -q
           git -C "$TMP" checkout -q --orphan renders
