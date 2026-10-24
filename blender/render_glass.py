@@ -1260,81 +1260,16 @@ def _ci_notice(title: str, message: str) -> None:
     print(f"::notice title={_ci_escape(title)}::{_ci_escape(message)}")
 
 
-def _read_obj_vertices(path: str) -> list:
-    """OBJ-Vertices in Dateireihenfolge lesen (x, y, z)."""
-    verts = []
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                if line.startswith("v "):
-                    parts = line.split()
-                    if len(parts) >= 4:
-                        try:
-                            verts.append((float(parts[1]), float(parts[2]),
-                                          float(parts[3])))
-                        except ValueError:
-                            continue
-    except OSError:
-        pass
-    return verts
-
-
 def emit_projection_notices(cam, imported_parts, manifest, base_dir: str,
                             res_x: int, res_y: int) -> None:
-    """Projiziert Teil- und Segment-Bounding-Boxen ins Pixelbild.
+    """Gibt eine ASCII-Silhouette und Bild-BBoxen der gerenderten Teile aus.
 
-    Teil-BBoxen kommen aus Blender selbst (obj.bound_box, Weltraum) - das
-    ist exakt die Geometrie, die gerendert wird. Segment-BBoxen werden aus
-    der OBJ-Datei gelesen (Vertex-Reihenfolge == Span-Indizes) und mit der
-    Import-Achsenkonvention (forward=-Z, up=Y: Blender=(x, z, y)) in den
-    Blender-Raum geholt. Die Konsistenz beider Quellen wird pro Teil
-    mitgeteilt, damit eine falsche Konvention sofort auffaellt.
+    Grundlage ist die ECHTE Blender-Geometrie (obj.data.vertices *
+    matrix_world) - exakt das, was gerendert wird. Macht Pose, Montage und
+    Accessory-Platzierung ohne Bildbetrachtung lesbar.
     """
     if os.environ.get("GITHUB_ACTIONS") != "true":
         return
-    spans_map = manifest.get("segment_spans") or {}
-
-    def _proj_rect(points_blender):
-        if not points_blender:
-            return None
-        proj = _world_to_view(cam, [(p[0], p[1], p[2]) for p in points_blender])
-        pxs = [int(round(p[0] * res_x)) for p in proj]
-        pys = [int(round((1.0 - p[1]) * res_y)) for p in proj]
-        return min(pxs), max(pxs), min(pys), max(pys)
-
-    proj_bits: List[str] = []
-    for obj, part in imported_parts:
-        name = str((part or {}).get("name") or obj.name)
-        mw = obj.matrix_world
-        world_corners = [tuple(mw @ Vector(c)) for c in obj.bound_box]
-        rect = _proj_rect(world_corners)
-        bits = []
-        if rect:
-            bits.append(f"ganzes Teil px x[{rect[0]}..{rect[1]}] y[{rect[2]}..{rect[3]}]")
-        spans = spans_map.get(name) or []
-        if spans:
-            obj_path = os.path.join(base_dir, str((part or {}).get("obj") or ""))
-            verts = _read_obj_vertices(obj_path)
-            for seg, v0, v1 in spans:
-                v0, v1 = int(v0), int(v1)
-                sub = verts[v0:v1] if verts else []
-                if not sub:
-                    bits.append(f"{seg}: keine Vertexdaten")
-                    continue
-                # Achsenkonvention des Imports: Blender = (x, z, y)
-                bl = [(p[0], p[2], p[1]) for p in sub]
-                r = _proj_rect(bl)
-                if r:
-                    bits.append(f"{seg} ({v1 - v0} v) px x[{r[0]}..{r[1]}] "
-                                f"y[{r[2]}..{r[3]}]")
-        if bits:
-            # EIN Sammel-Notice statt je Teil: GitHub beschneidet die
-            # Annotation-Liste pro Check-Run (~20) - Einzel-Notices
-            # verdraengten die Diagnose-Notices 4b/4c.
-            proj_bits.append(f"{name}: " + " | ".join(bits))
-    for _i in range(0, len(proj_bits), 4):
-        _ci_notice(f"Projektion Teile ({_i // 4 + 1})",
-                   " || ".join(proj_bits[_i:_i + 4]))
 
     # ASCII-Silhouette der posierten Geometrie aus Render-Sicht: macht die
     # Form (Pose, Montage, Accessory) ohne Bildbetrachtung lesbar. Nutzt die
@@ -1369,32 +1304,6 @@ def emit_projection_notices(cam, imported_parts, manifest, base_dir: str,
         _ci_notice("Silhouette Teile", ", ".join(part_chars)
                    + " | Zeichen: # nur Koerper, H Kopf, A Accessory,"
                    " X Kopf+Acc, h Kopf+Koerper, a Acc+Koerper, @ alles")
-        # Welt-BBox je Objekt (data.vertices * matrix_world) vs. rohe
-        # OBJ-Datei-Werte (Import-Swap x,z,y) - deckt Zuordnungs-/Transform-
-        # Fehler sofort auf.
-        box_bits: List[str] = []
-        for obj, part in imported_parts:
-            name = str((part or {}).get("name") or obj.name)
-            wpts = [tuple(obj.matrix_world @ v.co) for v in obj.data.vertices]
-            if not wpts:
-                box_bits.append(f"{name}: leer")
-                continue
-            lo = [min(p[i] for p in wpts) for i in range(3)]
-            hi = [max(p[i] for p in wpts) for i in range(3)]
-            obj_path = os.path.join(base_dir, str((part or {}).get("obj") or ""))
-            raw = _read_obj_vertices(obj_path)
-            rtxt = ""
-            if raw:
-                rlo = [min(p[i] for p in raw) for i in range(3)]
-                rhi = [max(p[i] for p in raw) for i in range(3)]
-                rtxt = (f" objSwap=x[{rlo[0]:.2f}..{rhi[0]:.2f}]"
-                        f"y[{rlo[2]:.2f}..{rhi[2]:.2f}]z[{rlo[1]:.2f}..{rhi[1]:.2f}]")
-            box_bits.append(
-                f"{name}: welt=x[{lo[0]:.2f}..{hi[0]:.2f}]"
-                f"y[{lo[1]:.2f}..{hi[1]:.2f}]z[{lo[2]:.2f}..{hi[2]:.2f}]{rtxt}")
-        for _i in range(0, len(box_bits), 3):
-            _ci_notice(f"Silhouette BBox ({_i // 3 + 1})",
-                       " || ".join(box_bits[_i:_i + 3]))
         # Bild-BBox je Teil (u/v-Bereich 0..1, v=1 oben) - eindeutig lesbar.
         img_bits: List[str] = []
         for obj, part in imported_parts:

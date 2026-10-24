@@ -1048,6 +1048,49 @@ def assemble_r15_rig(
     )
 
 
+def _mat3_from_forward_up(
+    forward: Tuple[float, float, float],
+    up: Tuple[float, float, float],
+) -> Matrix3:
+    """Roblox CFrame.new(pos, lookAt, up)-Konvention: -Z zeigt nach vorn.
+
+    Legacy-Hüte (Klasse Hat) mounten über AttachmentForward/AttachmentUp.
+    Default (0,0,-1)/(0,1,0) ergibt die Identitaet - die klassische
+    unverdrehte Hut-Ausrichtung.
+    """
+    import math as _math
+
+    def _norm(v: Tuple[float, float, float]) -> Tuple[float, float, float]:
+        n = _math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) or 1.0
+        return (v[0] / n, v[1] / n, v[2] / n)
+
+    z = _norm((-forward[0], -forward[1], -forward[2]))  # -Z = Blickrichtung
+    up_n = _norm(up)
+    # X = up x z (rechts), danach Y = z x x fuer ein echtes Orthogonalsystem.
+    x = (up_n[1] * z[2] - up_n[2] * z[1],
+         up_n[2] * z[0] - up_n[0] * z[2],
+         up_n[0] * z[1] - up_n[1] * z[0])
+    x = _norm(x)
+    y = (z[1] * x[2] - z[2] * x[1],
+         z[2] * x[0] - z[0] * x[2],
+         z[0] * x[1] - z[1] * x[0])
+    y = _norm(y)
+    # Matrix3-Konvention hier: Zeilen; die Achsen stehen in den SPALTEN
+    # (wie bei Roblox CFrame-Rotationen aus dem RBXM).
+    return (
+        (x[0], y[0], z[0]),
+        (x[1], y[1], z[1]),
+        (x[2], y[2], z[2]),
+    )
+
+
+# Legacy-Hut-Arten: am Kopf befestigt -> klassischer Ankerpunkt Kopf-Top.
+_LEGACY_HEAD_ANCHORS: Dict[int, str] = {
+    8: "HatAttachment",     # Hut
+    41: "HairAttachment",   # Haare
+}
+
+
 def weld_accessory(
     mp: Dict[str, Any],
     rig: RiggedAvatar,
@@ -1059,6 +1102,27 @@ def weld_accessory(
         if cand in rig.world_attachments:
             matched_name = cand
             break
+
+    legacy = False
+    hat_mount = None
+    if matched_name is None:
+        # Legacy-Hut (Klasse Hat, Accessoire-Aera davor): das Handle hat
+        # KEIN Attachment-Kind. Roblox schweisst solche Hüte klassisch mit
+        # C0 = CFrame.new(0, headSize.Y/2, 0) am Kopf und C1 aus den
+        # Hat-Properties AttachmentPos/AttachmentForward/AttachmentUp.
+        # Das entspricht einem virtuellen Attachment-Paar:
+        #   Kopf:  HatAttachment (= Kopf-Mitte + 0,5 * Kopfhoehe)
+        #   Hut:   AttachmentPos/Forward/Up des Hat-Objekts
+        # Kein Zentrieren, keine Zielgrossen-Streckung - die Mesh-Vertices
+        # sind relativ zum Anbringpunkt authoriert.
+        hat_mount = mp.get("hat_mount")
+        anchor_name = _LEGACY_HEAD_ANCHORS.get(int(mp.get("type_id") or 0))
+        is_legacy_handle = mp.get("rbxm_class") in (
+            "SpecialMesh", "BlockMesh", "CylinderMesh", "FileMesh", "Part")
+        if (anchor_name is not None and is_legacy_handle
+                and anchor_name in rig.world_attachments):
+            matched_name = anchor_name
+            legacy = True
     if matched_name is None:
         return None
 
@@ -1068,7 +1132,15 @@ def weld_accessory(
         sh = rig.scales_body[1]
         scale_vec = (sh, sh, sh)
     local_mesh, local_atts, _ = _scale_part_local(mp, scale_vec)
-    p_acc, r_acc = local_atts[matched_name]
+    if legacy:
+        hm = hat_mount or {}
+        p_acc = hm.get("pos") or (0.0, 0.0, 0.0)
+        r_acc = _mat3_from_forward_up(
+            hm.get("forward") or (0.0, 0.0, -1.0),
+            hm.get("up") or (0.0, 1.0, 0.0),
+        )
+    else:
+        p_acc, r_acc = local_atts[matched_name]
     p_body, r_body = rig.world_attachments[matched_name]
 
     r_handle = _mat3_mul(r_body, _mat3_transpose(r_acc))
@@ -1081,8 +1153,15 @@ def weld_accessory(
     placed = local_mesh.rotate(r_handle).transform(1.0, p_handle)
     layout = ACCESSORY_LAYOUT.get(int(mp.get("type_id") or 0), {"label": "Accessoire"})
     sz = placed.size()
+    if legacy:
+        mode = ("Legacy-Weld (Klasse Hat, keine Attachments: Anker "
+                f"'{matched_name}' + AttachmentPos"
+                + ("" if hat_mount else " (Standard 0,0,0)")
+                + ", Originalgroesse erhalten)")
+    else:
+        mode = f"exakt per '{matched_name}' verschweisst"
     note = (
-        f"{layout['label']}: exakt per '{matched_name}' verschweisst "
+        f"{layout['label']}: {mode} "
         f"({_de(sz[0], 2)}x{_de(sz[1], 2)}x{_de(sz[2], 2)} Studs)"
     )
     return placed, note
