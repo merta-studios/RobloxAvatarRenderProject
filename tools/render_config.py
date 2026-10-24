@@ -71,6 +71,19 @@ MAX_EMOTE_ZEIT = 600.0
 # auf "emote:<id>", damit build_avatar es eindeutig erkennt.
 _EMOTE_PREFIX_RE = re.compile(r"^\s*emote\s*[:=]?\s*(\d{1,16})\s*$", re.IGNORECASE)
 _EMOTE_URL_RE = re.compile(r"roblox\.com/(?:catalog|library)/(\d+)", re.IGNORECASE)
+# Ausgeruestete Pose des Accounts (Pose-/Idle-Animation bzw. Emote):
+#   "ausgeruestet", "equipped", "auto", "Profil", "getragen" ...
+#   optional mit Quelle: "ausgeruestet:emote" / "ausgeruestet:idle".
+_EQUIPPED_RE = re.compile(
+    r"^\s*(?:ausger(?:ue|ü)stet(?:e)?|equipped|auto(?:matisch)?|profil(?:pose)?"
+    r"|getragen(?:e)?)\s*(?:[:=]\s*(?P<source>\w+))?\s*$",
+    re.IGNORECASE)
+_EQUIPPED_SOURCES = {
+    "auto": "auto", "beides": "auto", "all": "auto",
+    "idle": "idle", "pose": "idle", "animation": "idle", "anim": "idle",
+    "stand": "idle", "standpose": "idle",
+    "emote": "emote", "emotes": "emote", "tanz": "emote", "dance": "emote",
+}
 
 
 class ConfigError(ValueError):
@@ -237,6 +250,9 @@ def normalize_pose_value(pose: str) -> str:
     """Prueft/normalisiert die ``pose``-Angabe, inklusive Emote-Referenzen.
 
     * ``"None"``/leer -> ``"None"`` (Stand-Pose)
+    * ``"ausgeruestet"`` (auch ``equipped``/``auto``/``Profil``) ->
+      ``"ausgeruestet"`` = die Pose laden, die der Account traegt; mit
+      Quelle ``"ausgeruestet:emote"`` bzw. ``"ausgeruestet:idle"``
     * ``"emote:123"``, ``"Emote = 123"``, ``"123"``,
       ``"https://www.roblox.com/catalog/123/Tilt"`` -> ``"emote:123"``
     * alles andere bleibt unveraendert (Name einer Pose aus Posen.toml)
@@ -247,6 +263,17 @@ def normalize_pose_value(pose: str) -> str:
     text = (pose or "").strip()
     if not text or text.lower() == "none":
         return "None"
+
+    equipped = _EQUIPPED_RE.match(text)
+    if equipped:
+        source = (equipped.group("source") or "auto").strip().lower()
+        if source and source not in _EQUIPPED_SOURCES:
+            raise ConfigError(
+                f"'pose' = {text!r}: unbekannte Quelle fuer die ausgeruestete "
+                "Pose. Erlaubt sind 'ausgeruestet', 'ausgeruestet:emote' und "
+                "'ausgeruestet:idle'.")
+        normalisiert = _EQUIPPED_SOURCES.get(source, "auto")
+        return "ausgeruestet" if normalisiert == "auto" else f"ausgeruestet:{normalisiert}"
 
     match = _EMOTE_PREFIX_RE.match(text)
     if match:

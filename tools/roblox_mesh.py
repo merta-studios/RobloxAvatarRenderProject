@@ -61,6 +61,57 @@ class SkinningData:
     )
 
 
+def _scale_skinning(
+    skin: Optional[SkinningData],
+    sx: float,
+    sy: float,
+    sz: float,
+    tx: float,
+    ty: float,
+    tz: float,
+) -> Optional[SkinningData]:
+    """Transformiert die Bind-Posen der Bones wie die Mesh-Vertices."""
+    if skin is None:
+        return None
+    bones: List[SkinBone] = []
+    for bone in skin.bones:
+        px, py, pz = bone.position
+        axes = []
+        for axis in bone.rotation:
+            ax, ay, az = axis
+            scaled = (ax * sx, ay * sy, az * sz)
+            length = (scaled[0] ** 2 + scaled[1] ** 2 + scaled[2] ** 2) ** 0.5
+            axes.append(
+                (1.0, 0.0, 0.0) if length < 1e-9
+                else (scaled[0] / length, scaled[1] / length, scaled[2] / length)
+            )
+        bones.append(SkinBone(
+            name=bone.name,
+            parent=bone.parent,
+            position=(px * sx + tx, py * sy + ty, pz * sz + tz),
+            rotation=(axes[0], axes[1], axes[2]),
+        ))
+    return SkinningData(bones=bones, influences=skin.influences)
+
+
+def _rotate_skinning(
+    skin: Optional[SkinningData],
+    apply,
+) -> Optional[SkinningData]:
+    """Dreht die Bind-Posen der Bones mit derselben Matrix wie das Mesh."""
+    if skin is None:
+        return None
+    bones: List[SkinBone] = []
+    for bone in skin.bones:
+        bones.append(SkinBone(
+            name=bone.name,
+            parent=bone.parent,
+            position=apply(bone.position),
+            rotation=tuple(apply(axis) for axis in bone.rotation),
+        ))
+    return SkinningData(bones=bones, influences=skin.influences)
+
+
 @dataclass
 class MeshData:
     """Einfache Dreiecks-Geometrie in Roblox-Koordinaten (Y-up)."""
@@ -104,7 +155,12 @@ class MeshData:
         scale: Sequence[float] | float = 1.0,
         translate: Sequence[float] = (0.0, 0.0, 0.0),
     ) -> "MeshData":
-        """Skaliert (uniform oder pro Achse) und verschiebt das Mesh."""
+        """Skaliert (uniform oder pro Achse) und verschiebt das Mesh.
+
+        Skin-Daten (Layered Clothing) werden mit transformiert - sonst
+        verliert ein per ``sanity_check`` nachskaliertes Teil seine
+        Gewichte und wird starr statt weich an das Rig gelegt.
+        """
         if isinstance(scale, (int, float)):
             sx = sy = sz = float(scale)
         else:
@@ -117,6 +173,7 @@ class MeshData:
             faces=list(self.faces),
             colors=list(self.colors) if self.colors else None,
             source_version=self.source_version,
+            skinning=_scale_skinning(self.skinning, sx, sy, sz, tx, ty, tz),
         )
 
     def rotate(self, matrix) -> "MeshData":
@@ -148,6 +205,7 @@ class MeshData:
             faces=list(self.faces),
             colors=list(self.colors) if self.colors else None,
             source_version=self.source_version,
+            skinning=_rotate_skinning(self.skinning, apply),
         )
 
     def flip_v(self) -> "MeshData":

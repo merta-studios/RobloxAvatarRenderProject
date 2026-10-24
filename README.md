@@ -78,7 +78,7 @@ Ergebnis im Build-Ordner: `manifest.json`, `parts/*.obj`, `textures/*`,
 | --- | --- |
 | `username` | Roblox-Username (früher `username.txt`) |
 | `drehung_grad` | Seitliche Drehung `-90 … 90`; `0` = frontal, `90` = rechte Seite |
-| `pose` | `None`, ein Name aus `Posen.toml` **oder ein Emote**: `emote:<Asset-ID>` (z. B. `emote:3576893107` – die Zahl aus der Katalog-URL; reine ID oder Katalog-URL gehen auch) |
+| `pose` | `None`, ein Name aus `Posen.toml`, ein Emote (`emote:<Asset-ID>`, z. B. `emote:3576893107`) **oder** die vom Account getragene Pose: `"ausgeruestet"` (Aliase `equipped`, `auto`, `getragen`; auch `"ausgerüstet"`), eingeschränkt auf `"ausgeruestet:emote"` bzw. `"ausgeruestet:idle"` |
 | `emote_zeit` | `-1` (Standard) = automatisch der Frame aus dem Katalog-Vorschaubild (ThumbnailTime bzw. mittlerer benannter bzw. generierter Keyframe); `>= 0` = expliziter Zeitpunkt in Sekunden |
 | `emote_datei` | leer = Emote über die Asset-ID laden; sonst Pfad zu einer lokalen `.rbxm`/`.rbxmx`-Emote-Datei |
 | *(Bildausschnitt)* | Steht nicht mehr hier – jede Pose in `Posen.toml` definiert selbst, was sichtbar ist (`sichtbar_oben_prozent` / `sichtbar_unten_prozent`, Kamera-Abstand, Avatar-Höhe) |
@@ -95,6 +95,15 @@ Gelenk-Pivots aus den RigAttachments; bei echten R15-Rigs wird jedes Segment
 **starr** um sein Gelenk transformiert (Motor6D-Semantik wie in Roblox –
 `part1 = part0 * C0 * Transform * C1⁻¹`), nur die Fallback-Quader ohne
 Attachment-Daten werden volumen-erhaltend per Quaternionen überblendet.
+
+**Ausgerüstete Pose** (`pose = "ausgeruestet"`): Die Pipeline liest die
+Pose, die der Account gerade trägt, aus dem Avatar und wendet sie an – ohne
+Asset-ID im Config-File. Reihenfolge: `PoseAnimation` (56) → `IdleAnimation`
+(51) → ausgerüstete Emotes in Slot-Reihenfolge; die erste ladbare Variante
+gewinnt. `"ausgeruestet:emote"` / `"ausgeruestet:idle"` grenzen die Quellen
+ein, `emote_zeit` wählt den Frame. Welche Quelle genutzt wurde, steht im Log
+(`ausgeruestet: …`) und im Manifest unter `render.pose_details`. Ein lokaler
+Pfad in `emote_datei` hat Vorrang.
 
 **Emote-Posen** (`pose = "emote:<ID>"`): Die Pipeline lädt das Emote aus dem
 Roblox-Katalog und wendet exakt die Haltung an, die auch das

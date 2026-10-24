@@ -339,6 +339,31 @@ def _mat4_from(pos: Vec3, rot: Mat3) -> Mat4:
     )
 
 
+def _rotation_local(rotation: Sequence[float], offset: Sequence[float],
+                    pivot: Point, frame: Optional[Mat3]) -> Mat4:
+    """Drehung + Verschiebung eines Gelenks im *Gelenk-Frame*.
+
+    Handgeschriebene Posen (Posen.toml) drehten bisher um Weltachsen. Bei
+    Paketen mit gedrehten ``*RigAttachment``-Frames (z. B. A-Pose-Bundles)
+    liegt die Glied-Achse aber schief zur Weltachse - dann klappt der
+    Unterarm in eine voellig andere Richtung, obwohl um den richtigen Punkt
+    gedreht wird ("Drehpunkt verrutscht"). Roblox dreht immer im
+    Attachment-Frame (``C0``); hier wird das genauso gemacht, sobald ein Rig
+    vorhanden ist. Ohne Rig (``frame is None``) bleibt es exakt die alte
+    Weltachsen-Drehung.
+    """
+    if frame is None:
+        return _mat4_mul(_translation(offset),
+                         _mat4_mul(_translation(pivot),
+                                   _mat4_mul(_euler_matrix(rotation),
+                                             _translation((-pivot[0], -pivot[1], -pivot[2])))))
+    j = _mat4_from(pivot, frame)
+    inverse = _mat3_transpose(frame)
+    j_inv = _mat4_from(_mat3_vec(inverse, (-pivot[0], -pivot[1], -pivot[2])), inverse)
+    return _mat4_mul(_translation(offset),
+                     _mat4_mul(j, _mat4_mul(_euler_matrix(rotation), j_inv)))
+
+
 def _motor_local(motor: Tuple[Vec3, Mat3], pivot: Point,
                  frame: Optional[Mat3]) -> Mat4:
     """Motor6D-Transform -> lokale Welt-Transformation des Gelenks.
@@ -595,12 +620,29 @@ def load_poses(path: str) -> Dict[str, Dict[str, Any]]:
 # Gelenkpunkte
 # ---------------------------------------------------------------------------
 
+#: Kanonische R15-Proportionen (Roblox ``UnificationScale``), gemessen am
+#: echten Rig - als Anteil der jeweiligen Gliedlaenge. Damit sitzen die
+#: ersatzweise geschaetzten Drehpunkte dort, wo Roblox sie hat, statt grob
+#: in der Teilmitte ("Unterarm dreht um den falschen Punkt").
+SHOULDER_BELOW_TORSO_TOP = 0.237      # Studs bei 2 Studs hohem Torso
+ELBOW_FRACTION_OF_ARM = 0.419         # Schulter -> Ellbogen / (Schulter -> Armende)
+WRIST_FRACTION_OF_ARM = 0.856         # Schulter -> Handgelenk / (Schulter -> Armende)
+KNEE_FRACTION_OF_LEG = 0.411          # Huefte -> Knie / (Huefte -> Beinende)
+ANKLE_FRACTION_OF_LEG = 0.874         # Huefte -> Fussgelenk / (Huefte -> Beinende)
+
+
 def joints_from_parts(part_meshes: Dict[str, Any], metrics: Any) -> Dict[str, Point]:
     """Schaetzt die R15-Gelenke aus den tatsaechlichen Koerper-Meshes.
 
     Wird nur als Rueckfall benutzt; wenn das RBXM echte ``*RigAttachment``
     enthaelt, ueberschreibt ``build_avatar`` diese Werte mit den exakten
     Gelenkpositionen aus ``avatar_rig.assemble_r15_rig``.
+
+    Die Schaetzung haengt an den kanonischen R15-Proportionen und am
+    *Torso* (Schulter-/Hueftlinie), nicht an der Bounding-Box der Arme:
+    Pakete mit Schulterplatten oder langen Klauen haben eine ganz andere
+    Mesh-Ausdehnung, wodurch Schulter und Ellbogen frueher weit neben dem
+    echten Gelenk lagen.
     """
     def bbox(name: str):
         mesh = part_meshes.get(name)
@@ -630,6 +672,10 @@ def joints_from_parts(part_meshes: Dict[str, Any], metrics: Any) -> Dict[str, Po
         "Head": (0.0, neck_y, 0.0),
     }
 
+    # Torso-Referenz: Oberkante (Schulterlinie) und Unterkante (Hueftlinie).
+    torso_height = max(1e-3, torso_hi_y - torso_lo_y)
+    shoulder_y = torso_hi_y - SHOULDER_BELOW_TORSO_TOP * (torso_height / 2.0)
+
     for part_name, side in (("links_arm", "Left"), ("rechts_arm", "Right")):
         box = bbox(part_name)
         if box is None:
@@ -638,24 +684,32 @@ def joints_from_parts(part_meshes: Dict[str, Any], metrics: Any) -> Dict[str, Po
         length = max(1e-3, hi[1] - lo[1])
         # Schultergelenk liegt an der *inneren* Oberkante des Arms (Roblox:
         # ShoulderRigAttachment am Torso-Rand), nicht in der Armmitte -
-        # sonst bleibt beim Heben des Arms eine Luecke zum Torso.
-        cx = hi[0] if side == "Left" else lo[0]
+        # sonst bleibt beim Heben des Arms eine Luecke zum Torso. Die Hoehe
+        # kommt aus der Torso-Schulterlinie (kanonisch 0,237 Studs unter der
+        # Oberkante), nicht aus der Army-Oberkante: Schulterplatten/Klauen
+        # verschieben die Mesh-BBox sonst weit nach oben.
+        inner_x = hi[0] if side == "Left" else lo[0]
+        center_x = (lo[0] + hi[0]) / 2.0
         cz = (lo[2] + hi[2]) / 2.0
-        joints[f"{side}UpperArm"] = (cx, hi[1], cz)
-        joints[f"{side}LowerArm"] = (cx, hi[1] - 0.58 * length, cz)
-        joints[f"{side}Hand"] = (cx, hi[1] - 0.86 * length, cz)
+        shoulder = (inner_x, shoulder_y, cz)
+        arm_len = max(1e-3, shoulder_y - lo[1])
+        joints[f"{side}UpperArm"] = shoulder
+        joints[f"{side}LowerArm"] = (center_x, shoulder_y - ELBOW_FRACTION_OF_ARM * arm_len, cz)
+        joints[f"{side}Hand"] = (center_x, shoulder_y - WRIST_FRACTION_OF_ARM * arm_len, cz)
 
     for part_name, side in (("links_bein", "Left"), ("rechts_bein", "Right")):
         box = bbox(part_name)
         if box is None:
             continue
         lo, hi = box
-        length = max(1e-3, hi[1] - lo[1])
         cx = (lo[0] + hi[0]) / 2.0
         cz = (lo[2] + hi[2]) / 2.0
-        joints[f"{side}UpperLeg"] = (cx, hi[1], cz)
-        joints[f"{side}LowerLeg"] = (cx, hi[1] - 0.50 * length, cz)
-        joints[f"{side}Foot"] = (cx, hi[1] - 0.90 * length, cz)
+        # Huefte sitzt an der Torso-Unterkante, nicht an der Bein-Oberkante.
+        hip_y = torso_lo_y if hi[1] >= torso_lo_y - 0.25 else hi[1]
+        leg_len = max(1e-3, hip_y - lo[1])
+        joints[f"{side}UpperLeg"] = (cx, hip_y, cz)
+        joints[f"{side}LowerLeg"] = (cx, hip_y - KNEE_FRACTION_OF_LEG * leg_len, cz)
+        joints[f"{side}Foot"] = (cx, hip_y - ANKLE_FRACTION_OF_LEG * leg_len, cz)
 
     return joints
 
@@ -844,13 +898,13 @@ class PoseContext:
                     frame = self.rig.joint_frames.get(BONE_JOINT[bone])
                 local = _motor_local(motor, pivot, frame)
             else:
-                # Drehung exakt um den Gelenk-Pivot; das Positions-Delta wirkt
-                # im Eltern-Raum (hoch/vor/aussen), verschiebt also den Pivot
+                # Drehung exakt um den Gelenk-Pivot (im Gelenk-Frame, sobald
+                # das Rig Attachments liefert); das Positions-Delta wirkt im
+                # Eltern-Raum (hoch/vor/aussen), verschiebt also den Pivot
                 # selbst - Kinder und Accessoires folgen nahtlos.
-                local = _mat4_mul(_translation(offset),
-                                  _mat4_mul(_translation(pivot),
-                                            _mat4_mul(_euler_matrix(rotation),
-                                                      _translation((-pivot[0], -pivot[1], -pivot[2])))))
+                frame = (self.rig.joint_frames.get(BONE_JOINT[bone])
+                         if self.rig is not None else None)
+                local = _rotation_local(rotation, offset, pivot, frame)
             parent = BONE_PARENT[bone]
             world = _mat4_mul(self.transforms[parent], local) if parent else local
             if parent is None and any(abs(v) > 1e-9 for v in self.avatar_offset):
