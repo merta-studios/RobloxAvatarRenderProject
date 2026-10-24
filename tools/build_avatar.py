@@ -1603,6 +1603,17 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             "joint_spans": {k: round(float(v), 4) for k, v in
                             getattr(rig_avatar, "joint_spans", {}).items()},
             "hinweise": list(getattr(rig_avatar, "notes", [])),
+            # Gelenkpositionen (Bind-Pose) und Segment-BBoxen - damit laesst
+            # sich ein verschobenes Teil ohne Blender nachvollziehen.
+            "gelenke": {
+                k: [round(c, 3) for c in v]
+                for k, v in (getattr(rig_avatar, "joint_positions", {}) or {}).items()
+            },
+            "segmente": {
+                seg: {"bbox_min": [round(c, 3) for c in mesh.bbox()[0]],
+                      "bbox_max": [round(c, 3) for c in mesh.bbox()[1]]}
+                for seg, mesh in (getattr(rig_avatar, "placed_segments", {}) or {}).items()
+            },
         } if rig_avatar is not None else {},
         "stats": {
             "parts": len(parts),
