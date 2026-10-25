@@ -45,15 +45,16 @@ ACCESSORY_LAYOUT: Dict[int, Dict[str, Any]] = {
 
 
 #: Kanonische R15-Proportionen (Roblox "Rig and Attachments"), bezogen auf die
-#: Torso-Hoehe. Konvertierte Bundles liefern Mesh-Groessen und Attachments, die
-#: zueinander nicht passen (z. B. ein Korblox-Bein mit 0,86 statt 1,03 Studs
-#: Hoehe, ein Fuss als 0,26-Wuerfel) - dann steht der Avatar auf einem Bein in
-#: der Luft. Die Extremitaet wird deshalb als Ganzes auf ihre kanonische Laenge
-#: gebracht, und zwar mit *einem* Faktor fuer alle drei Achsen: die Silhouette
-#: bleibt erhalten, nichts wird plattgedrueckt.
+#: Torso-Hoehe. Sie dienen (a) dazu, fehlende Koerperteile als R15-Quader zu
+#: erzeugen, und (b) als Sicherheitsnetz fuer inkonsistente Bundles. Roblox
+#: selbst skaliert beim Avatar-Aufbau nichts: Segmente behalten ihre
+#: Mesh-Groesse, Gelenke sitzen auf den Attachments. Skaliert wird hier nur,
+#: wenn sonst etwas sichtbar kaputt waere - und dann die *ganze* Extremitaet
+#: mit EINEM Faktor auf allen drei Achsen (Silhouette bleibt, nichts wird
+#: plattgedrueckt).
 R15_ARM_LENGTH_PER_TORSO_HEIGHT = 0.869   # Schulter -> Handende
 R15_WRIST_FRACTION_OF_ARM = 0.856         # Schulter -> Handgelenk
-R15_LEG_LENGTH_PER_TORSO_HEIGHT = 1.0
+#: Kanonische Beinlaenge (Huefte->Sohle) in Torso-Hoehen - nur fuer Platzhalter.
 #: Huefte -> Fussgelenk (kanonisch 1,604 Studs bei 2,0 Studs Torso).
 R15_ANKLE_FRACTION_OF_LEG = 0.80
 #: Huefte -> Sohle inklusive Fuss (kanonisch 2,02 Studs bei 2,0 Torso).
@@ -63,9 +64,9 @@ R15_LIMB_SCALE_MAX = 1.60
 #: Darunter bleibt das Bundle exakt so, wie es ist (Authentizitaet vor
 #: Normierung) - erst bei groesserer Abweichung wird skaliert.
 R15_LIMB_TOLERANCE = 0.15
-#: Beine werden eng auf die kanonische Laenge gebracht - nur so stehen beide
-#: Fuesse auf derselben Hoehe (Arme duerfen dagegen lang bleiben).
-R15_LEG_TOLERANCE = 0.05
+#: Ab dieser Abweichung werden linkes und rechtes Bein angeglichen (sonst
+#: steht der Avatar auf einem Bein in der Luft).
+R15_LEG_SYMMETRY_TOLERANCE = 1.05
 
 
 def _de(value: float, nd: int = 2) -> str:
@@ -1122,6 +1123,8 @@ def assemble_r15_rig(
     #    und nach unten geschoben - deshalb gibt es keine Skalierung mehr.
     #    Nur fehlende bzw. echte Platzhalter-Attachments (Punkt im Nichts
     #    oder direkt auf dem Elterngelenk) werden aus der Geometrie ersetzt.
+    chain_spans: Dict[str, Dict[str, Any]] = {}
+
     def _mount_chain(
         part_name: str,
         chain: List[Tuple[str, str]],
@@ -1183,28 +1186,19 @@ def assemble_r15_rig(
 
             # --- Faktor fuer die gesamte Extremitaet -------------------------
             span = _dist3(root, distal[0])
-            factor = 1.0
-            if span > 1e-3 and canonical_len > 1e-3:
-                ideal = canonical_len / span
-                # "immer": Beine muessen den Boden erreichen, sonst steht der
-                # Avatar auf einem Bein in der Luft (Korblox-Bein: 1,24 statt
-                # 1,75 Studs).
-                # "nur_verlaengern": Arme werden nur gestreckt, nie gestaucht -
-                # ein absichtlich langer Bundle-Arm (Korblox Deathspeaker)
-                # bleibt lang, ein zu kurzer Arm waechst auf Huefthoehe.
-                darf = scale_mode == "immer" or ideal > 1.0
-                tolerance = (R15_LEG_TOLERANCE if scale_mode == "immer"
-                             else R15_LIMB_TOLERANCE)
-                if darf and abs(ideal - 1.0) > tolerance:
-                    factor = max(R15_LIMB_SCALE_MIN,
-                                 min(R15_LIMB_SCALE_MAX, ideal))
-            if abs(factor - 1.0) > 1e-3:
+
+            def _rescale(factor: float, grund: str) -> None:
+                """Skaliert die schon platzierte Extremitaet um ihr Wurzelgelenk.
+
+                Ein Faktor fuer *alle drei Achsen* - die Silhouette bleibt,
+                nur die Groesse aendert sich (kein Stauchen einzelner
+                Segmente, keine Verzerrung).
+                """
                 notes.append(
                     f"Extremitaet '{part_name}': Gelenk-Kette {_de(span)} Studs "
-                    f"auf {_de(canonical_len)} Studs gebracht (Faktor "
+                    f"auf {_de(span * factor)} Studs gebracht (Faktor "
                     f"{_de(factor)} gleichmaessig auf allen Achsen - keine "
-                    "Verzerrung).")
-                # --- Durchgang 2: um das Wurzelgelenk skalieren --------------
+                    f"Verzerrung; {grund}).")
                 for seg_name, (mesh_s, atts_s, origin_s, rot_s,
                                vis) in placement.items():
                     scaled = tuple(root[i] + factor * (origin_s[i] - root[i])
@@ -1213,13 +1207,33 @@ def assemble_r15_rig(
                                      vis, scale=factor)
                 for seg_name, (jpos, jframe) in chain_joints.items():
                     joint_pos[seg_name] = tuple(
-                        root[i] + factor * (jpos[i] - root[i]) for i in range(3))
+                        root[i] + factor * (jpos[i] - root[i])
+                        for i in range(3))
                     joint_frames[seg_name] = jframe
+
+            factor = 1.0
+            if span > 1e-3 and canonical_len > 1e-3:
+                ideal = canonical_len / span
+                # Arme werden nur gestreckt, nie gestaucht: ein absichtlich
+                # langer Bundle-Arm (Korblox Deathspeaker) bleibt lang, ein
+                # zu kurzer waechst auf Huefthoehe. Beine werden gar nicht
+                # auf eine Normlaenge gebracht - sie werden weiter unten
+                # symmetrisch angeglichen (linkes/rechtes Bein gleich lang).
+                if scale_mode == "nur_verlaengern" and ideal > 1.0 \
+                        and abs(ideal - 1.0) > R15_LIMB_TOLERANCE:
+                    factor = max(R15_LIMB_SCALE_MIN,
+                                 min(R15_LIMB_SCALE_MAX, ideal))
+            if abs(factor - 1.0) > 1e-3:
+                _rescale(factor, "kanonische Armlaenge")
+
             named = [(n, placed_seg_mesh[n]) for n in names
                      if n in placed_seg_mesh and placed_seg_vis[n]]
             merged, spans = _merge_with_spans(named)
             body_meshes[part_name] = merged
             segment_spans[part_name] = spans
+            chain_spans[part_name] = {"span": span * factor,
+                                      "rescale": _rescale,
+                                      "factor": factor}
             return
         # --- Kein einziges Segment vorhanden --------------------------------
         # Fruehere Fassung baute *einen* Klotz fuer die ganze Extremitaet -
@@ -1351,13 +1365,33 @@ def assemble_r15_rig(
              (f_name, f"{side}AnkleRigAttachment")],
             hip_att,
             None,
-            # Beine muessen den Boden erreichen: Platzhalter laufen von der
-            # Huefte bis zur Sohle (Huefthoehe = Beinlaenge).
+            # Nur fuer die Platzhalter-Erzeugung: Huefte bis Sohle.
             R15_ANKLE_FRACTION_OF_LEG * torso_h,
             R15_SOLE_FRACTION_OF_LEG * torso_h,
-            "immer",
+            "nie",
             "leg",
             sign)
+
+    # 3b) Beine symmetrisch angleichen. Roblox skaliert beim Avatar-Aufbau
+    #     nichts: kommen beide Beine aus demselben Paket, sind sie gleich lang
+    #     und bleiben unangetastet (auch wenn ein "Woman"-Bein laenger ist als
+    #     die R15-Norm). Weicht ein Bein vom anderen ab (konvertierte Bundles
+    #     wie Korblox: 1,24 vs. 1,75 Studs), wuerde der Avatar auf einem Bein
+    #     in der Luft stehen - dann wird das kuerzere gleichmaessig auf die
+    #     Laenge des laengeren gebracht.
+    beine = [("links_bein", "rechts_bein"), ("rechts_bein", "links_bein")]
+    for kurz, lang in beine:
+        info_kurz = chain_spans.get(kurz)
+        info_lang = chain_spans.get(lang)
+        if not info_kurz or not info_lang:
+            continue
+        if info_kurz["span"] < 1e-3 or info_lang["span"] < 1e-3:
+            continue
+        verhaeltnis = info_lang["span"] / info_kurz["span"]
+        if verhaeltnis <= R15_LEG_SYMMETRY_TOLERANCE:
+            continue
+        faktor = max(R15_LIMB_SCALE_MIN, min(R15_LIMB_SCALE_MAX, verhaeltnis))
+        info_kurz["rescale"](faktor, "Angleich an das andere Bein")
 
     # 4) Kopf (NeckRigAttachment) + dezenter Halskern
     neck_att = world_atts.get("NeckRigAttachment", ((0.0, torso_mesh.bbox()[1][1], 0.0), IDENTITY_MAT3))

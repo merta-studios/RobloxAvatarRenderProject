@@ -500,12 +500,12 @@ def test_grosse_bundles_werden_nicht_gestaucht():
 # 8) Inkonsistente Bundles: ein Faktor pro Extremitaet, Fuesse auf dem Boden
 # ---------------------------------------------------------------------------
 
-def test_kurzes_bein_wird_gleichmaessig_auf_kanonische_laenge_gebracht():
+def test_kurzes_bein_wird_an_das_andere_angeglichen():
     """Korblox-Bein (real): Huefte->Knie 0,86, Knie->Fussgelenk 0,60 - zusammen
-    1,24 statt der kanonischen 1,75 Studs. Vorher stand der Avatar auf einem
-    Bein in der Luft (rechter Fuss 0,6 Studs ueber dem Boden). Die Extremitaet
-    wird deshalb als Ganzes skaliert - mit *einem* Faktor auf allen Achsen,
-    damit das Bein nicht plattgedrueckt wird."""
+    deutlich kuerzer als das linke Bein. Vorher stand der Avatar auf einem Bein
+    in der Luft. Weil Roblox selbst nie skaliert, wird nur *angeglichen*: das
+    kuerzere Bein bekommt die Laenge des laengeren - mit einem Faktor auf allen
+    Achsen, damit nichts plattgedrueckt wird."""
     segs = {
         "torso": _torso(),
         "links_bein": [
@@ -542,21 +542,56 @@ def test_kurzes_bein_wird_gleichmaessig_auf_kanonische_laenge_gebracht():
                  rig.joint_positions["LeftFoot"])
     right = _dist(rig.joint_positions["RightUpperLeg"],
                   rig.joint_positions["RightFoot"])
-    # Beide Beine sind gleich lang (kein Bein in der Luft) - beide landen auf
-    # der kanonischen Huefte-Fussgelenk-Laenge.
-    canonical = avatar_rig.R15_ANKLE_FRACTION_OF_LEG * 2.0  # Torso 1,6 + 0,4
-    assert right == pytest.approx(canonical, rel=0.02)
-    assert left == pytest.approx(canonical, rel=0.02)
-    # Und zwar ohne Verzerrung: Hoehe/Breite des Oberschenkels bleibt wie
-    # authored (0,8622/0,3142) - gestaucht wurde nichts.
-    arm_like = rig.body_meshes["rechts_bein"]
+    # Beide Beine sind gleich lang - kein Bein in der Luft.
+    assert right == pytest.approx(left, rel=0.02)
+    # Und zwar ohne Verzerrung: Hoehe/Breite des rechten Oberschenkels bleibt
+    # wie authored (0,8622/0,3142) - gestaucht wurde nichts.
+    bein = rig.body_meshes["rechts_bein"]
     spans = {seg: (a, b) for seg, a, b in rig.segment_spans["rechts_bein"]}
     s0, e0 = spans["RightUpperLeg"]
-    ys = [arm_like.positions[i][1] for i in range(s0, e0)]
-    xs = [arm_like.positions[i][0] for i in range(s0, e0)]
+    ys = [bein.positions[i][1] for i in range(s0, e0)]
+    xs = [bein.positions[i][0] for i in range(s0, e0)]
     assert (max(ys) - min(ys)) / (max(xs) - min(xs)) == pytest.approx(
         0.8622 / 0.3142, rel=0.02)
     assert any("gleichmaessig auf allen Achsen" in n for n in rig.notes)
+
+
+def test_gleich_lange_beine_bleiben_unskaliert():
+    """Beine aus demselben Koerperpaket (z. B. "Woman") sind von Haus aus
+    laenger als die R15-Norm - Roblox rendert sie trotzdem so. Es wird nur
+    angeglichen, nie auf eine Normlaenge gestaucht."""
+    segs = {
+        "torso": _torso(),
+        "links_bein": [
+            _seg("LeftUpperLeg", (0.8153, 1.0267, 0.8159), {
+                "LeftHipRigAttachment": _att((-0.0529, 0.316, 0.0169)),
+                "LeftKneeRigAttachment": _att((-0.0529, -0.506, 0.0169)),
+            }),
+            _seg("LeftLowerLeg", (0.8301, 1.0376, 0.9252), {
+                "LeftKneeRigAttachment": _att((-0.0169, 0.2896, -0.0499)),
+                "LeftAnkleRigAttachment": _att((-0.0169, -0.6364, -0.0499)),
+            }),
+        ],
+        "rechts_bein": [
+            _seg("RightUpperLeg", (0.8153, 1.0267, 0.8159), {
+                "RightHipRigAttachment": _att((0.0529, 0.316, 0.0169)),
+                "RightKneeRigAttachment": _att((0.0529, -0.506, 0.0169)),
+            }),
+            _seg("RightLowerLeg", (0.8301, 1.0376, 0.9252), {
+                "RightKneeRigAttachment": _att((0.0169, 0.2896, -0.0499)),
+                "RightAnkleRigAttachment": _att((0.0169, -0.6364, -0.0499)),
+            }),
+        ],
+    }
+    rig = _assemble(segs)
+    bein = rig.body_meshes["links_bein"]
+    spans = {seg: (a, b) for seg, a, b in rig.segment_spans["links_bein"]}
+    s0, e0 = spans["LeftUpperLeg"]
+    ys = [bein.positions[i][1] for i in range(s0, e0)]
+    # Oberschenkel behaelt exakt seine authored Hoehe (1,0267 Studs).
+    assert max(ys) - min(ys) == pytest.approx(1.0267, abs=1e-3)
+    # Und es wurde nichts nachskaliert.
+    assert not any("Faktor" in n for n in rig.notes)
 
 
 def test_langer_arm_wird_nicht_gestaucht():
