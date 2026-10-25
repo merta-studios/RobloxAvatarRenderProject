@@ -641,52 +641,78 @@ def _arm_segmente():
 def test_zu_tiefe_schulter_wird_auf_die_schulterlinie_gesetzt():
     """Bug: "Schultern sind viel zu weit nach unten gerutscht". Manche Bundles
     tragen ein LeftShoulderRigAttachment weit unten im Torso - dann haengen die
-    Arme mitten am Bauch. Marker ausserhalb des R15-Bandes (tiefer als 55 % der
-    Torso-Hoehe) werden auf die Schulterlinie (25 % unter der Oberkante)
-    gezogen."""
-    # Oberkante bei +0.8, Torso 2,0 hoch -> Marker bei -0.6 = 70 % darunter.
+    Arme mitten am Bauch. Die Oberkante des Oberarms wird starr in das
+    Schulterband gezogen (hoechstens 6 % der Torso-Hoehe unter der
+    Torso-Oberkante)."""
     rig = _assemble({"torso": _torso_mit_schulter(-0.6),
                      "links_arm": _arm_segmente()})
     t_lo, t_hi = rig.body_meshes["torso"].bbox()
-    shoulder = rig.joint_positions["LeftUpperArm"]
-    # R15-Schulterlinie: 0,5 Studs unter der Oberkante bei 2 Studs Hoehe.
-    assert shoulder[1] == pytest.approx(t_hi[1] - 0.25 * (t_hi[1] - t_lo[1]),
-                                        abs=1e-3)
-    assert any("R15-Schulterlinie" in n for n in rig.notes)
-    # Und der Arm haengt daran (Oberkante im oberen Torso-Drittel).
+    torso_h = t_hi[1] - t_lo[1]
     arm_lo, arm_hi = rig.body_meshes["links_arm"].bbox()
-    assert arm_hi[1] > t_hi[1] - 0.35 * (t_hi[1] - t_lo[1])
+    # Oberkante des Oberarms liegt jetzt im Band (Torso-Oberkante bis 10 %).
+    assert arm_hi[1] <= t_hi[1] + 1e-6
+    assert arm_hi[1] >= t_hi[1] - 0.06 * torso_h
+    assert any("Schulterlinie" in n for n in rig.notes)
+    assert "Studs unter der Torso-Oberkante" in " ".join(rig.notes)
 
 
-def test_autoren_schulter_bleibt_auf_ihrem_platz():
-    """Regression: eine Fassung zog *jede* Schulter auf 4 % unter die
-    Torso-Oberkante und haengte die Arme damit zu hoch ("Schultern sind zu
-    hoch"). Autoren-Attachments innerhalb des R15-Bandes bleiben unangetastet -
-    auch das der Woman-Bundle-Torsi (rund 28 % unter der Oberkante)."""
-    # 0.30 unter der Oberkante von 1.6 = 19 % -> mitten im Band.
+def test_oberarm_ueber_der_torso_oberkante_wird_heruntergezogen():
+    """Bug: "Schultern sind zu hoch" - ein Marker oberhalb der Torso-Oberkante
+    laesst den Arm ueber die Schulter hinausragen. Er wird auf die
+    Schulterlinie (buendig mit der Oberkante) zurueckgeholt."""
+    rig = _assemble({"torso": _torso_mit_schulter(1.2),
+                     "links_arm": _arm_segmente()})
+    t_lo, t_hi = rig.body_meshes["torso"].bbox()
+    torso_h = t_hi[1] - t_lo[1]
+    arm_lo, arm_hi = rig.body_meshes["links_arm"].bbox()
+    # Nie ueber die Torso-Oberkante hinaus, aber im Schulterband.
+    assert arm_hi[1] <= t_hi[1] + 1e-3
+    assert arm_hi[1] >= t_hi[1] - 0.06 * torso_h
+    assert any("Schulterlinie" in n for n in rig.notes)
+
+
+def test_oberarm_im_schulterband_bleibt_unveraendert():
+    """Autoren-Attachments, deren Oberarm bereits im Band sitzt, bleiben
+    unangetastet - die Pipeline schiebt dann nichts (kein Hinweis)."""
     rig = _assemble({"torso": _torso_mit_schulter(0.5),
                      "links_arm": _arm_segmente()})
     t_lo, t_hi = rig.body_meshes["torso"].bbox()
     torso_h = t_hi[1] - t_lo[1]
     shoulder = rig.joint_positions["LeftUpperArm"]
-    # Genau auf dem Attachment (0.5 in UpperTorso-Lokalkoordinaten) - nicht
-    # nach oben gezogen.
+    arm_lo, arm_hi = rig.body_meshes["links_arm"].bbox()
+    # Genau auf dem Attachment geblieben (0.30 unter der Torso-Oberkante).
     assert shoulder[1] == pytest.approx(t_hi[1] - 0.30, abs=1e-3)
-    assert shoulder[1] < t_hi[1] - 0.12 * torso_h
+    assert t_hi[1] - 0.06 * torso_h <= arm_hi[1] <= t_hi[1]
     assert not any("Schulterlinie" in n for n in rig.notes)
 
 
-def test_schulter_ueber_der_torso_oberkante_wird_gezogen():
-    """Ein Marker oberhalb der Torso-Oberkante ist unbrauchbar (Arme schweben
-    ueber den Schultern) - er wird ebenfalls auf die Schulterlinie gesetzt."""
-    rig = _assemble({"torso": _torso_mit_schulter(1.2),
-                     "links_arm": _arm_segmente()})
+
+def test_fehlende_beine_nutzen_die_standard_avatar_meshes():
+    """Bug: "die Teile die nicht im Inventar vorhanden sind werden wieder
+    Quader und nicht der Standard Avatar". Roblox ersetzt fehlende Teile durch
+    den Standard-Avatar - dessen R15-Block-Meshes werden geladen und auf die
+    R15-Maße gezogen. Erkennbar an der Topologie: die Block-Meshes haben
+    abgerundete Kanten, also weit mehr als die 24 Vertices eines Quaders."""
+    standard = {
+        name: roblox_mesh.make_sphere(0.5, segments=12, rings=8)
+        for name in ("LeftUpperLeg", "LeftLowerLeg", "LeftFoot")
+    }
+    rig = avatar_rig.assemble_r15_rig(
+        {"torso": _torso()}, None, roblox_api.DEFAULT_BODY_COLORS,
+        dict(roblox_api.DEFAULT_SCALES), headless=True,
+        standard_meshes=standard)
+    bein = rig.body_meshes["links_bein"]
+    # Kein Quader-Fallback (der haette 48 Vertices fuer drei Segmente).
+    assert len(bein.positions) > 100
+    spans = {name: (a, b) for name, a, b in rig.segment_spans["links_bein"]}
     t_lo, t_hi = rig.body_meshes["torso"].bbox()
-    shoulder = rig.joint_positions["LeftUpperArm"]
-    assert shoulder[1] <= t_hi[1]
-    assert shoulder[1] == pytest.approx(t_hi[1] - 0.25 * (t_hi[1] - t_lo[1]),
-                                        abs=1e-3)
-    assert any("Schulterlinie" in n for n in rig.notes)
+    torso_h = t_hi[1] - t_lo[1]
+    lo, hi = bein.bbox()
+    assert hi[1] - lo[1] == pytest.approx(torso_h, rel=0.02)
+    start, ende = spans["LeftUpperLeg"]
+    ys = [bein.positions[i][1] for i in range(start, ende)]
+    assert (max(ys) - min(ys)) == pytest.approx(0.384 * torso_h, rel=0.06)
+    assert all(0.0 <= u <= 1.0 and 0.0 <= v <= 1.0 for u, v in bein.uvs)
 
 
 def test_platzhalter_beine_sind_kein_einzelner_klotz():

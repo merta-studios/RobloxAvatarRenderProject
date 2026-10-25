@@ -20,7 +20,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from avatar_uv import apply_limb_box_uvs, apply_torso_box_uvs
+from avatar_uv import (apply_limb_box_uvs, apply_limb_uvs_projected,
+                       apply_torso_box_uvs)
 from roblox_mesh import MeshData, make_box, make_sphere
 from roblox_api import brick_color_hex, hex_to_rgb
 
@@ -71,6 +72,45 @@ R15_LEG_SYMMETRY_TOLERANCE = 1.05
 #: also ein Viertel der Torso-Hoehe. Autoren-Attachments in diesem Bereich
 #: bleiben unangetastet.
 R15_SHOULDER_FRACTION_OF_TORSO = 0.25
+#: Erlaubtes Band fuer die Oberkante des Oberarms, in Torso-Hoehen unter der
+#: Torso-Oberkante. Zwei Bug-Reports stecken die Grenzen ab: ein Arm, dessen
+#: Oberkante ueber der Torso-Oberkante liegt, wirkt "zu hoch"; einer, der ein
+#: Zehntel darunter beginnt, wirkt "viel zu niedrig". Deshalb: hoechstens 2 %
+#: darueber (praktisch buendig) und hoechstens 6 % darunter. Liegt der Arm
+#: ausserhalb, wird er starr auf die Mitte des Bandes (4 %) verschoben.
+R15_ARM_TOP_BAND = (0.02, 0.06)
+R15_ARM_TOP_TARGET = 0.04
+
+#: Meshes des **Standard-Avatars** (R15-Block-Koerper). Roblox baut den
+#: Standard-Koerper in der Engine aus genau diesen FileMesh-Assets; sie haben
+#: keine Katalog-/Bundle-ID, sind aber als Mesh-Assets (AssetTypeId 4) ladbar.
+#: Fehlt ein Koerperteil im Inventar, wird es damit ersetzt - nicht durch
+#: scharfe Quader und nicht durch Teile des getragenen Pakets.
+STANDARD_BODY_MESH_IDS: Dict[str, int] = {
+    "LowerTorso": 387941715,
+    "UpperTorso": 387941468,
+    "Head": 387941905,
+    "LeftUpperArm": 387938468,
+    "LeftLowerArm": 387938971,
+    "LeftHand": 387939233,
+    "RightUpperArm": 387940113,
+    "RightLowerArm": 387940356,
+    "RightHand": 387940548,
+    "LeftUpperLeg": 387939645,
+    "LeftLowerLeg": 387939489,
+    "LeftFoot": 387939912,
+    "RightUpperLeg": 387940976,
+    "RightLowerLeg": 387940802,
+    "RightFoot": 387941196,
+}
+
+#: Welche Segmente ein fehlendes Koerperteil im Standard-Avatar umfasst.
+STANDARD_SEGMENTS: Dict[str, Tuple[str, ...]] = {
+    "LeftArm": ("LeftUpperArm", "LeftLowerArm", "LeftHand"),
+    "RightArm": ("RightUpperArm", "RightLowerArm", "RightHand"),
+    "LeftLeg": ("LeftUpperLeg", "LeftLowerLeg", "LeftFoot"),
+    "RightLeg": ("RightUpperLeg", "RightLowerLeg", "RightFoot"),
+}
 
 
 def _de(value: float, nd: int = 2) -> str:
@@ -878,14 +918,42 @@ def has_rig_attachments(segments_by_part: Dict[str, List[Dict[str, Any]]], head_
     return False
 
 
+def _standard_segment_mesh(raw: Optional[MeshData], width: float, height: float,
+                           depth: float, slice_name: str) -> Optional[MeshData]:
+    """Skaliert ein Standard-Avatar-Mesh auf die R15-Masse eines Segments.
+
+    Das R15-Block-Mesh kommt als Einheitskoerper (SpecialMesh-Standard), seine
+    Proportionen ergeben sich erst aus der Part-Groesse. Deshalb wird es auf
+    genau die Maße gezogen, die auch der Quader-Fallback haette, und bekommt
+    die Kleidungs-UVs des Abschnitts (Shirt/Hose).
+    """
+    if raw is None or raw.is_empty:
+        return None
+    lo, hi = raw.bbox()
+    size = (max(1e-6, hi[0] - lo[0]), max(1e-6, hi[1] - lo[1]),
+            max(1e-6, hi[2] - lo[2]))
+    scaled = raw.transform((width / size[0], height / size[1], depth / size[2]))
+    center = scaled.center()
+    scaled = scaled.transform(1.0, (-center[0], -center[1], -center[2]))
+    return apply_limb_uvs_projected(scaled, slice_name)
+
+
 def assemble_r15_rig(
     segments_by_part: Dict[str, List[Dict[str, Any]]],
     head_mp: Optional[Dict[str, Any]],
     body_colors: Dict[str, Any],
     scales: Dict[str, Any],
     headless: bool = False,
+    standard_meshes: Optional[Dict[str, MeshData]] = None,
 ) -> RiggedAvatar:
-    """Setzt einen kompletten R15-Avatar ueber exakte `*RigAttachment`-Gelenke zusammen."""
+    """Setzt einen kompletten R15-Avatar ueber exakte `*RigAttachment`-Gelenke zusammen.
+
+    ``standard_meshes`` (Segmentname -> MeshData) enthaelt die echten
+    R15-Block-Meshes des Standard-Avatars. Sie ersetzen bei nicht
+    ausgeruesteten Koerperteilen die Quader-Notloesung: gleiche R15-Masse und
+    Gelenk-Kette, aber die gerundete Silhouette des Standard-Koerpers.
+    """
+    standard_meshes = standard_meshes or {}
     sw = _clamp(scales.get("width"), 0.55, 1.60)
     sh = _clamp(scales.get("height"), 0.55, 1.60)
     sd = _clamp(scales.get("depth"), 0.55, 1.60)
@@ -1139,7 +1207,8 @@ def assemble_r15_rig(
         scale_mode: str,
         kind: str,
         sign: float,
-    ) -> None:
+        align_top: Optional[Tuple[float, float, float]] = None,
+    ) -> Tuple[float, float]:
         """Haengt die Segmente einer Extremitaet starr an ihren Attachments auf.
 
         Montage wie bei Roblox (``Kind = Eltern * C0 * C1^-1``): kein Segment
@@ -1204,16 +1273,18 @@ def assemble_r15_rig(
                     f"{_de(factor)} gleichmaessig auf allen Achsen - keine "
                     f"Verzerrung; {grund}).")
                 for seg_name, (mesh_s, atts_s, origin_s, rot_s,
-                               vis) in placement.items():
+                               vis) in list(placement.items()):
                     scaled = tuple(root[i] + factor * (origin_s[i] - root[i])
                                    for i in range(3))
+                    placement[seg_name] = (mesh_s, atts_s, scaled, rot_s, vis)
                     register_segment(seg_name, mesh_s, atts_s, scaled, rot_s,
                                      vis, scale=factor)
-                for seg_name, (jpos, jframe) in chain_joints.items():
-                    joint_pos[seg_name] = tuple(
-                        root[i] + factor * (jpos[i] - root[i])
-                        for i in range(3))
+                for seg_name, (jpos, jframe) in list(chain_joints.items()):
+                    moved = tuple(root[i] + factor * (jpos[i] - root[i])
+                                  for i in range(3))
+                    joint_pos[seg_name] = moved
                     joint_frames[seg_name] = jframe
+                    chain_joints[seg_name] = (moved, jframe)
 
             factor = 1.0
             if span > 1e-3 and canonical_len > 1e-3:
@@ -1230,6 +1301,35 @@ def assemble_r15_rig(
             if abs(factor - 1.0) > 1e-3:
                 _rescale(factor, "kanonische Armlaenge")
 
+            # --- Schulterband: Oberkante des ersten Segments ----------------
+            delta = 0.0
+            top_vorher = distal[0][1]
+            if align_top is not None:
+                erstes = placed_seg_mesh.get(names[0])
+                if erstes is not None and not erstes.is_empty:
+                    top = erstes.bbox()[1][1]
+                    top_vorher = top
+                    if top < align_top[0] or top > align_top[1]:
+                        ziel = align_top[2]
+                    else:
+                        ziel = top
+                    delta = ziel - top
+                    if abs(delta) > 1e-4:
+                        # Ganze Kette starr verschieben - Gelenke, Segment-
+                        # groessen und Naehte bleiben unveraendert.
+                        for seg_name, (mesh_s, atts_s, origin_s, rot_s,
+                                       vis) in list(placement.items()):
+                            moved = (origin_s[0], origin_s[1] + delta,
+                                     origin_s[2])
+                            placement[seg_name] = (mesh_s, atts_s, moved,
+                                                   rot_s, vis)
+                            register_segment(seg_name, mesh_s, atts_s, moved,
+                                             rot_s, vis, scale=factor)
+                        for seg_name, (jpos, jframe) in list(chain_joints.items()):
+                            moved = (jpos[0], jpos[1] + delta, jpos[2])
+                            joint_pos[seg_name] = moved
+                            chain_joints[seg_name] = (moved, jframe)
+
             named = [(n, placed_seg_mesh[n]) for n in names
                      if n in placed_seg_mesh and placed_seg_vis[n]]
             merged, spans = _merge_with_spans(named)
@@ -1238,7 +1338,7 @@ def assemble_r15_rig(
             chain_spans[part_name] = {"span": span * factor,
                                       "rescale": _rescale,
                                       "factor": factor}
-            return
+            return delta, top_vorher
         # --- Kein einziges Segment vorhanden --------------------------------
         # Fruehere Fassung baute *einen* Klotz fuer die ganze Extremitaet -
         # im Render sah das aus wie ein eckiger Quader ohne Knie und ohne
@@ -1284,8 +1384,11 @@ def assemble_r15_rig(
             # Fussspitze zeigt nach vorne (-Z), die Ferse bleibt hinten.
             z = root[2] - (foot_shift if is_foot else 0.0)
             slice_name = slices[index] if index < len(slices) else "end"
-            box = apply_limb_box_uvs(make_box(lw, h, depth, (0.0, 0.0, 0.0)),
-                                     slice_name)
+            box = _standard_segment_mesh(
+                standard_meshes.get(name), lw, h, depth, slice_name)
+            if box is None:
+                box = apply_limb_box_uvs(make_box(lw, h, depth, (0.0, 0.0, 0.0)),
+                                         slice_name)
             origin = (lx, y - h / 2.0, z)
             register_segment(name, box, {}, origin, IDENTITY_MAT3, True)
             segment_driver[name] = name
@@ -1300,7 +1403,7 @@ def assemble_r15_rig(
         merged, spans = _merge_with_spans(named)
         body_meshes[part_name] = merged
         segment_spans[part_name] = spans
-        return
+        return 0.0, root[1]
 
     t_lo, t_hi = torso_mesh.bbox()
     torso_w = max(1e-3, t_hi[0] - t_lo[0])
@@ -1360,7 +1463,14 @@ def assemble_r15_rig(
              IDENTITY_MAT3))
         joint_pos[u_name] = shoulder_att[0]
         joint_frames[u_name] = shoulder_att[1]
-        _mount_chain(
+        # Schulterband: Lage der *sichtbaren* Oberkante des Oberarms.
+        # Nicht der Attachment-Wert entscheidet, sondern wo der Arm optisch
+        # beginnt: sitzt er deutlich unter der Torso-Oberkante, haengen die
+        # Arme am Bauch; ragt er darueber, wirken die Schultern hochgezogen.
+        band = (t_hi[1] - R15_ARM_TOP_BAND[1] * torso_h,
+                t_hi[1] - R15_ARM_TOP_BAND[0] * torso_h,
+                t_hi[1] - R15_ARM_TOP_TARGET * torso_h)
+        delta, top_vorher = _mount_chain(
             part_name,
             [(u_name, f"{side}ShoulderRigAttachment"),
              (l_name, f"{side}ElbowRigAttachment"),
@@ -1371,7 +1481,29 @@ def assemble_r15_rig(
             R15_ARM_LENGTH_PER_TORSO_HEIGHT * torso_h,
             "nur_verlaengern",
             "arm",
-            sign)
+            sign,
+            align_top=band)
+        if abs(delta) > 1e-4:
+            lage = ("ueber der Torso-Oberkante" if top_vorher > band[1] else
+                    f"{_de(t_hi[1] - top_vorher)} Studs unter der "
+                    "Torso-Oberkante")
+            shoulder_att = ((shoulder_att[0][0], shoulder_att[0][1] + delta,
+                             shoulder_att[0][2]), shoulder_att[1])
+            world_atts[f"{side}ShoulderRigAttachment"] = shoulder_att
+            # Schulter-Accessoires (z. B. Taschen-Katze) sitzen am
+            # *ShoulderAttachment* - der wandert mit, sonst rutscht das
+            # Accessoire am Verschub vorbei in die Achsel.
+            accessoire = world_atts.get(f"{side}ShoulderAttachment")
+            if accessoire is not None:
+                world_atts[f"{side}ShoulderAttachment"] = (
+                    (accessoire[0][0], accessoire[0][1] + delta,
+                     accessoire[0][2]), accessoire[1])
+            joint_pos[u_name] = shoulder_att[0]
+            joint_frames[u_name] = shoulder_att[1]
+            notes.append(
+                f"Schulter '{side}': Oberkante des Oberarms lag {lage} - "
+                "starr auf die Schulterlinie verschoben (Gelenke, Segment-"
+                "groessen und Naehte unveraendert).")
 
     # 3) Beine (Hip -> Knee -> Ankle), gleiche Montage wie die Arme.
     for part_name, side, sign in (("rechts_bein", "Right", 1.0), ("links_bein", "Left", -1.0)):

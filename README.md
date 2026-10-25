@@ -112,19 +112,20 @@ exakt nach der Roblox-Regel `Kind = Eltern · C0 · C1⁻¹`. Einzelne Segmente
 werden nie gestaucht oder gestreckt, die Naht zwischen zwei Segmenten bleibt zu,
 und Gelenke sitzen dort, wo Roblox sie setzt:
 
-* **Schultern/Hüften:** Maßgeblich sind die `*RigAttachment`s des Torsos –
-  genau dort montiert Roblox die Arme. Bei Standard-R15 liegt die Schulter
-  0,5 Studs unter der Oberkante der 2 Studs hohen Torso-Hälfte, also bei
-  **25 % der Torso-Höhe**; Autorenwerte in diesem Bereich bleiben unangetastet.
-  Nur unbrauchbare Marker (oberhalb der Oberkante oder tiefer als 55 % – dann
-  hängen die Arme am Bauch) werden auf diese Schulterlinie gezogen. Eine frühere
-  Fassung zog jede Schulter auf 4 % unter die Oberkante und hängte die Arme
-  dadurch sichtbar zu hoch.
+* **Schultern:** Entscheidend ist die *sichtbare* Oberkante des Oberarms. Liegt
+  sie über der Torso-Oberkante, wirken die Schultern hochgezogen; beginnt der
+  Arm mehr als 6 % der Torso-Höhe darunter, wirken sie zu tief. Liegt der Arm
+  außerhalb dieses Bandes, wird die ganze Armkette **starr** auf 4 % unter die
+  Oberkante verschoben – Gelenke, Segmentgrößen und Nähte bleiben unverändert,
+  Schulter-Accessoires wandern mit.
 * **Fehlende Körperteile** (z. B. Beine, wenn nur Torso und Arme getragen
   werden) ersetzt Roblox durch den **Standard-Avatar** – nicht durch weitere
-  Teile des getragenen Pakets. Genau so rendert die Pipeline: R15-Blockkörper in
-  Standard-Maßen (Ober-/Unterschenkel plus Fuß bzw. Ober-/Unterarm plus Hand,
-  nie ein einzelner Klotz).
+  Teile des getragenen Pakets. Die Pipeline lädt dafür die echten
+  **R15-Block-Meshes** von Roblox (`R15BlockUpperLeg` usw., Mesh-Assets
+  387941715 & Co.), zieht sie auf die R15-Maße (Ober-/Unterschenkel plus Fuß
+  bzw. Ober-/Unterarm plus Hand) und legt die Shirt-/Hosen-UVs darauf – die
+  gerundete Silhouette des Standard-Körpers also, kein Quader. Erst wenn ein
+  Block-Mesh nicht ladbar ist, entsteht ein Quader gleicher Maße.
 * **Beine** behalten die Länge ihres Bundles (Roblox normiert nicht). Nur wenn
   linkes und rechtes Bein voneinander abweichen, wird das kürzere gleichmäßig
   angeglichen, damit beide Füße auf dem Boden stehen.

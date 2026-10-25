@@ -632,6 +632,9 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     koerperteile_log: List[str] = []  # fehlende Koerperteile (Standard-Avatar)
     avatar_raw: Dict[str, Any] = {}
     mesh_parts: List[Dict[str, Any]] = []
+    # Echte R15-Block-Meshes des Standard-Avatars fuer nicht ausgeruestete
+    # Koerperteile (Segmentname -> MeshData).
+    standard_meshes: Dict[str, Any] = {}
     texture_bytes_by_rel: Dict[str, bytes] = {}
     headless = {"active": False, "label": "", "reason": "", "info": ""}
 
@@ -869,9 +872,10 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         # ---- Assets ---------------------------------------------------------
         assets = list(avatar_raw.get("assets") or [])
         # Nicht ausgeruestete Koerperteile: Roblox ersetzt sie durch den
-        # Standard-Avatar (blockiger R15-Koerper), NICHT durch weitere Teile
-        # eines getragenen Pakets. Die Geometrie erzeugt avatar_rig als
-        # R15-Blockkoerper in Standard-Massen; hier nur die Bestandsaufnahme.
+        # Standard-Avatar, NICHT durch weitere Teile eines getragenen Pakets.
+        # Dafuer werden die echten R15-Block-Meshes von Roblox geladen
+        # (R15BlockLeftUpperLeg usw.) - das ist genau die Geometrie, aus der
+        # die Engine den Standard-Koerper baut.
         try:
             fehlende_teile = api.missing_body_part_names(assets)
         except Exception as exc:  # pragma: no cover - Format
@@ -880,11 +884,34 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         if fehlende_teile:
             text = ", ".join(fehlende_teile)
             koerperteile_log.extend(fehlende_teile)
-            warnings.append(
-                "Nicht ausgeruestete Koerperteile (" + text + "): Roblox "
-                "setzt dafuer den Standard-Avatar ein - die Pipeline rendert "
-                "sie als R15-Blockkoerper in Standard-Massen.")
-            log(f"      . Fehlende Koerperteile: {text} (Standard-R15-Blockkoerper)")
+            segmente: List[str] = []
+            for teil in fehlende_teile:
+                segmente.extend(avatar_rig.STANDARD_SEGMENTS.get(teil, []))
+            log(f"      . Fehlende Koerperteile: {text} -> Standard-Avatar "
+                f"({len(segmente)} Segmente)")
+            for seg_name in segmente:
+                mesh_id = avatar_rig.STANDARD_BODY_MESH_IDS.get(seg_name)
+                if not mesh_id:
+                    continue
+                raw = download_followup(mesh_id)
+                if raw is None:
+                    continue
+                try:
+                    standard_meshes[seg_name] = roblox_mesh.parse(raw)
+                except roblox_mesh.MeshParseError:
+                    continue
+            fehlende_meshes = [s for s in segmente if s not in standard_meshes]
+            if standard_meshes:
+                warnings.append(
+                    "Nicht ausgeruestete Koerperteile (" + text + "): Roblox "
+                    "setzt dafuer den Standard-Avatar ein - geladen wurden die "
+                    f"R15-Block-Meshes von Roblox ({len(standard_meshes)} "
+                    "Segmente).")
+            if fehlende_meshes:
+                warnings.append(
+                    "Standard-Avatar unvollstaendig ("
+                    + ", ".join(fehlende_meshes)
+                    + ") - diese Segmente bleiben R15-Quader.")
         log(f"[3/4] {len(assets)} Assets verarbeiten ...")
 
         for index, asset in enumerate(assets[:max_assets]):
@@ -1178,6 +1205,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         body_colors,
         scales,
         headless=headless["active"],
+        standard_meshes=standard_meshes,
     )
     # Hinweise des Gelenk-Audits (abgeleitete Attachments, ersetzte
     # Platzhalter-Gelenke) sichtbar machen - sie erklaeren, warum ein Teil

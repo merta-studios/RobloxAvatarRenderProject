@@ -278,18 +278,22 @@ Besonderheiten:
   skaliert beim Avatar-Aufbau kein einzelnes Segment: jedes hängt über
   `C0`/`C1` an seinem Elternteil (`Kind = Eltern · C0 · C1⁻¹`). Genau so
   montiert die Pipeline – Drehpunkte und Nähte stimmen damit.
-* **Schulter- und Hüftlinie:** Maßgeblich sind die `*RigAttachment`s des
-  Torsos. Bei Standard-R15 sitzt die Schulter 0,5 Studs unter der Oberkante der
-  2 Studs hohen Torso-Hälfte, also bei **25 % der Torso-Höhe**; Autorenwerte in
-  diesem Band bleiben unangetastet. Nur unbrauchbare Marker (oberhalb der
-  Oberkante oder tiefer als 55 % – „Schultern viel zu weit unten“) werden auf
-  die Schulterlinie gezogen, Hüften an die Unterkante. Eine frühere Fassung zog
-  jede Schulter auf 4 % unter die Oberkante und hängte die Arme dadurch zu hoch.
+* **Schulterlinie:** Maßgeblich ist die sichtbare Oberkante des Oberarms, nicht
+  der Attachment-Wert. Band: höchstens 2 % der Torso-Höhe über der
+  Torso-Oberkante (praktisch bündig) und höchstens 6 % darunter. Liegt der Arm
+  außerhalb, wird die Armkette starr auf 4 % unter die Oberkante verschoben –
+  Gelenke, Segmentgrößen und Nähte bleiben unverändert, Schulter-Accessoires
+  wandern mit. Zwei Bug-Reports stecken die Grenzen ab: „Schultern zu hoch“
+  (Arm ragte über die Torso-Oberkante) und „Schultern viel zu niedrig“
+  (Arm begann rund ein Zehntel darunter).
 * **Fehlende Körperteile:** Trägt der Avatar ein Teil gar nicht (z. B. keine
   Beine), setzt Roblox dafür den **Standard-Avatar** ein – nicht die übrigen
-  Teile des getragenen Pakets. Die Pipeline rendert diese Teile deshalb als
-  R15-Blockkörper in Standard-Maßen (Ober-/Unterschenkel plus Fuß mit
-  Überstand bzw. Ober-/Unterarm plus Hand) – niemals ein einzelner Klotz.
+  Teile des getragenen Pakets. Die Pipeline lädt deshalb die echten
+  R15-Block-Meshes von Roblox (`R15BlockLeftUpperLeg` usw., Mesh-IDs in
+  `avatar_rig.STANDARD_BODY_MESH_IDS`), skaliert sie auf die R15-Maße
+  (Ober-/Unterschenkel 38,4 %/41,1 %, Fuß 20,5 %) und projiziert die
+  Kleidungs-UVs darauf. Erst wenn ein Block-Mesh nicht ladbar ist, entsteht ein
+  Quader gleicher Maße.
 * **Beinlänge:** Beine behalten die Länge ihres Bundles. Weichen linkes und
   rechtes Bein um mehr als 5 % voneinander ab, wird das kürzere mit einem
   Faktor auf allen Achsen angeglichen (kein Verzerren, beide Füße auf dem

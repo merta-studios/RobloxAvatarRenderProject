@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover - optionale Bildbibliotheken
     np = None  # type: ignore[assignment]
     Image = None  # type: ignore[assignment]
 
-from roblox_mesh import MeshData
+from roblox_mesh import MeshData, _face_normal
 
 ColorRGB = Tuple[float, float, float]
 
@@ -407,6 +407,104 @@ def apply_limb_box_uvs(box: MeshData, part_slice: str = "full") -> MeshData:
         faces=list(box.faces),
         colors=list(box.colors) if box.colors else None,
         source_version=box.source_version,
+    )
+
+
+#: UV-Rechtecke (in Pixeln der 264x284-Gliedmassen-Vorlage) je Flaeche.
+_LIMB_RECTS = {
+    "+Z": (194, 258),   # Rueckseite
+    "-Z": (66, 130),    # Vorderseite
+    "+X": (2, 66),
+    "-X": (130, 194),
+}
+
+
+def _limb_slice_rows(part_slice: str) -> Tuple[float, float, float, float]:
+    """Pixel-Zeilen fuer einen Gliedmassen-Abschnitt (wie `apply_limb_box_uvs`)."""
+    w, h = float(LIMB_MAP_SIZE[0]), float(LIMB_MAP_SIZE[1])
+    if part_slice == "upper":
+        return w, h, 68.0, 141.0
+    if part_slice == "lower":
+        return w, h, 141.0, 214.0
+    if part_slice == "end":
+        return w, h, 214.0, 238.0
+    return w, h, 68.0, 238.0
+
+
+def apply_limb_uvs_projected(mesh: MeshData, part_slice: str = "full") -> MeshData:
+    """Projiziert die R15-Gliedmassen-UVs auf ein *beliebiges* Mesh.
+
+    Fuer Quader gibt es `apply_limb_box_uvs` (feste 24 Vertices). Der
+    Standard-Avatar besteht aber aus echten Roblox-Meshes (R15-Block) mit
+    abgerundeten Kanten und eigener Topologie. Damit Shirt/Hose auch dort
+    landen, wird hier jede Dreiecksflaeche ueber ihre Normale einer der sechs
+    Quaderseiten zugeordnet und ihre Vertices in das passende UV-Rechteck der
+    `264x284`-Vorlage projiziert. Fuer einen Quader kommt exakt dasselbe
+    Ergebnis heraus wie bei `apply_limb_box_uvs`.
+    """
+    if mesh.is_empty or not mesh.positions:
+        return mesh
+    tex_w, tex_h, y0, y1 = _limb_slice_rows(part_slice)
+    lo, hi = mesh.bbox()
+    span_x = max(1e-6, hi[0] - lo[0])
+    span_y = max(1e-6, hi[1] - lo[1])
+    span_z = max(1e-6, hi[2] - lo[2])
+
+    def _quad_uv(rect, s: float, t: float) -> Tuple[float, float]:
+        x0, x1 = rect
+        corners = _quad_uv_from_px(tex_w, tex_h, x0, y0, x1, y1)
+        (ul, vb), (ur, _vb2), (_ur2, vt) = corners[0], corners[1], corners[2]
+        return (ul + s * (ur - ul), vb + t * (vt - vb))
+
+    # Kanten-UVs fuer Deckflaechen (Top/Bottom) - gleiche Rechtecke wie im Quader.
+    top_rect = (2, 66)
+    bottom_rect = (90, 154)
+    top_rows = (2.0, 66.0)
+    bottom_rows = (240.0, 282.0)
+
+    positions: List[Tuple[float, float, float]] = []
+    normals: List[Tuple[float, float, float]] = []
+    uvs: List[Tuple[float, float]] = []
+    faces: List[Tuple[int, int, int]] = []
+    for face in mesh.faces:
+        if len(face) < 3:
+            continue
+        idx = list(face)[:3]
+        p = [mesh.positions[i] for i in idx]
+        n = _face_normal(p[0], p[1], p[2])
+        ax = max(range(3), key=lambda k: abs(n[k]))
+        sign = 1.0 if n[ax] >= 0 else -1.0
+        if ax == 2:      # +/-Z
+            rect = _LIMB_RECTS["+Z" if sign > 0 else "-Z"]
+            for q in p:
+                s = ((q[0] - lo[0]) / span_x if sign > 0
+                     else (hi[0] - q[0]) / span_x)
+                uvs.append(_quad_uv(rect, s, (q[1] - lo[1]) / span_y))
+        elif ax == 0:    # +/-X
+            rect = _LIMB_RECTS["+X" if sign > 0 else "-X"]
+            for q in p:
+                s = ((hi[2] - q[2]) / span_z if sign > 0
+                     else (q[2] - lo[2]) / span_z)
+                uvs.append(_quad_uv(rect, s, (q[1] - lo[1]) / span_y))
+        else:            # +/-Y
+            x0, x1 = top_rect if sign > 0 else bottom_rect
+            py0, py1 = top_rows if sign > 0 else bottom_rows
+            for q in p:
+                corners = _quad_uv_from_px(tex_w, tex_h, x0, py0, x1, py1)
+                s = (q[0] - lo[0]) / span_x
+                t = (q[2] - lo[2]) / span_z
+                (ul, vb) = corners[0]
+                (ur, _b) = corners[1]
+                (_u, vt) = corners[2]
+                uvs.append((ul + s * (ur - ul), vb + t * (vt - vb)))
+        base = len(positions)
+        for k, q in enumerate(p):
+            positions.append(q)
+            normals.append(mesh.normals[idx[k]] if idx[k] < len(mesh.normals) else n)
+        faces.append((base, base + 1, base + 2))
+    return MeshData(
+        positions=positions, normals=normals, uvs=uvs, faces=faces,
+        colors=None, source_version=mesh.source_version,
     )
 
 
