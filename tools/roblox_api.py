@@ -351,22 +351,38 @@ def _json_or_none(resp: Any) -> Any:
         return None
 
 
-def asset_bundles(client: HttpClient, asset_id: int) -> List[Dict[str, Any]]:
+def _catalog_json(client: HttpClient, url: str, log: List[str]) -> Any:
+    """JSON aus dem Katalog holen; Status wird fuer die Diagnose protokolliert."""
+    resp = client.get(url, allow_status=(400, 401, 403, 404, 429))
+    status = getattr(resp, "status", 0)
+    log.append(f"{url} -> HTTP {status}")
+    if not resp.ok:
+        return None
+    try:
+        return resp.json()
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def asset_bundles(client: HttpClient, asset_id: int,
+                  log: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """Koerperpakete (Bundles), die dieses Asset enthalten."""
-    resp = client.get(f"https://catalog.roblox.com/v1/assets/{asset_id}/bundles",
-                      allow_status=(400, 403, 404, 429))
-    data = _json_or_none(resp)
-    entries = (data or {}).get("data") if isinstance(data, dict) else data
-    if not isinstance(entries, list):
-        return []
-    return [e for e in entries if isinstance(e, dict) and e.get("id")]
+    log = log if log is not None else []
+    for url in (f"https://catalog.roblox.com/v1/assets/{asset_id}/bundles",
+                f"https://catalog.roblox.com/v2/assets/{asset_id}/bundles"):
+        data = _catalog_json(client, url, log)
+        entries = (data or {}).get("data") if isinstance(data, dict) else data
+        if isinstance(entries, list) and entries:
+            return [e for e in entries if isinstance(e, dict) and e.get("id")]
+    return []
 
 
-def bundle_items(client: HttpClient, bundle_id: int) -> List[Dict[str, Any]]:
+def bundle_items(client: HttpClient, bundle_id: int,
+                 log: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """Teile eines Koerperpakets (Assets mit Typ und Namen)."""
-    resp = client.get(f"https://catalog.roblox.com/v1/bundles/{bundle_id}/details",
-                      allow_status=(400, 403, 404, 429))
-    data = _json_or_none(resp)
+    log = log if log is not None else []
+    data = _catalog_json(
+        client, f"https://catalog.roblox.com/v1/bundles/{bundle_id}/details", log)
     items = (data or {}).get("items") if isinstance(data, dict) else None
     if not isinstance(items, list):
         return []
@@ -384,8 +400,21 @@ def bundle_items(client: HttpClient, bundle_id: int) -> List[Dict[str, Any]]:
     return out
 
 
+def search_body_part(client: HttpClient, keyword: str,
+                     log: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """Katalogsuche nach einem Koerperteil (Fallback ohne Paket-Info)."""
+    log = log if log is not None else []
+    from urllib.parse import quote
+    url = ("https://catalog.roblox.com/v1/search/items/details"
+           f"?Category=BodyParts&Limit=30&Keyword={quote(keyword)}")
+    data = _catalog_json(client, url, log)
+    entries = (data or {}).get("data") if isinstance(data, dict) else None
+    return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+
+
 def missing_body_parts(client: HttpClient, assets: List[Dict[str, Any]],
-                       warnings: Optional[List[str]] = None
+                       warnings: Optional[List[str]] = None,
+                       log: Optional[List[str]] = None
                        ) -> List[Dict[str, Any]]:
     """Fehlende Koerperteile aus dem getragenen Koerperpaket nachladen.
 
@@ -394,10 +423,13 @@ def missing_body_parts(client: HttpClient, assets: List[Dict[str, Any]],
     beim Rendern aus demselben Paket - sonst muessten wir sie als Quader
     erfinden ("Beine sind einfach nur eckige Quader").
 
-    Rueckgabe: Liste ``{"id", "name", "asset_type_id"}`` der fehlenden Teile.
-    Rein optional: schlaegt die Katalog-Abfrage fehl, bleibt es bei den
-    Platzhalter-Quadern (kein Fehler, nur ein Hinweis).
+    Reihenfolge: Paket des Torso-Assets (``/assets/{id}/bundles``), dann
+    Katalogsuche nach dem Namen des Torso-Assets. Schlaegt beides fehl, bleibt
+    es bei den R15-Quadern (Hinweis, kein Fehler).
+
+    Rueckgabe: Liste ``{"id", "name", "asset_type_id"}``.
     """
+    log = log if log is not None else []
     present = set()
     torso_asset = None
     for asset in assets or []:
@@ -415,39 +447,86 @@ def missing_body_parts(client: HttpClient, assets: List[Dict[str, Any]],
     fehlend = [t for t in BODY_PART_TYPE_IDS if t not in present]
     if not fehlend or torso_asset is None:
         return []
-    found: List[Dict[str, Any]] = []
+
+    def _type_of(asset_id: int) -> int:
+        return int(fetch_asset_details(client, asset_id).get("assetTypeId") or 0)
+
+    found: Dict[int, Dict[str, Any]] = {}
     seen: set = set()
-    for bundle in asset_bundles(client, torso_asset)[:4]:
-        bundle_id = bundle.get("id")
+    # 1) Teile des Koerperpakets, zu dem der Torso gehoert.
+    for bundle in asset_bundles(client, torso_asset, log)[:4]:
         try:
-            bundle_id = int(bundle_id)
+            bundle_id = int(bundle.get("id"))
         except (TypeError, ValueError):
             continue
-        for item in bundle_items(client, bundle_id):
+        for item in bundle_items(client, bundle_id, log):
             if not item["id"] or item["id"] in seen or item["type"] != "Asset":
                 continue
             seen.add(item["id"])
-            # Der Bundle-Eintrag nennt keinen AssetType - die Details-Abfrage
-            # (ohnehin fuer jeden Download noetig) liefert ihn.
-            details = fetch_asset_details(client, item["id"])
-            type_id = int(details.get("assetTypeId") or 0)
-            if type_id in fehlend:
-                found.append({"id": item["id"], "name": item["name"],
-                              "asset_type_id": type_id})
+            type_id = _type_of(item["id"])
+            if type_id in fehlend and type_id not in found:
+                found[type_id] = {"id": item["id"], "name": item["name"],
+                                  "asset_type_id": type_id}
         if len(found) >= len(fehlend):
             break
+
+    # 2) Katalogsuche nach dem Paketnamen (z. B. "Roblox 2.0 Left Leg").
+    if len(found) < len(fehlend):
+        torso_name = ""
+        for asset in assets or []:
+            if _asset_type_id(asset) == 27:
+                torso_name = (asset.get("name") or "").strip()
+        prefix = torso_name
+        for suffix in ("Torso", "Torso "):
+            if suffix and prefix.endswith(suffix):
+                prefix = prefix[: -len(suffix)].rstrip()
+        if prefix:
+            for type_id, label in BODY_PART_TYPE_NAMES.items():
+                if type_id not in fehlend or type_id in found:
+                    continue
+                seite_label = ("Left Leg" if label == "LeftLeg" else
+                               "Right Leg" if label == "RightLeg" else
+                               label.replace("Arm", " Arm").replace("Torso", "Torso"))
+                keywords = [f"{prefix} {seite_label}", seite_label]
+                for keyword in keywords:
+                    treffer = [e for e in search_body_part(client, keyword, log)
+                               if str(e.get("name") or "") == f"{prefix} {seite_label}"]
+                    if not treffer:
+                        continue
+                    best = treffer[0]
+                    try:
+                        aid = int(best.get("id") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if not aid or aid in seen:
+                        continue
+                    seen.add(aid)
+                    if _type_of(aid) == type_id:
+                        found[type_id] = {"id": aid, "name": best.get("name") or "",
+                                          "asset_type_id": type_id}
+                    break
+
+    result = [found[t] for t in BODY_PART_TYPE_IDS if t in found]
     if warnings is not None:
-        if found:
+        if result:
             warnings.append(
                 "Fehlende Koerperteile aus dem getragenen Koerperpaket "
-                f"nachgeladen: {', '.join(BODY_PART_TYPE_NAMES.get(f['asset_type_id'], '?') for f in found)}.")
+                "nachgeladen: "
+                + ", ".join(BODY_PART_TYPE_NAMES.get(f["asset_type_id"], "?")
+                            for f in result) + ".")
+            rest = [t for t in fehlend if t not in found]
+            if rest:
+                warnings.append(
+                    "Nicht ermittelbar (bleiben R15-Quader): "
+                    + ", ".join(BODY_PART_TYPE_NAMES.get(t, str(t)) for t in rest)
+                    + ".")
         else:
             warnings.append(
                 "Avatar traegt unvollstaendige Koerperteile ("
                 + ", ".join(BODY_PART_TYPE_NAMES.get(t, str(t)) for t in fehlend)
-                + ") - das Paket liess sich nicht ermitteln, "
-                "die Teile werden als R15-Quader erzeugt.")
-    return found
+                + ") - Paket nicht ermittelbar, die Teile werden als "
+                "R15-Quader erzeugt.")
+    return result
 
 
 # ---------------------------------------------------------------------------
