@@ -120,20 +120,22 @@ und Gelenke sitzen dort, wo Roblox sie setzt:
   `reference/classic_body.json`: alle 15 Teile mit Mesh, Maßen und Lage im
   Mannequin. Nichts wird mehr nachgebaut.
 * **Schultern und Gelenke.** Arme und Beine stehen exakt wie im Mannequin,
-  bezogen auf den *echten* Torso des Avatars: Die Oberkante des Oberarms liegt
+  bezogen auf den *echten* Torso des Avatars: Das Schultergelenk liegt
   **21,6 % der Torso-Höhe unter der Torso-Oberkante**, die Beinlänge beträgt
-  **131,7 %** der Torso-Höhe. Die Drehpunkte (Schulter, Ellbogen, Handgelenk,
-  Hüfte, Knie, Fußgelenk) sind die `*RigAttachment`s der Teile – Schulter
-  0,27 Studs über der OberTorso-Mitte. Es gibt **keine** Prozentkonstanten für
-  die Schulterlinie mehr; die frühere „Schulterband“-Verschiebung (Arm auf 4 %
-  unter die Oberkante) war die Ursache für hochgezogene Schultern (0,28 Studs
-  zu hoch) und ist für den Standard-Körper abgeschaltet.
+  **131,7 %** der Torso-Höhe. Aufgehängt wird **senkrecht** (das Mannequin
+  selbst zeigt eine A-Pose mit ~30° ausgestellten Armen): gedreht wird um den
+  Gelenkpunkt des Teils, die Gelenkabstände kommen aus den
+  `*RigAttachment`s – Naht und Drehpunkt bleiben also exakt wie bei Roblox.
+  Es gibt **keine** Prozentkonstanten für die Schulterlinie mehr; die frühere
+  „Schulterband“-Verschiebung (Arm starr auf 4 % unter die Oberkante) war die
+  Ursache für hochgezogene Schultern und ist für den Standard-Körper
+  abgeschaltet.
 * **Fehlende Körperteile** (z. B. Beine, wenn nur Torso und Arme getragen
   werden) ersetzt Roblox durch den **Standard-Avatar** – nicht durch weitere
   Teile des getragenen Pakets. Die Pipeline setzt dafür die Teile aus
-  `classic_body.json` ein: echte Silhouette, echte UVs der Roblox-
-  Kleidungsvorlage (Shirt/Hose), Gelenke auf den Teilkanten. Kein Quader, keine
-  R15-Block-Ersatzgeometrie.
+  `classic_body.json` ein: echte Silhouette, die Kleidungs-UVs der Roblox-
+  Vorlage (Shirt/Hose, 264×284) und Gelenke auf den Teilkanten. Kein Quader,
+  keine R15-Block-Ersatzgeometrie.
 * **Fremde Bundles bleiben unangetastet.** Weicht ein getragenes Segment in
   seinen Maßen von der Referenz ab (z. B. ein Korblox-Arm), wird es weiterhin
   über seine eigenen Attachments montiert.

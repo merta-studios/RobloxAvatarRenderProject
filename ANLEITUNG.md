@@ -288,13 +288,15 @@ Besonderheiten:
   Verhältnisse). Zur Renderzeit liest `tools/mannequin.py` dieses JSON –
   Standard-Teile werden also **nicht** nachgebaut.
 * **Schulterlinie (keine Konstanten mehr):** Arme und Beine werden relativ zum
-  *echten* Torso des Avatars exakt so gesetzt wie im Mannequin: Oberkante des
-  Oberarms 21,6 % der Torso-Höhe unter der Torso-Oberkante, Beinlänge 131,7 %
-  der Torso-Höhe. Die Drehpunkte sind die `*RigAttachment`s der Teile
-  (Schulter 0,27 Studs über der OberTorso-Mitte); fehlen sie, die Oberkante des
-  Glieds. Die frühere „Schulterband“-Regel (Arm starr auf 4 % unter die
-  Oberkante) war die Ursache für hochgezogene Schultern (0,28 Studs zu hoch)
-  und greift für den Standard-Körper nicht mehr.
+  *echten* Torso des Avatars exakt so gesetzt wie im Mannequin: Schultergelenk
+  21,6 % der Torso-Höhe unter der Torso-Oberkante, Beinlänge 131,7 % der
+  Torso-Höhe. Aufgehängt wird senkrecht - das Mannequin zeigt eine A-Pose mit
+  ~30° ausgestellten Armen, Roblox hängt die Glieder dagegen senkrecht auf.
+  Gedreht wird um den Gelenkpunkt, die Gelenkabstände kommen aus den
+  `*RigAttachment`s der Teile, sodass Naht und Drehpunkt wie bei Roblox
+  bleiben. Die frühere „Schulterband“-Regel (Arm starr auf 4 % unter die
+  Oberkante) war die Ursache für hochgezogene Schultern und greift für den
+  Standard-Körper nicht mehr.
 * **Fehlende Körperteile:** Trägt der Avatar ein Teil gar nicht (z. B. keine
   Beine), setzt Roblox dafür den **Standard-Avatar** ein – nicht die übrigen
   Teile des getragenen Pakets. Die Pipeline setzt dafür die Teile aus
