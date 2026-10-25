@@ -105,6 +105,15 @@ ein, `emote_zeit` wählt den Frame. Welche Quelle genutzt wurde, steht im Log
 (`ausgeruestet: …`) und im Manifest unter `render.pose_details`. Ein lokaler
 Pfad in `emote_datei` hat Vorrang.
 
+**Rig-Genauigkeit:** Jede Extremität wird gegen das kanonische R15-Raster
+geprüft (Schulterlinie, Ellbogen-/Handgelenk-, Knie-/Fußgelenk-Anteile). Passt
+ein Bundle (fehlende Attachments, Platzhalter `(0,0,0)`, falsche
+`MeshPart.Size`), werden die Gelenke auf das Raster gesetzt und die Segmente
+lückenlos dazwischen eingepasst – statt sie übereinander zu hängen. Alle
+Eingriffe stehen als `Rig-Audit:`-Warnung im Log und im Manifest (`rig_audit`
+mit `joint_spans`, `gelenke`, `segmente`, `segment_rohdaten`); derselbe Block
+landet in der Step Summary des Render-Workflows.
+
 **Emote-Posen** (`pose = "emote:<ID>"`): Die Pipeline lädt das Emote aus dem
 Roblox-Katalog und wendet exakt die Haltung an, die auch das
 Katalog-Vorschaubild zeigt – deterministisch über die Metadaten, die Roblox
