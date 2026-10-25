@@ -400,18 +400,6 @@ def bundle_items(client: HttpClient, bundle_id: int,
     return out
 
 
-def search_body_part(client: HttpClient, keyword: str,
-                     log: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-    """Katalogsuche nach einem Koerperteil (Fallback ohne Paket-Info)."""
-    log = log if log is not None else []
-    from urllib.parse import quote
-    url = ("https://catalog.roblox.com/v1/search/items/details"
-           f"?Category=BodyParts&Limit=30&Keyword={quote(keyword)}")
-    data = _catalog_json(client, url, log)
-    entries = (data or {}).get("data") if isinstance(data, dict) else None
-    return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
-
-
 def missing_body_parts(client: HttpClient, assets: List[Dict[str, Any]],
                        warnings: Optional[List[str]] = None,
                        log: Optional[List[str]] = None
@@ -448,8 +436,20 @@ def missing_body_parts(client: HttpClient, assets: List[Dict[str, Any]],
     if not fehlend or torso_asset is None:
         return []
 
-    def _type_of(asset_id: int) -> int:
-        return int(fetch_asset_details(client, asset_id).get("assetTypeId") or 0)
+    # Teile-Namen statt Typ-Abfragen: der Katalog nennt keine AssetTypeIds,
+    # und die Typ-Abfrage je Teil kostet Requests (429-Ratelimit). Der Name
+    # eines R15-Koerperteils endet immer auf Torso/Arm/Leg/Head.
+    NAME_TO_TYPE = (
+        ("Left Leg", 30), ("Right Leg", 31), ("Torso", 27),
+        ("Left Arm", 29), ("Right Arm", 28), ("Head", 17),
+    )
+
+    def _type_from_name(name: str) -> int:
+        text = (name or "").strip()
+        for suffix, type_id in NAME_TO_TYPE:
+            if text.endswith(suffix):
+                return type_id
+        return 0
 
     found: Dict[int, Dict[str, Any]] = {}
     seen: set = set()
@@ -459,52 +459,22 @@ def missing_body_parts(client: HttpClient, assets: List[Dict[str, Any]],
             bundle_id = int(bundle.get("id"))
         except (TypeError, ValueError):
             continue
-        for item in bundle_items(client, bundle_id, log):
-            if not item["id"] or item["id"] in seen or item["type"] != "Asset":
+        items = bundle_items(client, bundle_id, log)
+        log.append(f"Paket {bundle_id}: {len(items)} Teile "
+                   + ", ".join(f"{i['name']}[{i['type']}]" for i in items[:12]))
+        for item in items:
+            if not item["id"] or item["id"] in seen:
                 continue
+            type_id = _type_from_name(item["name"])
+            if not type_id:
+                type_id = int(fetch_asset_details(client, item["id"])
+                              .get("assetTypeId") or 0)
             seen.add(item["id"])
-            type_id = _type_of(item["id"])
             if type_id in fehlend and type_id not in found:
                 found[type_id] = {"id": item["id"], "name": item["name"],
                                   "asset_type_id": type_id}
         if len(found) >= len(fehlend):
             break
-
-    # 2) Katalogsuche nach dem Paketnamen (z. B. "Roblox 2.0 Left Leg").
-    if len(found) < len(fehlend):
-        torso_name = ""
-        for asset in assets or []:
-            if _asset_type_id(asset) == 27:
-                torso_name = (asset.get("name") or "").strip()
-        prefix = torso_name
-        for suffix in ("Torso", "Torso "):
-            if suffix and prefix.endswith(suffix):
-                prefix = prefix[: -len(suffix)].rstrip()
-        if prefix:
-            for type_id, label in BODY_PART_TYPE_NAMES.items():
-                if type_id not in fehlend or type_id in found:
-                    continue
-                seite_label = ("Left Leg" if label == "LeftLeg" else
-                               "Right Leg" if label == "RightLeg" else
-                               label.replace("Arm", " Arm").replace("Torso", "Torso"))
-                keywords = [f"{prefix} {seite_label}", seite_label]
-                for keyword in keywords:
-                    treffer = [e for e in search_body_part(client, keyword, log)
-                               if str(e.get("name") or "") == f"{prefix} {seite_label}"]
-                    if not treffer:
-                        continue
-                    best = treffer[0]
-                    try:
-                        aid = int(best.get("id") or 0)
-                    except (TypeError, ValueError):
-                        continue
-                    if not aid or aid in seen:
-                        continue
-                    seen.add(aid)
-                    if _type_of(aid) == type_id:
-                        found[type_id] = {"id": aid, "name": best.get("name") or "",
-                                          "asset_type_id": type_id}
-                    break
 
     result = [found[t] for t in BODY_PART_TYPE_IDS if t in found]
     if warnings is not None:
