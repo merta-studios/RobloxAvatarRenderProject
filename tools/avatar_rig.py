@@ -67,6 +67,10 @@ R15_LIMB_TOLERANCE = 0.15
 #: Ab dieser Abweichung werden linkes und rechtes Bein angeglichen (sonst
 #: steht der Avatar auf einem Bein in der Luft).
 R15_LEG_SYMMETRY_TOLERANCE = 1.05
+#: R15-Schulterlinie: 0,5 Studs unter der Oberkante bei 2 Studs Torso-Hoehe -
+#: also ein Viertel der Torso-Hoehe. Autoren-Attachments in diesem Bereich
+#: bleiben unangetastet.
+R15_SHOULDER_FRACTION_OF_TORSO = 0.25
 
 
 def _de(value: float, nd: int = 2) -> str:
@@ -1249,7 +1253,9 @@ def assemble_r15_rig(
             # 43 %, Fuss 15 % der Beinlaenge. Die Beine sind *zwei* Koerper:
             # Innenkante mit Luft zur Mitte (sonst verschmelzen sie optisch zu
             # einem Klotz), Tiefe nie groesser als der Torso.
-            fracs = (0.42, 0.43, 0.15)
+            # Echte R15-Blockmasse: Oberschenkel 0,775 / Unterschenkel 0,829 /
+            # Fuss 0,415 Studs (Summe 2,019 bei 2,0 Studs Torso-Hoehe).
+            fracs = (0.384, 0.411, 0.205)
             lw = max(0.08, 0.42 * torso_w)
             ld = max(0.08, 0.80 * torso_d)
             gap = 0.05 * torso_w
@@ -1257,7 +1263,8 @@ def assemble_r15_rig(
             foot_depth = 1.22 * ld
             foot_shift = 0.16 * ld
         else:
-            fracs = (0.44, 0.42, 0.14)
+            # Echte R15-Blockmasse: Oberarm 0,672 / Unterarm 0,703 / Hand 0,352.
+            fracs = (0.389, 0.407, 0.204)
             lw = max(0.08, 0.34 * torso_w)
             ld = max(0.08, 0.62 * torso_d)
             lx = (root[0] if abs(root[0]) > 1e-3
@@ -1279,9 +1286,9 @@ def assemble_r15_rig(
             joint_frames[name] = IDENTITY_MAT3
             y -= h
         notes.append(
-            f"Extremitaet '{part_name}': keine Mesh-Segmente im Avatar - "
-            f"Ober-/Unterglied und {'Fuss' if kind == 'leg' else 'Hand'} aus "
-            "R15-Proportionen erzeugt (kein Klotz).")
+            f"Extremitaet '{part_name}': nicht ausgeruestet - Standard-Avatar "
+            f"eingesetzt (R15-Blockkoerper aus {'Ober-/Unterschenkel und Fuss' if kind == 'leg' else 'Ober-/Unterarm und Hand'} "
+            "in Standard-Massen, kein Klotz).")
         named = [(n, placed_seg_mesh[n]) for n in names if n in placed_seg_mesh]
         merged, spans = _merge_with_spans(named)
         body_meshes[part_name] = merged
@@ -1294,26 +1301,35 @@ def assemble_r15_rig(
     torso_d = max(1e-3, t_hi[2] - t_lo[2])
 
     # --- 2a) Schulter- und Hueftlinie an der sichtbaren Torso-Geometrie ------
-    # Viele Bundles tragen RigAttachments, die relativ zur tatsaechlich
-    # gerenderten Torso-Hoehe zu tief sitzen (Bug: "Schultern sind viel zu
-    # weit nach unten gerutscht"). Roblox legt die Schulter praktisch auf die
-    # Torso-Oberkante (Standard-R15: 4 % der Hoehe darunter), die Huefte auf
-    # die Unterkante. Marker, die deutlich daneben liegen, werden gezogen -
-    # alles innerhalb des Bandes bleibt unangetastet.
+    # Autor der Wahrheit sind die RigAttachments des Torsos: Roblox montiert die
+    # Arme genau dort. Bei Standard-R15 liegt die Schulter 0,5 Studs unter der
+    # Oberkante der 2 Studs hohen Torso-Haelfte, also bei 25 % der Hoehe.
+    # Autoren-Werte in diesem Band bleiben deshalb unangetastet. Ein frueherer
+    # Eingriff zog *jede* Schulter auf 4 % unter die Oberkante und haengte die
+    # Arme damit sichtbar zu hoch ("Schultern sind zu hoch"). Nur klar
+    # unbrauchbare Marker - oberhalb der Oberkante oder tiefer als 55 % der
+    # Torso-Hoehe (dann haengen die Arme am Bauch) - werden auf die
+    # R15-Schulterlinie gezogen. Die Huefte sitzt an der Unterkante.
     def _torso_band_joint(att_name: str, kind: str, sign: float) -> None:
         att = world_atts.get(att_name)
         if att is None:
             return
         x, y, z = att[0]
         if kind == "shoulder":
-            limit = t_hi[1] - 0.25 * torso_h
-            if y < limit:
-                new_y = t_hi[1] - 0.04 * torso_h
+            # R15-Schulterlinie: 0,5 Studs unter der Oberkante bei 2 Studs
+            # Torso-Hoehe = ein Viertel der Hoehe.
+            kanonisch = t_hi[1] - R15_SHOULDER_FRACTION_OF_TORSO * torso_h
+            zu_hoch = y > t_hi[1] + 0.02 * torso_h
+            zu_tief = y < t_hi[1] - 0.55 * torso_h
+            if zu_hoch or zu_tief:
+                lage = ("ueber der Torso-Oberkante" if zu_hoch else
+                        f"{_de(t_hi[1] - y)} Studs unter der Torso-Oberkante "
+                        f"(bei {_de(torso_h)} Studs Torso-Hoehe)")
                 notes.append(
-                    f"Gelenk '{att_name}': Schulter lag {_de(t_hi[1] - y)} Studs "
-                    f"unter der Torso-Oberkante (bei {_de(torso_h)} Studs "
-                    f"Torso-Hoehe) - auf die Schulterlinie gesetzt.")
-                y = new_y
+                    f"Gelenk '{att_name}': Schulter lag {lage} - auf die "
+                    f"R15-Schulterlinie gesetzt ({_de(R15_SHOULDER_FRACTION_OF_TORSO * 100, 0)} % "
+                    "der Torso-Hoehe unter der Oberkante).")
+                y = kanonisch
             # Nicht weiter innen als 40 % der halben Torso-Breite.
             min_x = 0.40 * torso_w / 2.0
             if abs(x) < min_x:
