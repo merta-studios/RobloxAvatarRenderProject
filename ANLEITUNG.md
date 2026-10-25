@@ -274,18 +274,24 @@ Besonderheiten:
   **starr je Segment** im Frame des Eltern-Attachments angewandt.
   Erst *ohne* Attachment-Daten greift der alte senkrechte Stapel-Fallback.
 * **Motor6D-Montage (Gelenke & Nähte):** Konvertierte Bundles tragen häufig
-  frei erfundene `MeshPart.Size`-Werte und Attachments, die nicht zur Geometrie
-  passen. Roblox selbst skaliert beim Avatar-Aufbau nichts: jedes Segment
-  behält seine Mesh-Größe und hängt über `C0`/`C1` an seinem Elternteil
-  (`Kind = Eltern · C0 · C1⁻¹`). Genau so montiert die Pipeline – die Länge
-  einer Extremität ergibt sich damit aus den Meshes, nicht aus Tabellenwerten.
-  Dadurch bleiben Drehpunkte und Proportionen des Bundles erhalten (kein
-  „Schulter zu tief“, kein „Unterarm dreht um den falschen Punkt“, keine
-  gestauchten Arme). Nur echte Platzhalter werden ersetzt: ein fehlendes
-  Attachment, eines außerhalb des Meshes oder eines, das exakt auf dem
-  Elterngelenk klebt – dann wird das Gelenk an die untere Deckfläche des
-  Segments gelegt. Alle Eingriffe stehen als `Rig-Audit:`-Hinweis im Log und im
-  Manifest unter `rig_audit` (inkl. `gelenke`, `segmente`, `segment_rohdaten`).
+  `MeshPart.Size`-Werte und Attachments, die nicht zueinander passen. Roblox
+  skaliert beim Avatar-Aufbau kein einzelnes Segment: jedes hängt über
+  `C0`/`C1` an seinem Elternteil (`Kind = Eltern · C0 · C1⁻¹`). Genau so
+  montiert die Pipeline – die Gelenke sitzen damit dort, wo das Bundle sie
+  definiert („Schulter zu tief“ und „Unterarm dreht um den falschen Punkt“
+  sind damit weg), und die Naht bleibt zu.
+* **Ein Faktor pro Extremität:** Passt die ganze Extremität nicht zum
+  R15-Skelett, wird sie mit *einem* Faktor auf allen drei Achsen auf die
+  kanonische Länge gebracht (Arme: 0,869 × Torso-Höhe bis zum Handende, Beine:
+  0,874 × Torso-Höhe Hüfte → Fußgelenk). Dadurch stehen beide Füße auf dem
+  Boden, ohne dass einzelne Segmente verzerrt werden. Arme werden nur
+  verlängert, nie gestaucht; unter 15 % Abweichung bleibt alles, wie das Bundle
+  es definiert (Faktor auf 0,6–1,6 begrenzt).
+* **Platzhalter-Attachments:** Fehlt ein Marker, liegt er außerhalb des Meshes
+  oder klebt er in der Segmentmitte, wird das Gelenk an die Deckfläche des
+  Segments gelegt – sonst dreht das Kind um seine eigene Mitte. Alles steht als
+  `Rig-Audit:`-Hinweis im Log und im Manifest unter `rig_audit` (inkl.
+  `gelenke`, `segmente`, `segment_rohdaten`).
 * **CFrame-Rotationen:** Werden vollständig gelesen (explizite Matrix
   *und* die 24 Sonder-Rotationen der Binärspec) und bei Accessoires
   angewendet – ein um 90° gedrehtes Bruststück steht sonst seitlich
