@@ -84,7 +84,7 @@ drehung_grad = 0
 #
 #  d) Ausgerüstete Pose des Accounts (automatisch):
 #
-#         pose = "ausgeruestet"
+#         pose = "emote:112758073578333"
 #
 #     Die Pipeline liest die Pose, die der Account gerade trägt, direkt aus
 #     dem Avatar und wendet sie an – ohne Asset-ID im Config-File. Gesucht
@@ -105,7 +105,7 @@ drehung_grad = 0
 #     die individuell gewählte Thumbnail-Pose/Kamera – die ausgerüstete Pose
 #     lässt sich aber für jeden Account aus den getragenen Assets ableiten,
 #     weil sie dort als echte Assets gelistet sind.
-pose = "ausgeruestet"
+pose = "emote:112758073578333"
 
 
 # -----------------------------------------------------------------------------
