@@ -7,6 +7,7 @@ on:
   push:
     paths:
       - "tools/fetch_reference.py"
+      - "tools/probe_reference.py"
       - ".github/workflows/reference.yml"
   workflow_dispatch:
 
@@ -58,6 +59,7 @@ jobs:
           RBX_USER_ID="$(tail -1 /tmp/user_id)"
           echo "UserId: ${RBX_USER_ID:-0}"
           python tools/fetch_reference.py --user-id "${RBX_USER_ID:-0}" --out reference || true
+          python tools/probe_reference.py reference || true
           ls -la reference || true
 
       - name: Bericht committen
@@ -67,7 +69,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # Zu grosse OBJ-Dateien nicht ins Repo (Snapshot-Limit).
           find reference -type f -size +8M -delete
-          git add -f reference tools/fetch_reference.py
+          git add -f reference tools/fetch_reference.py tools/probe_reference.py
           if git diff --cached --quiet; then
             echo "Keine Aenderungen."
             exit 0
