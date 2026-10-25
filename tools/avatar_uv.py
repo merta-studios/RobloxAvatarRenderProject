@@ -419,16 +419,28 @@ _LIMB_RECTS = {
 }
 
 
+#: Rand, der beim Projizieren ausgespart wird. Die Gliedmassen-Vorlage hat
+#: zwischen den Abschnitten weisse Trennzeilen; ohne Rand ziehen die
+#: abgerundeten Kanten der Standard-Meshes diese Zeilen als weisse Streifen
+#: ueber die Naht.
+_LIMB_UV_MARGIN = 3.0
+
+
 def _limb_slice_rows(part_slice: str) -> Tuple[float, float, float, float]:
     """Pixel-Zeilen fuer einen Gliedmassen-Abschnitt (wie `apply_limb_box_uvs`)."""
     w, h = float(LIMB_MAP_SIZE[0]), float(LIMB_MAP_SIZE[1])
     if part_slice == "upper":
-        return w, h, 68.0, 141.0
-    if part_slice == "lower":
-        return w, h, 141.0, 214.0
-    if part_slice == "end":
-        return w, h, 214.0, 238.0
-    return w, h, 68.0, 238.0
+        y0, y1 = 68.0, 141.0
+    elif part_slice == "lower":
+        y0, y1 = 141.0, 214.0
+    elif part_slice == "end":
+        y0, y1 = 214.0, 238.0
+    else:
+        y0, y1 = 68.0, 238.0
+    m = _LIMB_UV_MARGIN
+    if y1 - y0 > 4 * m:
+        y0, y1 = y0 + m, y1 - m
+    return w, h, y0, y1
 
 
 def apply_limb_uvs_projected(mesh: MeshData, part_slice: str = "full") -> MeshData:
@@ -452,7 +464,8 @@ def apply_limb_uvs_projected(mesh: MeshData, part_slice: str = "full") -> MeshDa
 
     def _quad_uv(rect, s: float, t: float) -> Tuple[float, float]:
         x0, x1 = rect
-        corners = _quad_uv_from_px(tex_w, tex_h, x0, y0, x1, y1)
+        m = _LIMB_UV_MARGIN
+        corners = _quad_uv_from_px(tex_w, tex_h, x0 + m, y0, x1 - m, y1)
         (ul, vb), (ur, _vb2), (_ur2, vt) = corners[0], corners[1], corners[2]
         return (ul + s * (ur - ul), vb + t * (vt - vb))
 
@@ -489,8 +502,10 @@ def apply_limb_uvs_projected(mesh: MeshData, part_slice: str = "full") -> MeshDa
         else:            # +/-Y
             x0, x1 = top_rect if sign > 0 else bottom_rect
             py0, py1 = top_rows if sign > 0 else bottom_rows
+            m = _LIMB_UV_MARGIN
             for q in p:
-                corners = _quad_uv_from_px(tex_w, tex_h, x0, py0, x1, py1)
+                corners = _quad_uv_from_px(tex_w, tex_h, x0 + m, py0 + m,
+                                           x1 - m, py1 - m)
                 s = (q[0] - lo[0]) / span_x
                 t = (q[2] - lo[2]) / span_z
                 (ul, vb) = corners[0]
