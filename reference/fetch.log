@@ -1,1 +1,29 @@
 /home/runner/work/_temp/68f89bfa-1fcc-45b7-820c-cb16c9d42381.sh: line 18: UID: readonly variable
+UserId: 9767435332
+[1/2] R15-Block-Meshes des Standard-Avatars ...
+  ! LowerTorso: Kein FileMesh-Header ('version X.YY') gefunden
+  ! UpperTorso: Kein FileMesh-Header ('version X.YY') gefunden
+  ! Head: Kein FileMesh-Header ('version X.YY') gefunden
+  ! LeftUpperArm: Kein FileMesh-Header ('version X.YY') gefunden
+  ! LeftLowerArm: Kein FileMesh-Header ('version X.YY') gefunden
+  ! LeftHand: Kein FileMesh-Header ('version X.YY') gefunden
+  ! RightUpperArm: Kein FileMesh-Header ('version X.YY') gefunden
+  ! RightLowerArm: Kein FileMesh-Header ('version X.YY') gefunden
+  ! RightHand: Kein FileMesh-Header ('version X.YY') gefunden
+  ! LeftUpperLeg: Kein FileMesh-Header ('version X.YY') gefunden
+  ! LeftLowerLeg: Kein FileMesh-Header ('version X.YY') gefunden
+  ! LeftFoot: Kein FileMesh-Header ('version X.YY') gefunden
+  ! RightUpperLeg: Kein FileMesh-Header ('version X.YY') gefunden
+  ! RightLowerLeg: Kein FileMesh-Header ('version X.YY') gefunden
+  ! RightFoot: Kein FileMesh-Header ('version X.YY') gefunden
+[2/2] Roblox-3D-Render des Avatars (Ground Truth) ...
+  . https://thumbnails.roblox.com/v1/users/avatar-3d -> HTTP 403
+  . https://thumbnails.roblox.com/v1/users/avatar -> HTTP 400
+
+Bericht: reference/report.json
+total 20
+drwxr-xr-x 3 runner runner 4096 Oct 25 11:38 .
+drwxr-xr-x 8 runner runner 4096 Oct 25 11:38 ..
+-rw-r--r-- 1 runner runner 1330 Oct 25 11:38 fetch.log
+drwxr-xr-x 2 runner runner 4096 Oct 25 11:38 meshes
+-rw-r--r-- 1 runner runner 2514 Oct 25 11:38 report.json
