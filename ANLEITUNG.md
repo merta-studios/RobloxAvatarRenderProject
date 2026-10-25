@@ -277,21 +277,29 @@ Besonderheiten:
   `MeshPart.Size`-Werte und Attachments, die nicht zueinander passen. Roblox
   skaliert beim Avatar-Aufbau kein einzelnes Segment: jedes hängt über
   `C0`/`C1` an seinem Elternteil (`Kind = Eltern · C0 · C1⁻¹`). Genau so
-  montiert die Pipeline – die Gelenke sitzen damit dort, wo das Bundle sie
-  definiert („Schulter zu tief“ und „Unterarm dreht um den falschen Punkt“
-  sind damit weg), und die Naht bleibt zu.
-* **Ein Faktor pro Extremität:** Passt die ganze Extremität nicht zum
-  R15-Skelett, wird sie mit *einem* Faktor auf allen drei Achsen auf die
-  kanonische Länge gebracht (Arme: 0,869 × Torso-Höhe bis zum Handende, Beine:
-  0,874 × Torso-Höhe Hüfte → Fußgelenk). Dadurch stehen beide Füße auf dem
-  Boden, ohne dass einzelne Segmente verzerrt werden. Arme werden nur
-  verlängert, nie gestaucht; unter 15 % Abweichung bleibt alles, wie das Bundle
-  es definiert (Faktor auf 0,6–1,6 begrenzt).
+  montiert die Pipeline – Drehpunkte und Nähte stimmen damit.
+* **Schulter- und Hüftlinie:** Sitzt ein `*ShoulderRigAttachment` mehr als ein
+  Viertel der Torso-Höhe unter der Torso-Oberkante („Schultern viel zu weit
+  unten“), wird es auf die Schulterlinie (4 % unter der Oberkante) gezogen;
+  Hüften entsprechend an die Unterkante. Alles innerhalb des Bandes bleibt
+  unangetastet.
+* **Fehlende Körperteile:** Trägt der Avatar nur einen Teil eines Körperpakets
+  (z. B. Torso und Arme), werden die fehlenden Teile aus demselben Paket
+  nachgeladen (`catalog.roblox.com/v1/assets/{id}/bundles` →
+  `bundles/{id}/details`, Zuordnung über die Teile-Namen). So kommen echte
+  Bein-Meshes statt Quader. Schlägt die Abfrage fehl, entstehen R15-Quader in
+  Proportionen (Ober-/Unterschenkel plus Fuß mit Überstand) – niemals ein
+  einzelner Klotz.
+* **Beinlänge:** Beine behalten die Länge ihres Bundles. Weichen linkes und
+  rechtes Bein um mehr als 5 % voneinander ab, wird das kürzere mit einem
+  Faktor auf allen Achsen angeglichen (kein Verzerren, beide Füße auf dem
+  Boden). Arme werden nur verlängert, nie gestaucht.
 * **Platzhalter-Attachments:** Fehlt ein Marker, liegt er außerhalb des Meshes
   oder klebt er in der Segmentmitte, wird das Gelenk an die Deckfläche des
   Segments gelegt – sonst dreht das Kind um seine eigene Mitte. Alles steht als
   `Rig-Audit:`-Hinweis im Log und im Manifest unter `rig_audit` (inkl.
-  `gelenke`, `segmente`, `segment_rohdaten`).
+  `gelenke`, `segmente`, `segment_rohdaten`), ergänzt um `assets` (alle
+  getragenen Assets) und `koerperpaket_abfragen`.
 * **CFrame-Rotationen:** Werden vollständig gelesen (explizite Matrix
   *und* die 24 Sonder-Rotationen der Binärspec) und bei Accessoires
   angewendet – ein um 90° gedrehtes Bruststück steht sonst seitlich
