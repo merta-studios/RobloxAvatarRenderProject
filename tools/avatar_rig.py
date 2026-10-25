@@ -736,96 +736,11 @@ def _scale_part_local(
     return local_mesh, local_atts, transparent
 
 
-#: Kanonische R15-Proportionen (Roblox "Rig and Attachments"). Konvertierte
-#: Bundles tragen oft frei erfundene MeshPart-Groessen und Attachments mitten
-#: im Mesh; ohne diese Referenz haengen die Glieder uebereinander statt
-#: aneinander (Bug-Report: "Schulter zu tief, Unterarm falscher Drehpunkt").
-R15_SHOULDER_BELOW_TORSO_TOP = 0.237   # Studs bei 2 Studs hohem Torso
-R15_ARM_LENGTH_PER_TORSO_HEIGHT = 0.869  # Schulter -> Handende / Torso-Hoehe
-R15_ELBOW_FRACTION_OF_ARM = 0.419
-R15_WRIST_FRACTION_OF_ARM = 0.856
-R15_KNEE_FRACTION_OF_LEG = 0.411
-R15_ANKLE_FRACTION_OF_LEG = 0.874
-#: Wie stark ein Segment gestaucht/gestreckt werden darf, um zwischen seine
-#: beiden Gelenke zu passen (danach ueberlappt es bewusst leicht, statt zu
-#: zerreissen).
-R15_MIN_SEGMENT_SCALE = 0.30
-R15_MAX_SEGMENT_SCALE = 2.60
-
-
-def _de(value: float, nd: int = 2) -> str:
-    """Zahl in deutscher Schreibweise (5.496 -> "5,50")."""
-    return f"{float(value):.{nd}f}".replace(".", ",")
-
-
 def _normalize(v: Tuple[float, float, float]) -> Tuple[float, float, float]:
     length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) ** 0.5
     if length < 1e-12:
         return v
     return (v[0] / length, v[1] / length, v[2] / length)
-
-
-def _segment_between_joints(
-    mesh: MeshData,
-    frame_rot: Matrix3,
-    proximal: Tuple[float, float, float],
-    distal: Tuple[float, float, float],
-) -> MeshData:
-    """Setzt ein R15-Segment exakt zwischen zwei Gelenke.
-
-    Das Mesh wird im Gelenk-Frame ausgerichtet (``frame_rot``: Eltern-
-    Attachment, ``-Y`` zeigt zum naechsten Gelenk), entlang der Glied-Achse
-    auf den Gelenkabstand gestaucht/gestreckt, mit seiner *proximalen* Kante
-    auf ``proximal`` gesetzt und quer zur Achse auf ``distal`` zentriert.
-    Damit ist die Naht zwangslaeufig zu - unabhaengig davon, welche Groesse
-    das Bundle fuer den MeshPart angibt.
-    """
-    span = ((distal[0] - proximal[0]) ** 2 + (distal[1] - proximal[1]) ** 2
-            + (distal[2] - proximal[2]) ** 2) ** 0.5
-    inv = _mat3_transpose(frame_rot)
-    local = [_mat3_vec(inv, p) for p in mesh.positions]
-    if not local:
-        return mesh
-    ts = [-p[1] for p in local]
-    t_lo, t_hi = min(ts), max(ts)
-    extent = max(1e-6, t_hi - t_lo)
-    # Nur entlang der Glied-Achse auf den Gelenkabstand bringen (Breite und
-    # Tiefe bleiben unangetastet) - so behaelt das Teil seine Proportionen
-    # quer zur Achse und die Innenkante bleibt am Torso.
-    scale = span / extent
-    scale = min(max(scale, R15_MIN_SEGMENT_SCALE), R15_MAX_SEGMENT_SCALE)
-    # Quer zur Glied-Achse auf das *distale* Gelenk zentrieren: in R15 sitzt
-    # die Schulter an der Innenkante des Oberarms, der Arm selbst aber auf
-    # der Ellbogen-Linie (0,5 Studs weiter aussen). Die Mesh-Origins der
-    # Bundles sind ohnehin beliebig verschoben.
-    delta_local = _mat3_vec(inv, (distal[0] - proximal[0],
-                                  distal[1] - proximal[1],
-                                  distal[2] - proximal[2]))
-    xs = [p[0] for p in local]
-    zs = [p[2] for p in local]
-    cx = (min(xs) + max(xs)) / 2.0 - delta_local[0]
-    cz = (min(zs) + max(zs)) / 2.0 - delta_local[2]
-    positions = []
-    for p, t in zip(local, ts):
-        placed = (p[0] - cx, -scale * (t - t_lo), p[2] - cz)
-        world = _mat3_vec(frame_rot, placed)
-        positions.append((world[0] + proximal[0], world[1] + proximal[1],
-                          world[2] + proximal[2]))
-    normals = []
-    if len(mesh.normals) == len(mesh.positions):
-        for n in mesh.normals:
-            nl = _mat3_vec(inv, n)
-            normals.append(_normalize(_mat3_vec(
-                frame_rot, (nl[0], nl[1] / max(scale, 1e-6), nl[2]))))
-    return MeshData(
-        positions=positions,
-        normals=normals,
-        uvs=list(mesh.uvs),
-        faces=list(mesh.faces),
-        colors=list(mesh.colors) if mesh.colors else None,
-        source_version=mesh.source_version,
-        skinning=mesh.skinning,
-    )
 
 
 def _dot(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> float:
@@ -900,36 +815,6 @@ def _distal_point_local(mesh: MeshData, joint_rot: Matrix3,
     """Gegenstueck zu :func:`_proximal_point_local` (untere Deckflaeche)."""
     up_local = _mat3_vec(_mat3_transpose(joint_rot), up_world)
     return _face_center(mesh, (-up_local[0], -up_local[1], -up_local[2]))
-
-
-def _attachment_near_face(mesh: MeshData,
-                          position: Tuple[float, float, float],
-                          placed_rot: Matrix3,
-                          face: str = "top") -> bool:
-    """Liegt das Attachment auf der erwarteten Seite des Segments?
-
-    ``face="top"``: das Gelenk sitzt am oberen Ende (Kind-Attachment des
-    Eltern-Gelenks), ``face="bottom"``: am unteren. Konvertierte Bundles
-    tragen oft Platzhalter ``(0,0,0)`` - das liegt in der Teilmitte und
-    liesse das Segment zur Haelfte im Nachbarglied stecken (Drehpunkt
-    mitten im Teil, Naht ueberlappt). Bewusst tolerant: nur die *falsche*
-    Haelfte bzw. exakt die Mitte wird verworfen.
-    """
-    if mesh.is_empty:
-        return False
-    axis_local = _mat3_vec(_mat3_transpose(placed_rot), (0.0, 1.0, 0.0))
-    length = _dot(axis_local, axis_local) ** 0.5
-    if length < 1e-9:
-        return True
-    direction = (axis_local[0] / length, axis_local[1] / length,
-                 axis_local[2] / length)
-    values = [_dot(p, direction) for p in mesh.positions]
-    center = (max(values) + min(values)) / 2.0
-    value = _dot(position, direction)
-    tol = max(1e-6, 0.02 * (max(values) - min(values)))
-    if face == "bottom":
-        return value < center - tol
-    return value > center + tol
 
 
 def _attachment_is_plausible(mesh: MeshData,
@@ -1047,16 +932,16 @@ def assemble_r15_rig(
         mesh, atts, _transparent = seg_lookup[seg_name]
         own = atts.get(att_name)
         child_rot = own[1] if own is not None else IDENTITY_MAT3
-        placed_rot = _mat3_mul(parent_att[1], _mat3_transpose(child_rot))
-        if own is not None and _attachment_is_plausible(mesh, own[0]) and \
-                _attachment_near_face(mesh, own[0], placed_rot, face):
+        # Authored Attachments werden uebernommen, solange sie ueberhaupt am
+        # Mesh liegen. Bewusst *nicht* geprueft, ob sie "weit genug oben"
+        # sitzen: Bundles wie der Korblox-Arm haben ihre Schulter bewusst
+        # unterhalb der Mesh-Mitte (Schulterplatte/Stacheln darueber). Ein
+        # solcher Marker ist gueltig - ihn zu verwerfen hat den Arm um
+        # 1,7 Studs nach unten verschoben.
+        if own is not None and _attachment_is_plausible(mesh, own[0]):
             return own
-        if own is None:
-            reason = "fehlt"
-        elif not _attachment_is_plausible(mesh, own[0]):
-            reason = "liegt ausserhalb des Meshes"
-        else:
-            reason = "liegt mitten im Segment (Platzhalter)"
+        reason = "fehlt" if own is None else "liegt ausserhalb des Meshes"
+        placed_rot = _mat3_mul(parent_att[1], _mat3_transpose(child_rot))
         notes.append(
             f"Segment '{seg_name}': Attachment '{att_name}' {reason} - "
             "Anschluss aus der Mesh-Geometrie abgeleitet (Naht bleibt zu).")
@@ -1083,31 +968,18 @@ def assemble_r15_rig(
         placed = placed_seg_mesh.get(seg_name)
         att = world_atts.get(att_name)
         if placed is not None:
-            # Welt-"oben" des Gelenk-Frames: R15-Attachments zeigen mit +Y
-            # nach oben, das Glied laeuft nach -Y.
-            up = _mat3_vec(parent_att[1], (0.0, 1.0, 0.0))
-            projections = [_dot(p, up) for p in placed.positions]
-            extent = max(projections) - min(projections) if projections else 0.0
-            center = (max(projections) + min(projections)) / 2.0 if projections else 0.0
+            extent = max(placed.size()) if not placed.is_empty else 0.0
             if att is not None:
                 span = _dist3(att[0], parent_att[0])
-                joint_proj = _dot(att[0], up)
-                too_close = span < max(0.02, 0.25 * extent)
-                # Ein Gelenk, das nicht unterhalb der Segmentmitte liegt, ist
-                # ein Platzhalter (z. B. (0,0,0) bei konvertierten Bundles) -
-                # damit wuerde der Unterarm mitten im Oberarm drehen.
-                above_center = joint_proj > center - 0.10 * extent
-                # Wichtig fuer konvertierte Bundles: liegt das Gelenk gar
-                # nicht am Segment (Attachment fuer eine andere Mesh-Skalierung
-                # authored), klafft zwischen Ober- und Unterglied eine Luecke.
-                # Dann auf die tatsaechliche Unterkante setzen.
+                # Nur echte Platzhalter ersetzen: ein Gelenk, das praktisch
+                # auf dem Elterngelenk klebt (gleicher Punkt) oder gar nicht
+                # am Segment liegt. Alles andere ist authored und wird
+                # uebernommen - Roblox montiert genauso.
+                too_close = span < max(0.02, 0.10 * extent)
                 off_mesh = not _attachment_is_plausible(placed, att[0])
-                if too_close or above_center or off_mesh:
-                    reason = ("liegt ausserhalb des Segments"
-                              if off_mesh and not too_close and not above_center
-                              else ("liegt mitten im Segment"
-                                    if above_center and not too_close
-                                    else "liegt zu nah am Elterngelenk"))
+                if too_close or off_mesh:
+                    reason = ("liegt ausserhalb des Segments" if off_mesh
+                              else "liegt auf dem Elterngelenk")
                     notes.append(
                         f"Gelenk '{att_name}' {reason} (Platzhalter-Attachment) - "
                         "an die Segment-Unterkante gesetzt.")
@@ -1178,161 +1050,53 @@ def assemble_r15_rig(
 
     body_meshes: Dict[str, MeshData] = {"torso": torso_mesh}
 
-    # 2) Arme und Beine: R15-Retargeting auf kanonische Gelenke.
-    #    Warum nicht einfach die Attachments uebernehmen? Bei konvertierten
-    #    Bundles stimmen die MeshPart-Groessen oft nicht (ein Oberarm mit 2,6
-    #    statt 1,0 Studs, ein Oberschenkel mit 0,31 Studs Breite) und die
-    #    Attachments liegen mitten im Mesh. Uebernimmt man das, haengen die
-    #    Glieder uebereinander ("Schulter zu tief") und die Drehpunkte sitzen
-    #    falsch ("Unterarm dreht um die Teilmitte"). Roblox selbst baut jeden
-    #    Avatar auf das kanonische R15-Raster - genau das passiert hier:
-    #      * Gelenke kanonisch aus den Torso-Massen (Schulter-/Hueftlinie aus
-    #        den Torso-Attachments, Arm 41,9 % / 85,6 %, Bein 41,1 % / 87,4 %),
-    #      * jedes Segment exakt zwischen seine beiden Gelenke gelegt, mit
-    #        seiner authored Orientierung und Seitenlage (Innenkante am Torso).
-    t_lo, t_hi = torso_mesh.bbox()
-    torso_h = max(1e-3, t_hi[1] - t_lo[1])
-    torso_w = max(1e-3, t_hi[0] - t_lo[0])
-    shoulder_line_y = t_hi[1] - R15_SHOULDER_BELOW_TORSO_TOP * (torso_h / 2.0)
-    arm_len = R15_ARM_LENGTH_PER_TORSO_HEIGHT * torso_h
-
-    def _chain_matches_canonical(
-        chain: List[Tuple[str, str]],
-        root_att: Tuple[Tuple[float, float, float], Matrix3],
-        canonical: List[Tuple[float, float, float]],
-    ) -> bool:
-        """Gelenkpunkte aus den Attachments - nur wenn sie plausibel sind.
-
-        Ein Segment traegt sein Eltern-Gelenk (z. B. ``LeftElbowRigAttachment``)
-        und sein eigenes (``LeftShoulderRigAttachment``); die Differenz beider
-        Positionen ist der Glied-Abschnitt. Liegt ein Attachment ausserhalb des
-        Meshes (konvertierte Bundles) oder weicht der Abschnitt stark von der
-        kanonischen R15-Proportion ab, wird die ganze Kette kanonisch gesetzt -
-        eine halb gemischte Kette waere wieder verschoben.
-        """
-        frame = root_att[1]
-        parent = root_att[0]
-        for index, (seg_name, att_name) in enumerate(chain[:-1]):
-            if seg_name not in seg_lookup:
-                return False
-            mesh_s, atts_s, _tr = seg_lookup[seg_name]
-            # Beide Marker liegen auf DIESEM Segment: das proximale Gelenk
-            # (z. B. LeftShoulderRigAttachment) und das distale
-            # (LeftElbowRigAttachment). Ihre Differenz ist der Glied-Abschnitt.
-            proximal = atts_s.get(att_name)
-            distal = atts_s.get(chain[index + 1][1])
-            if proximal is None or distal is None:
-                return False
-            if not (_attachment_is_plausible(mesh_s, proximal[0])
-                    and _attachment_is_plausible(mesh_s, distal[0])):
-                return False
-            delta = (distal[0][0] - proximal[0][0],
-                     distal[0][1] - proximal[0][1],
-                     distal[0][2] - proximal[0][2])
-            world_delta = _mat3_vec(frame, delta)
-            point = (parent[0] + world_delta[0], parent[1] + world_delta[1],
-                     parent[2] + world_delta[2])
-            span = (world_delta[0] ** 2 + world_delta[1] ** 2
-                    + world_delta[2] ** 2) ** 0.5
-            canonical_span = ((canonical[index + 1][0] - canonical[index][0]) ** 2
-                              + (canonical[index + 1][1] - canonical[index][1]) ** 2
-                              + (canonical[index + 1][2] - canonical[index][2]) ** 2) ** 0.5
-            if canonical_span > 1e-6 and not (
-                    0.70 <= span / canonical_span <= 1.75):
-                return False
-            # Ein Segment, das mehr als das Doppelte seines Gelenkabstands
-            # einnimmt (z. B. ein 2,6-Studs-"Oberarm" bei 1,17 Studs
-            # Gelenkabstand), ist im Bundle falsch skaliert: dann wird die
-            # Kette auf das R15-Raster gesetzt, statt den Arm zu strecken.
-            mesh_h = mesh_s.size()[1]
-            if mesh_h > 2.2 * max(span, 1e-6) or mesh_h < 0.55 * max(span, 1e-6):
-                return False
-            parent = point
-        return True
-
-    def _limb_chain(
+    # 2) Arme und Beine: exakte Motor6D-Montage ueber die RigAttachments.
+    #    Roblox skaliert beim Avatar-Aufbau NICHTS: jedes Segment behaelt
+    #    seine Mesh-Groesse, und die Gelenke liegen exakt auf den
+    #    Attachments (kind_world = eltern_world * C0 * C1^-1). Genau so wird
+    #    hier montiert. Ein frueherer Versuch, die Segmente zusaetzlich
+    #    "zwischen kanonische Gelenke einzupassen", hat die Arme gestaucht
+    #    und nach unten geschoben - deshalb gibt es keine Skalierung mehr.
+    #    Nur fehlende bzw. echte Platzhalter-Attachments (Punkt im Nichts
+    #    oder direkt auf dem Elterngelenk) werden aus der Geometrie ersetzt.
+    def _mount_chain(
         part_name: str,
-        side: str,
-        sign: float,
-        joint_axis: str,
         chain: List[Tuple[str, str]],
         root_att: Tuple[Tuple[float, float, float], Matrix3],
-        joint_points: List[Tuple[float, float, float]],
+        inward_world: Optional[Tuple[float, float, float]],
         fallback_box: Tuple[float, float, float],
         fallback_center: Tuple[float, float, float],
-        authored: bool = False,
     ) -> None:
-        """Haengt die vorhandenen Segmente einer Extremitaet an die Gelenke."""
+        """Haengt die vorhandenen Segmente einer Extremitaet aneinander."""
         names = [name for name, _att in chain]
         if any(name in seg_lookup for name in names):
-            frame = root_att[1]
-            if authored:
-                # Kanonisch stimmiges Bundle: exakte Motor6D-Montage wie
-                # Roblox (Attachments koinzidieren in Position *und*
-                # Orientierung, kein Retargeting noetig).
-                parent_att = root_att
-                for index, (seg_name, att_name) in enumerate(chain):
-                    if index > 0:
-                        joint_pos[seg_name] = parent_att[0]
-                        joint_frames[seg_name] = parent_att[1]
-                    if seg_name in seg_lookup:
-                        rot_s, origin_s = _attach_placement(
-                            parent_att,
-                            _chain_child_attachment(seg_name, att_name, parent_att))
-                        mesh_s, atts_s, tr_s = seg_lookup[seg_name]
-                        register_segment(seg_name, mesh_s, atts_s, origin_s,
-                                         rot_s, not tr_s)
-                        segment_driver[seg_name] = seg_name
-                        if index + 1 < len(chain):
-                            parent_att = _chain_next_joint(
-                                seg_name, chain[index + 1][1], parent_att)
-                named = [(n, placed_seg_mesh[n]) for n in names
-                         if n in placed_seg_mesh and placed_seg_vis[n]]
-                merged, spans = _merge_with_spans(named)
-                body_meshes[part_name] = merged
-                segment_spans[part_name] = spans
-                return
-            notes.append(
-                f"Koerperteil '{part_name}': die Gelenk-Attachments des "
-                "Bundles passen nicht zum kanonischen R15-Raster (fehlend, "
-                "ausserhalb des Meshes oder falsche Proportion) - Gelenke "
-                "auf die R15-Positionen gesetzt und die Segmente dazwischen "
-                "eingepasst.")
+            parent_att = root_att
             for index, (seg_name, att_name) in enumerate(chain):
                 if index > 0:
-                    joint_pos[seg_name] = joint_points[index]
-                    joint_frames[seg_name] = frame
-                if seg_name not in seg_lookup:
-                    continue
-                mesh_s, atts_s, tr_s = seg_lookup[seg_name]
-                # Orientierung des Segments: Eltern-Gelenk * eigenes Attachment
-                # (Roblox: C0 * C1^-1). So bleibt eine schraeg modellierte
-                # Bind-Pose erhalten, statt das Glied gerade zu biegen.
-                own = atts_s.get(att_name)
-                seg_rot = frame
-                if own is not None:
-                    seg_rot = _mat3_mul(frame, _mat3_transpose(own[1]))
-                distal = (joint_points[index + 1]
-                          if index + 1 < len(joint_points)
-                          else joint_points[index])
-                dx = distal[0] - joint_points[index][0]
-                dy = distal[1] - joint_points[index][1]
-                dz = distal[2] - joint_points[index][2]
-                span = (dx * dx + dy * dy + dz * dz) ** 0.5
-                placed = _segment_between_joints(
-                    mesh_s, seg_rot, joint_points[index], distal)
-                placed_seg_mesh[seg_name] = placed
-                placed_seg_vis[seg_name] = not tr_s
-                seg_mesh_size = mesh_s.size()
-                if span > 1e-6 and not (0.75 <= seg_mesh_size[1] / span <= 1.45):
-                    notes.append(
-                        f"Segment '{seg_name}': Mesh-Hoehe "
-                        f"{_de(seg_mesh_size[1])} Studs passt nicht zum "
-                        f"Gelenkabstand {_de(span)} Studs (Bundle-Groesse) - "
-                        "auf den Gelenkabstand gesetzt, damit die Naht zu "
-                        "bleibt.")
-                joint_spans[att_name if index else f"{side}ShoulderRigAttachment"] = span
-                segment_driver[seg_name] = seg_name
+                    joint_pos[seg_name] = parent_att[0]
+                    joint_frames[seg_name] = parent_att[1]
+                if seg_name in seg_lookup:
+                    rot_s, origin_s = _attach_placement(
+                        parent_att,
+                        _chain_child_attachment(
+                            seg_name, att_name, parent_att,
+                            inward_world=inward_world if index == 0 else None))
+                    mesh_s, atts_s, tr_s = seg_lookup[seg_name]
+                    register_segment(seg_name, mesh_s, atts_s, origin_s, rot_s,
+                                     not tr_s)
+                    segment_driver[seg_name] = seg_name
+                    if index + 1 < len(chain):
+                        parent_att = _chain_next_joint(
+                            seg_name, chain[index + 1][1], parent_att)
+                elif index + 1 < len(chain):
+                    # Segment fehlt: naechstes Gelenk ans Ende des letzten
+                    # vorhandenen Segments legen (kein Pivot im Nichts).
+                    previous = next((n for n, _a in reversed(chain[:index])
+                                     if n in placed_seg_mesh), None)
+                    if previous is not None:
+                        joint_pos[chain[index + 1][0]] = _face_center(
+                            placed_seg_mesh[previous], (0.0, -1.0, 0.0))
+                        joint_frames.setdefault(chain[index + 1][0], parent_att[1])
             named = [(n, placed_seg_mesh[n]) for n in names
                      if n in placed_seg_mesh and placed_seg_vis[n]]
             merged, spans = _merge_with_spans(named)
@@ -1343,83 +1107,49 @@ def assemble_r15_rig(
         aw, ah, ad = fallback_box
         cx, cy, cz = fallback_center
         body_meshes[part_name] = apply_limb_box_uvs(make_box(aw, ah, ad, (cx, cy, cz)))
+        step = ah / max(1, len(names))
         for index, name in enumerate(names):
-            joint_pos[name] = joint_points[index] if index < len(joint_points) else (cx, cy, cz)
+            joint_pos[name] = (cx, cy + ah / 2.0 - index * step, cz)
             joint_frames[name] = IDENTITY_MAT3
 
+    t_lo, t_hi = torso_mesh.bbox()
+    torso_w = max(1e-3, t_hi[0] - t_lo[0])
     for part_name, side, sign in (("rechts_arm", "Right", 1.0), ("links_arm", "Left", -1.0)):
         u_name, l_name, h_name = f"{side}UpperArm", f"{side}LowerArm", f"{side}Hand"
         shoulder_att = world_atts.get(
             f"{side}ShoulderRigAttachment",
-            ((sign * torso_w / 2.0, shoulder_line_y, 0.0), IDENTITY_MAT3))
-        axis = _normalize(_mat3_vec(shoulder_att[1], (0.0, -1.0, 0.0)))
-
-        # Kanonisch sitzt nur das Schultergelenk an der Torso-Kante; Ellbogen,
-        # Handgelenk und Handende liegen auf der Armmitte (0,5 Studs weiter
-        # aussen), sonst schlaegt der Arm beim Beugen eine Kurve.
-        lateral = _mat3_vec(shoulder_att[1], (sign * 0.5 * sw, 0.0, 0.0))
-
-        def _down(fraction: float, outward: float = 1.0) -> Tuple[float, float, float]:
-            return (shoulder_att[0][0] + axis[0] * arm_len * fraction
-                    + lateral[0] * outward,
-                    shoulder_att[0][1] + axis[1] * arm_len * fraction
-                    + lateral[1] * outward,
-                    shoulder_att[0][2] + axis[2] * arm_len * fraction
-                    + lateral[2] * outward)
-
-        arm_points = [shoulder_att[0],
-                      _down(R15_ELBOW_FRACTION_OF_ARM),
-                      _down(R15_WRIST_FRACTION_OF_ARM),
-                      _down(1.0)]
-        joint_pos[u_name] = arm_points[0]
+            ((sign * torso_w / 2.0, t_hi[1] - 0.2 * (t_hi[1] - t_lo[1]) / 2.0, 0.0),
+             IDENTITY_MAT3))
+        joint_pos[u_name] = shoulder_att[0]
         joint_frames[u_name] = shoulder_att[1]
-        arm_chain = [(u_name, f"{side}ShoulderRigAttachment"),
-                     (l_name, f"{side}ElbowRigAttachment"),
-                     (h_name, f"{side}WristRigAttachment")]
-        arm_authored = _chain_matches_canonical(arm_chain, shoulder_att, arm_points)
-        _limb_chain(part_name, side, sign, "arm", arm_chain,
-                    shoulder_att, arm_points,
-                    (1.0 * sw, 2.0 * sh, 1.0 * sd),
-                    (sign * (torso_w / 2.0 + 0.5 * sw), shoulder_att[0][1] - sh,
-                     shoulder_att[0][2]),
-                    authored=arm_authored)
-        world_atts.setdefault(f"{side}ShoulderAttachment",
-                              ((arm_points[1][0], arm_points[1][1] + 0.2, arm_points[1][2]),
-                               shoulder_att[1]))
-        world_atts.setdefault(f"{side}GripAttachment",
-                              (arm_points[3], shoulder_att[1]))
+        _mount_chain(
+            part_name,
+            [(u_name, f"{side}ShoulderRigAttachment"),
+             (l_name, f"{side}ElbowRigAttachment"),
+             (h_name, f"{side}WristRigAttachment")],
+            shoulder_att,
+            (-sign, 0.0, 0.0),
+            (1.0 * sw, 2.0 * sh, 1.0 * sd),
+            (sign * (torso_w / 2.0 + 0.5 * sw), shoulder_att[0][1] - sh,
+             shoulder_att[0][2]))
 
-    # 3) Beine: Huefte aus dem LowerTorso-Attachment, Knie/Fussgelenk kanonisch.
+    # 3) Beine (Hip -> Knee -> Ankle), gleiche Montage wie die Arme.
     for part_name, side, sign in (("rechts_bein", "Right", 1.0), ("links_bein", "Left", -1.0)):
         u_name, l_name, f_name = f"{side}UpperLeg", f"{side}LowerLeg", f"{side}Foot"
         hip_att = world_atts.get(
             f"{side}HipRigAttachment",
             ((sign * 0.5 * sw, t_lo[1], 0.0), IDENTITY_MAT3))
-        axis = _normalize(_mat3_vec(hip_att[1], (0.0, -1.0, 0.0)))
-        # Kanonisch ist das Bein genauso lang wie der Torso hoch ist
-        # (Huefte an der Torso-Unterkante, Fusssohle 2,0 Studs tiefer).
-        leg_len = max(0.4, torso_h)
-
-        def _down_leg(fraction: float) -> Tuple[float, float, float]:
-            return (hip_att[0][0] + axis[0] * leg_len * fraction,
-                    hip_att[0][1] + axis[1] * leg_len * fraction,
-                    hip_att[0][2] + axis[2] * leg_len * fraction)
-
-        leg_points = [hip_att[0],
-                      _down_leg(R15_KNEE_FRACTION_OF_LEG),
-                      _down_leg(R15_ANKLE_FRACTION_OF_LEG),
-                      _down_leg(1.0)]
-        joint_pos[u_name] = leg_points[0]
+        joint_pos[u_name] = hip_att[0]
         joint_frames[u_name] = hip_att[1]
-        leg_chain = [(u_name, f"{side}HipRigAttachment"),
-                     (l_name, f"{side}KneeRigAttachment"),
-                     (f_name, f"{side}AnkleRigAttachment")]
-        leg_authored = _chain_matches_canonical(leg_chain, hip_att, leg_points)
-        _limb_chain(part_name, side, sign, "leg", leg_chain,
-                    hip_att, leg_points,
-                    (1.0 * sw, 2.0 * sh, 1.0 * sd),
-                    (sign * 0.5 * sw, hip_att[0][1] - sh, hip_att[0][2]),
-                    authored=leg_authored)
+        _mount_chain(
+            part_name,
+            [(u_name, f"{side}HipRigAttachment"),
+             (l_name, f"{side}KneeRigAttachment"),
+             (f_name, f"{side}AnkleRigAttachment")],
+            hip_att,
+            None,
+            (1.0 * sw, 2.0 * sh, 1.0 * sd),
+            (sign * 0.5 * sw, hip_att[0][1] - sh, hip_att[0][2]))
 
     # 4) Kopf (NeckRigAttachment) + dezenter Halskern
     neck_att = world_atts.get("NeckRigAttachment", ((0.0, torso_mesh.bbox()[1][1], 0.0), IDENTITY_MAT3))

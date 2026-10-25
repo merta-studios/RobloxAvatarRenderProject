@@ -95,20 +95,19 @@ def test_arm_ohne_attachments_haengt_nahtlos_am_torso():
 
     # Innenkante exakt am Torso-Rand (kein Loch, kein Hineinragen).
     assert hi[0] == pytest.approx(-1.0, abs=1e-3)
-    # Volle kanonische Armlaenge: Torso 2,0 -> Arm 1,76 Studs, lueckenlos.
-    arm_len = avatar_rig.R15_ARM_LENGTH_PER_TORSO_HEIGHT * 2.0
+    # Die Segmente behalten ihre Mesh-Groesse (nichts wird gestaucht):
+    # Armhoehe = 1,1687 + 1,0519 + 0,2504 = 2,471 Studs.
+    arm_len = 1.1687 + 1.0519 + 0.2504
     assert hi[1] - lo[1] == pytest.approx(arm_len, abs=2e-3)
 
     shoulder = rig.joint_positions["LeftUpperArm"]
     elbow = rig.joint_positions["LeftLowerArm"]
     wrist = rig.joint_positions["LeftHand"]
-    # Gelenke sitzen auf den kanonischen R15-Anteilen - nicht in der
-    # Teilmitte und nicht am Mesh-Rand des Bundles.
-    assert (shoulder[1] - elbow[1]) / arm_len == pytest.approx(
-        avatar_rig.R15_ELBOW_FRACTION_OF_ARM, abs=0.01)
-    assert (shoulder[1] - wrist[1]) / arm_len == pytest.approx(
-        avatar_rig.R15_WRIST_FRACTION_OF_ARM, abs=0.01)
-    assert lo[1] == pytest.approx(shoulder[1] - arm_len, abs=1e-9)
+    # Gelenke liegen genau an den Segmentgrenzen (keine Luecke, keine
+    # Ueberlappung) - nicht in der Teilmitte.
+    assert shoulder[1] - elbow[1] == pytest.approx(1.1687, abs=1e-6)
+    assert elbow[1] - wrist[1] == pytest.approx(1.0519, abs=1e-6)
+    assert lo[1] == pytest.approx(wrist[1] - 0.2504, abs=1e-6)
     # Der Arm haengt gerade: Ellbogen/Handgelenk liegen auf der Armmitte,
     # die Schulter an der Arm-Innenkante (kanonisches R15, kein Schraegstand).
     assert elbow[0] == pytest.approx((lo[0] + hi[0]) / 2.0, abs=1e-9)
@@ -165,18 +164,16 @@ def test_platzhalter_gelenke_landen_an_der_segmentunterkante():
     elbow = rig.joint_positions["LeftLowerArm"]
     wrist = rig.joint_positions["LeftHand"]
 
-    # Platzhalter (0,0,0) werden ignoriert: die Gelenke liegen auf den
-    # kanonischen R15-Anteilen, nicht in der Teilmitte des Oberarms.
-    arm_len = avatar_rig.R15_ARM_LENGTH_PER_TORSO_HEIGHT * 2.0
-    assert (shoulder[1] - elbow[1]) / arm_len == pytest.approx(
-        avatar_rig.R15_ELBOW_FRACTION_OF_ARM, abs=0.01)
-    assert (shoulder[1] - wrist[1]) / arm_len == pytest.approx(
-        avatar_rig.R15_WRIST_FRACTION_OF_ARM, abs=0.01)
-    # Segmente liegen lueckenlos zwischen den Gelenken (kein Ueberlappen).
+    # Ein Gelenk, das exakt auf dem Elterngelenk klebt, ist ein Platzhalter:
+    # es wird an die Segmentunterkante gelegt (statt den Unterarm in den
+    # Oberarm zu schieben) - der Unterarm beginnt dort und haengt darunter.
+    assert wrist[1] < elbow[1]
+    assert wrist[1] == pytest.approx(elbow[1] - 1.0519 / 2, abs=1e-3)
     lo, hi = rig.body_meshes["links_arm"].bbox()
-    assert hi[1] - lo[1] == pytest.approx(arm_len, abs=2e-3)
-    # Und das Audit erklaert, dass das Bundle nicht kanonisch war.
-    assert any("R15-Raster" in note for note in rig.notes)
+    # Kein Segment wurde gestaucht: die Armhoehe ist mindestens so gross wie
+    # das laengste Einzelsegment (1,17 Studs) - nicht auf 0,x zusammengedrueckt.
+    assert hi[1] - lo[1] > 1.0
+    assert any("Platzhalter" in note for note in rig.notes)
 
 
 def test_pose_dreht_platzhalter_gelenk_um_die_naht(monkeypatch):
@@ -437,46 +434,54 @@ def test_rotation_local_erhaelt_abstaende():
 # 7) Falsch skalierte Bundles: Segmente werden auf das R15-Raster gesetzt
 # ---------------------------------------------------------------------------
 
-def test_zu_grosses_segment_wird_auf_das_raster_gesetzt():
-    """Bundle meldet einen 2,6-Studs-"Oberarm" (real: 1,07): die Kette wird
-    auf die kanonischen Gelenke gesetzt und die Segmente lueckenlos
-    eingepasst, statt den Arm ueber die Hand hinaus zu strecken."""
+def test_grosse_bundles_werden_nicht_gestaucht():
+    """Regression: der Korblox-Arm ist absichtlich groesser als ein Standard-
+    R15-Arm (2,6-Studs-Oberarm). Fruehere Retargeting-Versionen stauchten ihn
+    auf 0,9 Studs ("Arme plattgedrueckt") und schoben die Kette nach unten.
+    Jetzt gilt: Mesh-Groessen bleiben, Gelenke sitzen auf den Attachments."""
+    sizes = {
+        "LeftUpperArm": (0.6641, 2.6216, 0.8129),
+        "LeftLowerArm": (0.8138, 0.9094, 0.8621),
+        "LeftHand": (0.7628, 0.9388, 0.7475),
+    }
     segs = _arm_groups([
-        _seg("LeftUpperArm", (0.6641, 2.6216, 0.8129), {
+        _seg("LeftUpperArm", sizes["LeftUpperArm"], {
             "LeftShoulderRigAttachment": _att((0.2901, 0.3839, -0.0241)),
             "LeftElbowRigAttachment": _att((-0.2099, -1.1479, -0.0241)),
         }),
-        _seg("LeftLowerArm", (0.8138, 0.9094, 0.8621), {
+        _seg("LeftLowerArm", sizes["LeftLowerArm"], {
             "LeftElbowRigAttachment": _att((-0.0612, 0.3842, -0.0002)),
             "LeftWristRigAttachment": _att((-0.0612, -0.3758, -0.0002)),
         }),
-        _seg("LeftHand", (0.7628, 0.9388, 0.7475), {
+        _seg("LeftHand", sizes["LeftHand"], {
             "LeftWristRigAttachment": _att((-0.0155, 0.1225, -0.0062)),
         }),
     ])
     rig = _assemble(segs)
     arm = rig.body_meshes["links_arm"]
     lo, hi = arm.bbox()
-    arm_len = avatar_rig.R15_ARM_LENGTH_PER_TORSO_HEIGHT * 2.0
-    # Gesamtlaenge = kanonische Armlaenge (kein 2,6-Studs-Ausreisser). Die
-    # Mindest-Skalierung (R15_MIN_SEGMENT_SCALE) darf ein Segment minimal
-    # ueberstehen lassen, deshalb +0,05 Studs Toleranz.
-    assert arm_len <= hi[1] - lo[1] <= arm_len + 0.05
+    # Der Oberarm behaelt seine 2,62 Studs Hoehe (keine Stauchung).
+    spans = {seg: (s, e) for seg, s, e in rig.segment_spans["links_arm"]}
+    su, eu = spans["LeftUpperArm"]
+    upper_h = (max(arm.positions[i][1] for i in range(su, eu))
+               - min(arm.positions[i][1] for i in range(su, eu)))
+    assert upper_h == pytest.approx(sizes["LeftUpperArm"][1], abs=1e-3)
+    # Der ganze Arm ist entsprechend lang (kein 1,74-Studs-Zwangsraster).
+    assert hi[1] - lo[1] > 2.5
+    # Gelenke exakt auf den authorten Attachment-Markern.
     shoulder = rig.joint_positions["LeftUpperArm"]
     elbow = rig.joint_positions["LeftLowerArm"]
     wrist = rig.joint_positions["LeftHand"]
-    assert (shoulder[1] - elbow[1]) / arm_len == pytest.approx(
-        avatar_rig.R15_ELBOW_FRACTION_OF_ARM, abs=0.01)
-    assert (shoulder[1] - wrist[1]) / arm_len == pytest.approx(
-        avatar_rig.R15_WRIST_FRACTION_OF_ARM, abs=0.01)
-    # Segmente beruehren sich (keine Luecke). Eine kleine Ueberlappung ist
-    # gewollt: die Mindest-Skalierung verhindert, dass ein Segment auf
-    # Nulldicke geschrumpft wird.
-    spans = {seg: (s, e) for seg, s, e in rig.segment_spans["links_arm"]}
+    assert _dist(shoulder, elbow) == pytest.approx(
+        math.dist((0.2901, 0.3839), (-0.2099, -1.1479)), abs=1e-6)
+    assert _dist(elbow, wrist) == pytest.approx(
+        math.dist((-0.0612, 0.3842), (-0.0612, -0.3758)), abs=1e-6)
+    # Naht: die Segmente ueberlappen sich am Ellbogen (kein Spalt) - so
+    # montiert auch Roblox, weil sich die Meshes ueber das Gelenk hinaus
+    # erstrecken.
     sl, el = spans["LeftLowerArm"]
-    su, eu = spans["LeftUpperArm"]
-    gap = min(arm.positions[i][1] for i in range(su, eu)) - \
-        max(arm.positions[i][1] for i in range(sl, el))
-    assert -0.25 < gap <= 1e-9
-    # Audit nennt das Raster und die Bundle-Groesse.
-    assert any("R15-Raster" in note for note in rig.notes)
+    upper_bottom = min(arm.positions[i][1] for i in range(su, eu))
+    lower_top = max(arm.positions[i][1] for i in range(sl, el))
+    assert upper_bottom < lower_top
+    # Nichts wurde umgerastert -> keine Raster-Warnung.
+    assert not any("R15-Raster" in note for note in rig.notes)
