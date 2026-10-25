@@ -105,7 +105,7 @@ ein, `emote_zeit` wählt den Frame. Welche Quelle genutzt wurde, steht im Log
 (`ausgeruestet: …`) und im Manifest unter `render.pose_details`. Ein lokaler
 Pfad in `emote_datei` hat Vorrang.
 
-![Vergleich: verschobene Gelenke vorher, korrekte Montage nachher](docs/rig_seams_vergleich.png)
+![Render mit korrekt montiertem Rig](docs/rig_final.png)
 
 **Rig-Genauigkeit:** Jedes Segment hängt an seinen eigenen `RigAttachment`s –
 exakt nach der Roblox-Regel `Kind = Eltern · C0 · C1⁻¹`. Einzelne Segmente
