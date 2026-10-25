@@ -278,18 +278,18 @@ Besonderheiten:
   skaliert beim Avatar-Aufbau kein einzelnes Segment: jedes hängt über
   `C0`/`C1` an seinem Elternteil (`Kind = Eltern · C0 · C1⁻¹`). Genau so
   montiert die Pipeline – Drehpunkte und Nähte stimmen damit.
-* **Schulter- und Hüftlinie:** Sitzt ein `*ShoulderRigAttachment` mehr als ein
-  Viertel der Torso-Höhe unter der Torso-Oberkante („Schultern viel zu weit
-  unten“), wird es auf die Schulterlinie (4 % unter der Oberkante) gezogen;
-  Hüften entsprechend an die Unterkante. Alles innerhalb des Bandes bleibt
-  unangetastet.
-* **Fehlende Körperteile:** Trägt der Avatar nur einen Teil eines Körperpakets
-  (z. B. Torso und Arme), werden die fehlenden Teile aus demselben Paket
-  nachgeladen (`catalog.roblox.com/v1/assets/{id}/bundles` →
-  `bundles/{id}/details`, Zuordnung über die Teile-Namen). So kommen echte
-  Bein-Meshes statt Quader. Schlägt die Abfrage fehl, entstehen R15-Quader in
-  Proportionen (Ober-/Unterschenkel plus Fuß mit Überstand) – niemals ein
-  einzelner Klotz.
+* **Schulter- und Hüftlinie:** Maßgeblich sind die `*RigAttachment`s des
+  Torsos. Bei Standard-R15 sitzt die Schulter 0,5 Studs unter der Oberkante der
+  2 Studs hohen Torso-Hälfte, also bei **25 % der Torso-Höhe**; Autorenwerte in
+  diesem Band bleiben unangetastet. Nur unbrauchbare Marker (oberhalb der
+  Oberkante oder tiefer als 55 % – „Schultern viel zu weit unten“) werden auf
+  die Schulterlinie gezogen, Hüften an die Unterkante. Eine frühere Fassung zog
+  jede Schulter auf 4 % unter die Oberkante und hängte die Arme dadurch zu hoch.
+* **Fehlende Körperteile:** Trägt der Avatar ein Teil gar nicht (z. B. keine
+  Beine), setzt Roblox dafür den **Standard-Avatar** ein – nicht die übrigen
+  Teile des getragenen Pakets. Die Pipeline rendert diese Teile deshalb als
+  R15-Blockkörper in Standard-Maßen (Ober-/Unterschenkel plus Fuß mit
+  Überstand bzw. Ober-/Unterarm plus Hand) – niemals ein einzelner Klotz.
 * **Beinlänge:** Beine behalten die Länge ihres Bundles. Weichen linkes und
   rechtes Bein um mehr als 5 % voneinander ab, wird das kürzere mit einem
   Faktor auf allen Achsen angeglichen (kein Verzerren, beide Füße auf dem
@@ -299,7 +299,8 @@ Besonderheiten:
   Segments gelegt – sonst dreht das Kind um seine eigene Mitte. Alles steht als
   `Rig-Audit:`-Hinweis im Log und im Manifest unter `rig_audit` (inkl.
   `gelenke`, `segmente`, `segment_rohdaten`), ergänzt um `assets` (alle
-  getragenen Assets) und `koerperpaket_abfragen`.
+  getragenen Assets) und `fehlende_koerperteile` (Teile, die durch den
+  Standard-Avatar ersetzt wurden).
 * **CFrame-Rotationen:** Werden vollständig gelesen (explizite Matrix
   *und* die 24 Sonder-Rotationen der Binärspec) und bei Accessoires
   angewendet – ein um 90° gedrehtes Bruststück steht sonst seitlich

@@ -629,7 +629,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     # Inventar enthaelt dann schlicht keine Bein-Assets.
     asset_log: List[Dict[str, Any]] = []
     # Protokoll der Katalog-Abfragen fuer fehlende Koerperteile (Diagnose).
-    bodies_log: List[str] = []
+    koerperteile_log: List[str] = []  # fehlende Koerperteile (Standard-Avatar)
     avatar_raw: Dict[str, Any] = {}
     mesh_parts: List[Dict[str, Any]] = []
     texture_bytes_by_rel: Dict[str, bytes] = {}
@@ -868,20 +868,23 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
 
         # ---- Assets ---------------------------------------------------------
         assets = list(avatar_raw.get("assets") or [])
-        # Unvollstaendige Koerperpakete ergaenzen: Roblox rendert fehlende
-        # Teile aus demselben Paket (z. B. Beine), statt Quader zu erfinden.
+        # Nicht ausgeruestete Koerperteile: Roblox ersetzt sie durch den
+        # Standard-Avatar (blockiger R15-Koerper), NICHT durch weitere Teile
+        # eines getragenen Pakets. Die Geometrie erzeugt avatar_rig als
+        # R15-Blockkoerper in Standard-Massen; hier nur die Bestandsaufnahme.
         try:
-            ergaenzt = api.missing_body_parts(client, assets, warnings, bodies_log)
-        except Exception as exc:  # pragma: no cover - Netzwerk/Format
-            ergaenzt = []
-            warnings.append(f"Koerperpaket konnte nicht geprueft werden: {exc}")
-        if bodies_log:
-            # Diagnose: welche Katalog-Abfragen liefen (Manifest + Log).
-            for zeile in bodies_log:
-                log(f"      . Koerperpaket: {zeile}")
-        for teil in ergaenzt:
-            assets.append({"id": teil["id"], "name": teil["name"],
-                           "assetType": {"id": teil["asset_type_id"], "name": ""}})
+            fehlende_teile = api.missing_body_part_names(assets)
+        except Exception as exc:  # pragma: no cover - Format
+            fehlende_teile = []
+            warnings.append(f"Koerperteile konnten nicht geprueft werden: {exc}")
+        if fehlende_teile:
+            text = ", ".join(fehlende_teile)
+            koerperteile_log.append(text)
+            warnings.append(
+                "Nicht ausgeruestete Koerperteile (" + text + "): Roblox "
+                "setzt dafuer den Standard-Avatar ein - die Pipeline rendert "
+                "sie als R15-Blockkoerper in Standard-Massen.")
+            log(f"      . Fehlende Koerperteile: {text} (Standard-R15-Blockkoerper)")
         log(f"[3/4] {len(assets)} Assets verarbeiten ...")
 
         for index, asset in enumerate(assets[:max_assets]):
@@ -1610,7 +1613,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         "skipped": skipped,
         "ignored": ignored,
         "assets": asset_log,
-        "koerperpaket_abfragen": bodies_log,
+        "fehlende_koerperteile": koerperteile_log,
         "layered_ausgelassen": layered_ausgelassen,
         "warnings": warnings,
         # R15-Segment-Spannen (Vertex-Indizes je Koerperteil in OBJ-

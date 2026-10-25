@@ -618,39 +618,75 @@ def test_langer_arm_wird_nicht_gestaucht():
 # 9) Schulterlinie und Platzhalter-Beine
 # ---------------------------------------------------------------------------
 
+def _torso_mit_schulter(y_in_upper: float):
+    torso = _torso(with_shoulder=True)
+    torso[1]["attachments"]["LeftShoulderRigAttachment"] = _att((-1.0, y_in_upper, 0.0))
+    torso[1]["attachments"]["RightShoulderRigAttachment"] = _att((1.0, y_in_upper, 0.0))
+    return torso
+
+
+def _arm_segmente():
+    return [
+        _seg("LeftUpperArm", (1.0, 1.1687, 1.0), {
+            "LeftShoulderRigAttachment": _att((0.5, 0.394327, 0.0)),
+            "LeftElbowRigAttachment": _att((0.000479, -0.334056, 0.0)),
+        }),
+        _seg("LeftLowerArm", (1.0, 1.0519, 1.0), {
+            "LeftElbowRigAttachment": _att((0.000479, 0.258688, 0.0)),
+            "LeftWristRigAttachment": _att((0.000479, -0.268097, 0.0)),
+        }),
+    ]
+
+
 def test_zu_tiefe_schulter_wird_auf_die_schulterlinie_gesetzt():
     """Bug: "Schultern sind viel zu weit nach unten gerutscht". Manche Bundles
-    tragen ein LeftShoulderRigAttachment weit unterhalb der Torso-Oberkante -
-    dann haengen die Arme mitten am Bauch. Marker deutlich unter der
-    Schulterlinie werden auf die Torso-Oberkante gezogen."""
-    torso = _torso(with_shoulder=True)
-    # Schulter auf 40 % der Torso-Hoehe unter die Oberkante legen (1,6 hoch,
-    # Oberkante bei +0.8 -> Marker bei -0.1).
-    torso[1]["attachments"]["LeftShoulderRigAttachment"] = _att((-1.0, -0.1, 0.0))
-    torso[1]["attachments"]["RightShoulderRigAttachment"] = _att((1.0, -0.1, 0.0))
-    rig = _assemble({
-        "torso": torso,
-        "links_arm": [
-            _seg("LeftUpperArm", (1.0, 1.1687, 1.0), {
-                "LeftShoulderRigAttachment": _att((0.5, 0.394327, 0.0)),
-                "LeftElbowRigAttachment": _att((0.000479, -0.334056, 0.0)),
-            }),
-            _seg("LeftLowerArm", (1.0, 1.0519, 1.0), {
-                "LeftElbowRigAttachment": _att((0.000479, 0.258688, 0.0)),
-                "LeftWristRigAttachment": _att((0.000479, -0.268097, 0.0)),
-            }),
-        ],
-    })
+    tragen ein LeftShoulderRigAttachment weit unten im Torso - dann haengen die
+    Arme mitten am Bauch. Marker ausserhalb des R15-Bandes (tiefer als 55 % der
+    Torso-Hoehe) werden auf die Schulterlinie (25 % unter der Oberkante)
+    gezogen."""
+    # Oberkante bei +0.8, Torso 2,0 hoch -> Marker bei -0.6 = 70 % darunter.
+    rig = _assemble({"torso": _torso_mit_schulter(-0.6),
+                     "links_arm": _arm_segmente()})
     t_lo, t_hi = rig.body_meshes["torso"].bbox()
     shoulder = rig.joint_positions["LeftUpperArm"]
-    # Schulter liegt jetzt im oberen Torso-Band (max. 25 % unter der Oberkante).
-    assert shoulder[1] > t_hi[1] - 0.25 * (t_hi[1] - t_lo[1])
-    assert shoulder[1] == pytest.approx(t_hi[1] - 0.04 * (t_hi[1] - t_lo[1]),
+    # R15-Schulterlinie: 0,5 Studs unter der Oberkante bei 2 Studs Hoehe.
+    assert shoulder[1] == pytest.approx(t_hi[1] - 0.25 * (t_hi[1] - t_lo[1]),
+                                        abs=1e-3)
+    assert any("R15-Schulterlinie" in n for n in rig.notes)
+    # Und der Arm haengt daran (Oberkante im oberen Torso-Drittel).
+    arm_lo, arm_hi = rig.body_meshes["links_arm"].bbox()
+    assert arm_hi[1] > t_hi[1] - 0.35 * (t_hi[1] - t_lo[1])
+
+
+def test_autoren_schulter_bleibt_auf_ihrem_platz():
+    """Regression: eine Fassung zog *jede* Schulter auf 4 % unter die
+    Torso-Oberkante und haengte die Arme damit zu hoch ("Schultern sind zu
+    hoch"). Autoren-Attachments innerhalb des R15-Bandes bleiben unangetastet -
+    auch das der Woman-Bundle-Torsi (rund 28 % unter der Oberkante)."""
+    # 0.30 unter der Oberkante von 1.6 = 19 % -> mitten im Band.
+    rig = _assemble({"torso": _torso_mit_schulter(0.5),
+                     "links_arm": _arm_segmente()})
+    t_lo, t_hi = rig.body_meshes["torso"].bbox()
+    torso_h = t_hi[1] - t_lo[1]
+    shoulder = rig.joint_positions["LeftUpperArm"]
+    # Genau auf dem Attachment (0.5 in UpperTorso-Lokalkoordinaten) - nicht
+    # nach oben gezogen.
+    assert shoulder[1] == pytest.approx(t_hi[1] - 0.30, abs=1e-3)
+    assert shoulder[1] < t_hi[1] - 0.12 * torso_h
+    assert not any("Schulterlinie" in n for n in rig.notes)
+
+
+def test_schulter_ueber_der_torso_oberkante_wird_gezogen():
+    """Ein Marker oberhalb der Torso-Oberkante ist unbrauchbar (Arme schweben
+    ueber den Schultern) - er wird ebenfalls auf die Schulterlinie gesetzt."""
+    rig = _assemble({"torso": _torso_mit_schulter(1.2),
+                     "links_arm": _arm_segmente()})
+    t_lo, t_hi = rig.body_meshes["torso"].bbox()
+    shoulder = rig.joint_positions["LeftUpperArm"]
+    assert shoulder[1] <= t_hi[1]
+    assert shoulder[1] == pytest.approx(t_hi[1] - 0.25 * (t_hi[1] - t_lo[1]),
                                         abs=1e-3)
     assert any("Schulterlinie" in n for n in rig.notes)
-    # Und der Arm haengt daran: Oberkante des Oberarms endet an der Schulter.
-    arm_lo, arm_hi = rig.body_meshes["links_arm"].bbox()
-    assert arm_hi[1] > t_hi[1] - 0.15 * (t_hi[1] - t_lo[1])
 
 
 def test_platzhalter_beine_sind_kein_einzelner_klotz():

@@ -295,38 +295,10 @@ def test_repo_posen_datei_kennt_keine_ausgeruestete_pose():
 
 
 # ---------------------------------------------------------------------------
-# Fehlende Koerperteile aus dem Koerperpaket nachladen
+# Fehlende Koerperteile: Standard-Avatar, kein Paket-Nachladen
 # ---------------------------------------------------------------------------
 
-def test_fehlende_beine_werden_aus_dem_koerperpaket_nachgeladen(monkeypatch):
-    """Avatar traegt nur Torso + Arme ("Roblox 2.0") - die Beine fehlen im
-    Inventar. Roblox nimmt sie aus demselben Paket; ohne das entstehen
-    Platzhalter-Quader ("Beine sind einfach nur eckige Quader")."""
-    import roblox_api
-
-    class _Resp:
-        def __init__(self, payload, ok=True):
-            self.ok = ok
-            self.status = 200 if ok else 404
-            self._payload = payload
-
-        def json(self):
-            return self._payload
-
-    class _Client:
-        def get(self, url, allow_status=None):
-            if url.endswith("/assets/86499666/bundles"):
-                return _Resp({"data": [{"id": 239, "name": "Woman"}]})
-            if url.endswith("/bundles/239/details"):
-                return _Resp({"items": [
-                    {"id": 86499666, "type": "Asset", "name": "Woman Torso"},
-                    {"id": 86499698, "type": "Asset", "name": "Woman Right Arm"},
-                    {"id": 86499716, "type": "Asset", "name": "Woman Left Arm"},
-                    {"id": 86499682, "type": "Asset", "name": "Woman Left Leg"},
-                    {"id": 86499704, "type": "Asset", "name": "Woman Right Leg"},
-                ]})
-            return _Resp({}, ok=False)
-
+def _woman_assets(with_legs=False):
     assets = [
         {"id": 86499666, "name": "Woman Torso",
          "assetType": {"id": 27, "name": "Torso"}},
@@ -335,35 +307,61 @@ def test_fehlende_beine_werden_aus_dem_koerperpaket_nachgeladen(monkeypatch):
         {"id": 86499716, "name": "Woman Left Arm",
          "assetType": {"id": 29, "name": "LeftArm"}},
     ]
-    warnings = []
-    teile = roblox_api.missing_body_parts(_Client(), assets, warnings)
-    ids = {t["id"]: t["asset_type_id"] for t in teile}
-    assert ids == {86499682: 30, 86499704: 31}
-    assert any("nachgeladen" in w for w in warnings)
+    if with_legs:
+        assets += [
+            {"id": 86499753, "name": "Woman Left Leg",
+             "assetType": {"id": 30, "name": "LeftLeg"}},
+            {"id": 86499793, "name": "Woman Right Leg",
+             "assetType": {"id": 31, "name": "RightLeg"}},
+        ]
+    return assets
 
 
-def test_vollstaendiger_koerper_laedt_nichts_nach(monkeypatch):
+def test_fehlende_beine_werden_erkannt_aber_nicht_nachgeladen():
+    """Traegt der Avatar nur Torso + Arme (Woman-Paket), fehlen die Beine.
+
+    Roblox setzt dafuer den **Standard-Avatar** ein - nicht die Beine des
+    getragenen Pakets. Eine frueherere Fassung hat die Paket-Beine
+    nachgeladen ("Woman Left/Right Leg"); das war falsch und ist entfernt.
+    Die Funktion macht nur noch Bestandsaufnahme (kein Netzwerk)."""
     import roblox_api
 
     class _Client:
-        def get(self, url, allow_status=None):  # pragma: no cover - darf nicht laufen
-            raise AssertionError("Katalog darf bei vollstaendigem Koerper nicht gefragt werden")
+        def get(self, url, allow_status=None):  # pragma: no cover
+            raise AssertionError("Katalog darf nicht mehr gefragt werden")
 
-    assets = [{"id": 1, "assetType": {"id": t, "name": ""}}
-              for t in (27, 28, 29, 30, 31)]
-    assert roblox_api.missing_body_parts(_Client(), assets) == []
+    fehlend = roblox_api.missing_body_part_names(_woman_assets())
+    assert fehlend == ["LeftLeg", "RightLeg"]
+    assert not hasattr(roblox_api, "missing_body_parts")
+    assert not hasattr(roblox_api, "asset_bundles")
 
 
-def test_ohne_koerperpaket_bleibt_es_bei_quadern():
+def test_vollstaendiger_koerper_hat_keine_fehlenden_teile():
     import roblox_api
 
-    class _Client:
-        def get(self, url, allow_status=None):
-            class R:
-                ok = False
-            return R()
+    assert roblox_api.missing_body_part_names(_woman_assets(with_legs=True)) == []
 
-    assets = [{"id": 5, "assetType": {"id": 27, "name": "Torso"}}]
-    warnings = []
-    assert roblox_api.missing_body_parts(_Client(), assets, warnings) == []
-    assert any("R15-Quader" in w for w in warnings)
+
+def test_fehlende_beine_werden_als_standard_blockkoerper_gerendert():
+    """Ohne Bein-Assets entsteht der R15-Blockkoerper des Standard-Avatars:
+    Ober-/Unterschenkel plus Fuss, in echten R15-Massen, kein Klotz."""
+    import roblox_api
+    import roblox_mesh
+    import avatar_rig
+
+    def _seg(name, size):
+        return {"label": name, "mesh": roblox_mesh.make_box(*size, (0.0, 0.0, 0.0)),
+                "rbxm_class": "MeshPart", "rbxm_size": size,
+                "attachments": {}, "transparency": 0.0}
+
+    torso = [
+        _seg("LowerTorso", (2.0, 0.4, 1.0)),
+        _seg("UpperTorso", (2.0, 1.6, 1.0)),
+    ]
+    rig = avatar_rig.assemble_r15_rig(
+        {"torso": torso}, None, roblox_api.DEFAULT_BODY_COLORS,
+        dict(roblox_api.DEFAULT_SCALES), headless=True)
+    spans = rig.segment_spans["links_bein"]
+    assert [name for name, _a, _b in spans] == [
+        "LeftUpperLeg", "LeftLowerLeg", "LeftFoot"]
+    assert any("Standard-Avatar" in n for n in rig.notes)
