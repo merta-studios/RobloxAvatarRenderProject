@@ -292,8 +292,11 @@ Besonderheiten:
   R15-Block-Meshes von Roblox (`R15BlockLeftUpperLeg` usw., Mesh-IDs in
   `avatar_rig.STANDARD_BODY_MESH_IDS`), skaliert sie auf die R15-Maße
   (Ober-/Unterschenkel 38,4 %/41,1 %, Fuß 20,5 %) und projiziert die
-  Kleidungs-UVs darauf. Erst wenn ein Block-Mesh nicht ladbar ist, entsteht ein
-  Quader gleicher Maße.
+  Kleidungs-UVs darauf (3 px Rand ausgespart, sonst ziehen die weißen
+  Trennzeilen der Vorlage als Streifen über die Naht). Die Segmente überlappen
+  einander um 12 % – die Block-Meshes sind an den Enden abgerundet, ohne
+  Überlappung wirkt der Körper wie gestapelte Würfel mit Lücken. Erst wenn ein
+  Block-Mesh nicht ladbar ist, entsteht ein Quader gleicher Maße.
 * **Beinlänge:** Beine behalten die Länge ihres Bundles. Weichen linkes und
   rechtes Bein um mehr als 5 % voneinander ab, wird das kürzere mit einem
   Faktor auf allen Achsen angeglichen (kein Verzerren, beide Füße auf dem

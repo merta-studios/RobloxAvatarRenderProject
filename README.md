@@ -121,11 +121,13 @@ und Gelenke sitzen dort, wo Roblox sie setzt:
 * **Fehlende Körperteile** (z. B. Beine, wenn nur Torso und Arme getragen
   werden) ersetzt Roblox durch den **Standard-Avatar** – nicht durch weitere
   Teile des getragenen Pakets. Die Pipeline lädt dafür die echten
-  **R15-Block-Meshes** von Roblox (`R15BlockUpperLeg` usw., Mesh-Assets
-  387941715 & Co.), zieht sie auf die R15-Maße (Ober-/Unterschenkel plus Fuß
-  bzw. Ober-/Unterarm plus Hand) und legt die Shirt-/Hosen-UVs darauf – die
-  gerundete Silhouette des Standard-Körpers also, kein Quader. Erst wenn ein
-  Block-Mesh nicht ladbar ist, entsteht ein Quader gleicher Maße.
+  **R15-Block-Meshes** von Roblox (`R15BlockLeftUpperLeg` usw., Mesh-IDs in
+  `avatar_rig.STANDARD_BODY_MESH_IDS`), zieht sie auf die R15-Maße
+  (Ober-/Unterschenkel plus Fuß bzw. Ober-/Unterarm plus Hand) und legt die
+  Shirt-/Hosen-UVs darauf – die gerundete Silhouette des Standard-Körpers also,
+  kein Quader. Die Segmente überlappen einander leicht (12 %), weil die
+  Block-Meshes abgerundete Enden haben; sonst klaffen an Knie und Fuß Lücken.
+  Erst wenn ein Block-Mesh nicht ladbar ist, entsteht ein Quader gleicher Maße.
 * **Beine** behalten die Länge ihres Bundles (Roblox normiert nicht). Nur wenn
   linkes und rechtes Bein voneinander abweichen, wird das kürzere gleichmäßig
   angeglichen, damit beide Füße auf dem Boden stehen.
