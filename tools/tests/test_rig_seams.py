@@ -633,8 +633,13 @@ def test_platzhalter_beine_sind_kein_einzelner_klotz():
     torso_h = t_hi[1] - t_lo[1]
     # Beinlaenge (Huefte bis Sohle) = Torso-Hoehe: kein Riesenklotz.
     assert hi[1] - lo[1] == pytest.approx(torso_h, rel=0.05)
-    # Breite: beide Beine zusammen etwa so breit wie der Torso.
-    assert hi[0] - lo[0] == pytest.approx(0.48 * (t_hi[0] - t_lo[0]), rel=0.05)
+    # Ein Bein ist 42 % so breit wie der Torso und beruehrt die Mitte nicht
+    # (zwei getrennte Beine, kein verschmolzener Klotz).
+    assert hi[0] - lo[0] == pytest.approx(0.42 * (t_hi[0] - t_lo[0]), rel=0.05)
+    inner = min(abs(lo[0]), abs(hi[0]))  # Abstand der Innenkante zur Mitte
+    assert inner > 0.02
+    # Und es ist nicht tiefer als der Torso (sonst wirkt es wie ein Klotz).
+    assert hi[2] - lo[2] < 1.3 * (t_hi[2] - t_lo[2])
     # Der Fuss steht vorne ueber (kein flacher Abschluss).
     s_f, e_f = {s: (a, b) for s, a, b in spans}["LeftFoot"]
     z_foot = [bein.positions[i][2] for i in range(s_f, e_f)]
