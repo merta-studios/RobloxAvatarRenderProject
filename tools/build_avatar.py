@@ -39,6 +39,7 @@ import avatar_pose  # noqa: E402
 import avatar_rig  # noqa: E402
 import avatar_uv  # noqa: E402
 import emote_pose  # noqa: E402
+import mannequin  # noqa: E402
 import rbxm  # noqa: E402
 import render_config  # noqa: E402
 import roblox_api as api  # noqa: E402
@@ -1196,6 +1197,26 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 texture_for_part["kopf"] = rel_head
                 clothing_kind_by_file[rel_head] = "composited"
 
+    # Roblox' offizieller klassischer Standard-Koerper (ClassicMannequin.fbx).
+    # Er liefert die *echten* Standard-Teile und ihre Gelenke, statt sie
+    # nachzubauen - damit sitzen Schultern, Ellbogen und Knie exakt wie bei
+    # Roblox.
+    classic_body = mannequin.cached()
+    if classic_body is None:
+        _fbx = os.path.join(mannequin.ROOT, "reference", "official",
+                            "ClassicMannequin.fbx")
+        if os.path.exists(_fbx):
+            try:
+                classic_body = mannequin.build_from_fbx(_fbx)
+                mannequin.dump_json(classic_body, mannequin.DEFAULT_PATH)
+                log("      . Standard-Koerper aus ClassicMannequin.fbx gelesen")
+            except Exception as exc:  # pragma: no cover - FBX-Leser
+                classic_body = None
+                warnings.append(f"Standard-Koerper nicht lesbar: {exc}")
+    if classic_body is not None:
+        log(f"      . Standard-Koerper: {len(classic_body.meshes)} Teile "
+            f"aus {classic_body.source}")
+
     # Exakten R15-Gelenk-Rig berechnen (liefert Welt-Attachments + Skinning-Gelenke
     # sowie bei echten RBXM-RigAttachments die 1:1-Gelenkgeometrie aller Koerperteile)
     use_r15_rig = avatar_rig.has_rig_attachments(r15_segments_by_part, head_mesh)
@@ -1206,6 +1227,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         scales,
         headless=headless["active"],
         standard_meshes=standard_meshes,
+        classic_body=classic_body,
     )
     # Hinweise des Gelenk-Audits (abgeleitete Attachments, ersetzte
     # Platzhalter-Gelenke) sichtbar machen - sie erklaeren, warum ein Teil

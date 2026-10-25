@@ -278,25 +278,32 @@ Besonderheiten:
   skaliert beim Avatar-Aufbau kein einzelnes Segment: jedes hängt über
   `C0`/`C1` an seinem Elternteil (`Kind = Eltern · C0 · C1⁻¹`). Genau so
   montiert die Pipeline – Drehpunkte und Nähte stimmen damit.
-* **Schulterlinie:** Maßgeblich ist die sichtbare Oberkante des Oberarms, nicht
-  der Attachment-Wert. Band: höchstens 2 % der Torso-Höhe über der
-  Torso-Oberkante (praktisch bündig) und höchstens 6 % darunter. Liegt der Arm
-  außerhalb, wird die Armkette starr auf 4 % unter die Oberkante verschoben –
-  Gelenke, Segmentgrößen und Nähte bleiben unverändert, Schulter-Accessoires
-  wandern mit. Zwei Bug-Reports stecken die Grenzen ab: „Schultern zu hoch“
-  (Arm ragte über die Torso-Oberkante) und „Schultern viel zu niedrig“
-  (Arm begann rund ein Zehntel darunter).
+* **Standard-Körper (Originalgeometrie):** Der Körper dieses Avatars ist der
+  *klassische* Roblox-Körper – seine Teile stimmen auf drei Nachkommastellen
+  mit Roblox' offizieller Referenzdatei `ClassicMannequin.fbx` überein
+  (Oberarm 0,749 × 0,888 × 0,584, Oberschenkel 0,656 × 1,664 × 0,662 …).
+  `tools/probe_reference.py` lädt die Datei nach `reference/official/`,
+  `tools/build_mannequin.py` schreibt daraus `reference/classic_body.json`
+  (15 Teile mit Mesh, Maßen und Lage im Mannequin, plus abgeleitete
+  Verhältnisse). Zur Renderzeit liest `tools/mannequin.py` dieses JSON –
+  Standard-Teile werden also **nicht** nachgebaut.
+* **Schulterlinie (keine Konstanten mehr):** Arme und Beine werden relativ zum
+  *echten* Torso des Avatars exakt so gesetzt wie im Mannequin: Oberkante des
+  Oberarms 21,6 % der Torso-Höhe unter der Torso-Oberkante, Beinlänge 131,7 %
+  der Torso-Höhe. Die Drehpunkte sind die `*RigAttachment`s der Teile
+  (Schulter 0,27 Studs über der OberTorso-Mitte); fehlen sie, die Oberkante des
+  Glieds. Die frühere „Schulterband“-Regel (Arm starr auf 4 % unter die
+  Oberkante) war die Ursache für hochgezogene Schultern (0,28 Studs zu hoch)
+  und greift für den Standard-Körper nicht mehr.
 * **Fehlende Körperteile:** Trägt der Avatar ein Teil gar nicht (z. B. keine
   Beine), setzt Roblox dafür den **Standard-Avatar** ein – nicht die übrigen
-  Teile des getragenen Pakets. Die Pipeline lädt deshalb die echten
-  R15-Block-Meshes von Roblox (`R15BlockLeftUpperLeg` usw., Mesh-IDs in
-  `avatar_rig.STANDARD_BODY_MESH_IDS`), skaliert sie auf die R15-Maße
-  (Ober-/Unterschenkel 38,4 %/41,1 %, Fuß 20,5 %) und projiziert die
-  Kleidungs-UVs darauf (3 px Rand ausgespart, sonst ziehen die weißen
-  Trennzeilen der Vorlage als Streifen über die Naht). Die Segmente überlappen
-  einander um 12 % – die Block-Meshes sind an den Enden abgerundet, ohne
-  Überlappung wirkt der Körper wie gestapelte Würfel mit Lücken. Erst wenn ein
-  Block-Mesh nicht ladbar ist, entsteht ein Quader gleicher Maße.
+  Teile des getragenen Pakets. Die Pipeline setzt dafür die Teile aus
+  `reference/classic_body.json` ein: echte Silhouette, die UVs der offiziellen
+  Roblox-Kleidungsvorlage (Shirt/Hose) und Gelenke auf den Teilkanten. Kein
+  Quader, keine R15-Block-Ersatzgeometrie.
+* **Fremde Bundles:** Weicht ein getragenes Segment in den Maßen von der
+  Referenz ab (mehr als 6 %, z. B. ein Korblox-Arm), bleibt es unangetastet und
+  wird wie bisher über seine eigenen Attachments montiert.
 * **Beinlänge:** Beine behalten die Länge ihres Bundles. Weichen linkes und
   rechtes Bein um mehr als 5 % voneinander ab, wird das kürzere mit einem
   Faktor auf allen Achsen angeglichen (kein Verzerren, beide Füße auf dem

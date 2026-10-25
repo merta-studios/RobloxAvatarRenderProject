@@ -1,0 +1,52 @@
+{
+ "files": {
+  "BlockyCharacter.fbx": {
+   "bytes": 2984140,
+   "file": "official/BlockyCharacter.fbx",
+   "head": "Kaydara FBX Binary  \u0000\u001a\u0000\u00e8\u001c\u0000\u0000\u0096\u0007\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0012",
+   "http": 200,
+   "is_ascii_fbx": false,
+   "is_fbx_binary": true,
+   "is_zip": false,
+   "url": "https://prod.docsiteassets.roblox.com/assets/avatar/dynamic-heads/reference-files/BlockyCharacter.fbx"
+  },
+  "ClassicMannequin.fbx": {
+   "bytes": 573324,
+   "file": "official/ClassicMannequin.fbx",
+   "head": "Kaydara FBX Binary  \u0000\u001a\u0000\u00e8\u001c\u0000\u0000\u0096\u0007\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0012",
+   "http": 200,
+   "is_ascii_fbx": false,
+   "is_fbx_binary": true,
+   "is_zip": false,
+   "url": "https://prod.docsiteassets.roblox.com/assets/art/reference-files/ClassicMannequin.fbx"
+  },
+  "ClassicMannequin_With-Cages.fbx": {
+   "bytes": 557468,
+   "file": "official/ClassicMannequin_With-Cages.fbx",
+   "head": "Kaydara FBX Binary  \u0000\u001a\u0000\u00e8\u001c\u0000\u0000\u00f0\u0007\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0012",
+   "http": 200,
+   "is_ascii_fbx": false,
+   "is_fbx_binary": true,
+   "is_zip": false,
+   "url": "https://prod.docsiteassets.roblox.com/assets/art/reference-files/ClassicMannequin_With-Cages.fbx"
+  }
+ },
+ "thumbnails": {
+  "https://thumbnails.roblox.com/v1/users/avatar-3d?userIds=1": {
+   "body": "{\"errors\": [{\"code\": 0, \"message\": \"Invalid authentication data provided\"}]}",
+   "http": 403
+  },
+  "https://thumbnails.roblox.com/v1/users/avatar-3d?userIds=1&size=420x420&format=Obj": {
+   "body": "{\"errors\": [{\"code\": 0, \"message\": \"Invalid authentication data provided\"}]}",
+   "http": 403
+  },
+  "https://thumbnails.roblox.com/v1/users/avatar-3d?userIds=9767435332&size=420x420&format=Obj": {
+   "body": "{\"errors\": [{\"code\": 0, \"message\": \"Invalid authentication data provided\"}]}",
+   "http": 403
+  },
+  "https://thumbnails.roblox.com/v1/users/avatar?userIds=1&size=420x420&format=Obj": {
+   "body": "{\"errors\": [{\"code\": 2, \"message\": \"The requested image format is invalid. Please see documentation for valid thumbnail format parameter name and values.\", \"field\": \"format\"}]}",
+   "http": 400
+  }
+ }
+}
