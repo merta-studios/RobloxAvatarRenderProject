@@ -388,6 +388,22 @@ jobs:
           if [ -f build/manifest.json ]; then
             DBG="$(mktemp -d)"
             cp build/manifest.json "$DBG/manifest.json"
+            # Kopf-Texturen zur Diagnose mitliefern (Gesichts-Textur des
+            # Kopfes vs. gebackenes Komposit - so laesst sich pruefen, ob
+            # Gesicht und Brille zusammenpassen).
+            python3 - "$DBG" <<'PYEOF'
+          import json, os, shutil, sys
+          dbg = sys.argv[1]
+          try:
+              m = json.load(open("build/manifest.json"))
+              src = (m.get("rig_audit", {}).get("kopf", {}).get("textur", {}) or {}).get("src")
+              for rel in {src, "textures/_comp_head.png"}:
+                  if rel and os.path.exists(os.path.join("build", rel)):
+                      shutil.copy(os.path.join("build", rel),
+                                  os.path.join(dbg, os.path.basename(rel)))
+          except Exception as exc:
+              print(f"Kopf-Texturen nicht kopiert: {exc}")
+          PYEOF
             git -C "$DBG" init -q
             git -C "$DBG" checkout -q --orphan render-debug
             git -C "$DBG" add -A
