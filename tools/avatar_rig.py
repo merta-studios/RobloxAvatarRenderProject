@@ -1272,13 +1272,20 @@ def assemble_r15_rig(
             foot_depth = ld
             foot_shift = 0.0
         y = root[1]
+        # Kleidungs-Texturen (Shirt/Hose) decken das ganze Glied ab. Jedes
+        # Segment bekommt deshalb *seinen* Ausschnitt der Textur-Vorlage -
+        # sonst wiederholt sich das Muster (Saum, Bluemchen) an jedem
+        # Segment und das Bein bekommt Streifen.
+        slices = ("upper", "lower", "end")
         for index, name in enumerate(names):
             h = total * fracs[index] if index < len(fracs) else 0.1
             is_foot = kind == "leg" and index == len(names) - 1
             depth = foot_depth if is_foot else ld
             # Fussspitze zeigt nach vorne (-Z), die Ferse bleibt hinten.
             z = root[2] - (foot_shift if is_foot else 0.0)
-            box = apply_limb_box_uvs(make_box(lw, h, depth, (0.0, 0.0, 0.0)))
+            slice_name = slices[index] if index < len(slices) else "end"
+            box = apply_limb_box_uvs(make_box(lw, h, depth, (0.0, 0.0, 0.0)),
+                                     slice_name)
             origin = (lx, y - h / 2.0, z)
             register_segment(name, box, {}, origin, IDENTITY_MAT3, True)
             segment_driver[name] = name
