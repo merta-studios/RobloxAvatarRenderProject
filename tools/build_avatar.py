@@ -879,7 +879,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             warnings.append(f"Koerperteile konnten nicht geprueft werden: {exc}")
         if fehlende_teile:
             text = ", ".join(fehlende_teile)
-            koerperteile_log.append(text)
+            koerperteile_log.extend(fehlende_teile)
             warnings.append(
                 "Nicht ausgeruestete Koerperteile (" + text + "): Roblox "
                 "setzt dafuer den Standard-Avatar ein - die Pipeline rendert "
