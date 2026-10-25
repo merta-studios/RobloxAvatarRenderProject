@@ -292,3 +292,82 @@ def test_repo_posen_datei_kennt_keine_ausgeruestete_pose():
     """Sanity: "ausgeruestet" ist ein Sonderwert, kein Posen.toml-Name."""
     poses = avatar_pose.load_poses(os.path.join(ROOT, "Posen.toml"))
     assert "ausgeruestet" not in poses
+
+
+# ---------------------------------------------------------------------------
+# Fehlende Koerperteile aus dem Koerperpaket nachladen
+# ---------------------------------------------------------------------------
+
+def test_fehlende_beine_werden_aus_dem_koerperpaket_nachgeladen(monkeypatch):
+    """Avatar traegt nur Torso + Arme ("Roblox 2.0") - die Beine fehlen im
+    Inventar. Roblox nimmt sie aus demselben Paket; ohne das entstehen
+    Platzhalter-Quader ("Beine sind einfach nur eckige Quader")."""
+    import roblox_api
+
+    class _Resp:
+        def __init__(self, payload):
+            self.ok = True
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        def get(self, url, allow_status=None):
+            if url.endswith("/assets/86499666/bundles"):
+                return _Resp({"data": [{"id": 192, "name": "Roblox 2.0"}]})
+            if "/assets/" in url and url.endswith("/details") and "economy" in url:
+                mapping = {86499666: 27, 86499698: 28, 86499716: 29,
+                           86499682: 30, 86499704: 31}
+                aid = int(url.split("/assets/")[1].split("/")[0])
+                return _Resp({"AssetTypeId": mapping.get(aid, 0), "Name": "Teil"})
+            if url.endswith("/bundles/192/details"):
+                return _Resp({"items": [
+                    {"id": 86499666, "type": "Asset", "name": "Roblox 2.0 Torso"},
+                    {"id": 86499698, "type": "Asset", "name": "Roblox 2.0 Right Arm"},
+                    {"id": 86499716, "type": "Asset", "name": "Roblox 2.0 Left Arm"},
+                    {"id": 86499682, "type": "Asset", "name": "Roblox 2.0 Left Leg"},
+                    {"id": 86499704, "type": "Asset", "name": "Roblox 2.0 Right Leg"},
+                ]})
+            return _Resp({})
+
+    assets = [
+        {"id": 86499666, "name": "Roblox 2.0 Torso",
+         "assetType": {"id": 27, "name": "Torso"}},
+        {"id": 86499698, "name": "Roblox 2.0 Right Arm",
+         "assetType": {"id": 28, "name": "RightArm"}},
+        {"id": 86499716, "name": "Roblox 2.0 Left Arm",
+         "assetType": {"id": 29, "name": "LeftArm"}},
+    ]
+    warnings = []
+    teile = roblox_api.missing_body_parts(_Client(), assets, warnings)
+    ids = {t["id"]: t["asset_type_id"] for t in teile}
+    assert ids == {86499682: 30, 86499704: 31}
+    assert any("nachgeladen" in w for w in warnings)
+
+
+def test_vollstaendiger_koerper_laedt_nichts_nach(monkeypatch):
+    import roblox_api
+
+    class _Client:
+        def get(self, url, allow_status=None):  # pragma: no cover - darf nicht laufen
+            raise AssertionError("Katalog darf bei vollstaendigem Koerper nicht gefragt werden")
+
+    assets = [{"id": 1, "assetType": {"id": t, "name": ""}}
+              for t in (27, 28, 29, 30, 31)]
+    assert roblox_api.missing_body_parts(_Client(), assets) == []
+
+
+def test_ohne_koerperpaket_bleibt_es_bei_quadern():
+    import roblox_api
+
+    class _Client:
+        def get(self, url, allow_status=None):
+            class R:
+                ok = False
+            return R()
+
+    assets = [{"id": 5, "assetType": {"id": 27, "name": "Torso"}}]
+    warnings = []
+    assert roblox_api.missing_body_parts(_Client(), assets, warnings) == []
+    assert any("R15-Quader" in w for w in warnings)

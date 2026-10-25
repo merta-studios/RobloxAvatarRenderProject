@@ -1231,20 +1231,32 @@ def assemble_r15_rig(
         root = root_att[0]
         total = max(0.30, placeholder_len)
         if kind == "leg":
-            fracs = (0.40, 0.42, 0.18)
-            lw = max(0.08, 0.48 * torso_w)
-            ld = max(0.08, 0.92 * torso_d)
-            lx = sign * max(0.20 * torso_w, 0.5 * lw * 0.96)
+            # Klassische R15-Proportionen: Oberschenkel 42 %, Unterschenkel
+            # 43 %, Fuss 15 % der Beinlaenge. Die Beine sind *zwei* Koerper:
+            # Innenkante mit Luft zur Mitte (sonst verschmelzen sie optisch zu
+            # einem Klotz), Tiefe nie groesser als der Torso.
+            fracs = (0.42, 0.43, 0.15)
+            lw = max(0.08, 0.42 * torso_w)
+            ld = max(0.08, 0.80 * torso_d)
+            gap = 0.05 * torso_w
+            lx = sign * (gap + lw / 2.0)
+            foot_depth = 1.22 * ld
+            foot_shift = 0.16 * ld
         else:
             fracs = (0.44, 0.42, 0.14)
             lw = max(0.08, 0.34 * torso_w)
             ld = max(0.08, 0.62 * torso_d)
-            lx = root[0] if abs(root[0]) > 1e-3 else sign * (0.5 * torso_w + 0.5 * lw)
+            lx = (root[0] if abs(root[0]) > 1e-3
+                  else sign * (0.5 * torso_w + 0.5 * lw))
+            foot_depth = ld
+            foot_shift = 0.0
         y = root[1]
         for index, name in enumerate(names):
             h = total * fracs[index] if index < len(fracs) else 0.1
-            depth = ld * (1.28 if (kind == "leg" and index == 2) else 1.0)
-            z = root[2] - (0.18 * ld if (kind == "leg" and index == 2) else 0.0)
+            is_foot = kind == "leg" and index == len(names) - 1
+            depth = foot_depth if is_foot else ld
+            # Fussspitze zeigt nach vorne (-Z), die Ferse bleibt hinten.
+            z = root[2] - (foot_shift if is_foot else 0.0)
             box = apply_limb_box_uvs(make_box(lw, h, depth, (0.0, 0.0, 0.0)))
             origin = (lx, y - h / 2.0, z)
             register_segment(name, box, {}, origin, IDENTITY_MAT3, True)

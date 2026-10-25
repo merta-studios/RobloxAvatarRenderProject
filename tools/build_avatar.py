@@ -865,7 +865,17 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                                 "reason": "RBXM: keine verwertbare Geometrie gefunden"})
 
         # ---- Assets ---------------------------------------------------------
-        assets = avatar_raw.get("assets") or []
+        assets = list(avatar_raw.get("assets") or [])
+        # Unvollstaendige Koerperpakete ergaenzen: Roblox rendert fehlende
+        # Teile aus demselben Paket (z. B. Beine), statt Quader zu erfinden.
+        try:
+            ergaenzt = api.missing_body_parts(client, assets, warnings)
+        except Exception as exc:  # pragma: no cover - Netzwerk/Format
+            ergaenzt = []
+            warnings.append(f"Koerperpaket konnte nicht geprueft werden: {exc}")
+        for teil in ergaenzt:
+            assets.append({"id": teil["id"], "name": teil["name"],
+                           "assetType": {"id": teil["asset_type_id"], "name": ""}})
         log(f"[3/4] {len(assets)} Assets verarbeiten ...")
 
         for index, asset in enumerate(assets[:max_assets]):
