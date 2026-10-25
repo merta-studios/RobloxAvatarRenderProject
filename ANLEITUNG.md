@@ -273,6 +273,19 @@ Besonderheiten:
   (`part1 = part0 * C0 * Transform * C1⁻¹`, RCC `EmoteUtility.lua`)
   **starr je Segment** im Frame des Eltern-Attachments angewandt.
   Erst *ohne* Attachment-Daten greift der alte senkrechte Stapel-Fallback.
+* **R15-Raster (Retargeting):** Konvertierte Bundles tragen häufig frei
+  erfundene `MeshPart.Size`-Werte (z. B. ein „Oberarm“ mit 2,6 statt 1,0
+  Studs) und Attachments mitten im Mesh. Würde man das 1:1 übernehmen,
+  hingen die Glieder übereinander („Schulter zu tief“) und die Drehpunkte
+  lägen in der Teilmitte („Unterarm dreht um den falschen Punkt“). Die
+  Pipeline prüft deshalb je Extremität, ob die Gelenk-Attachments zum
+  kanonischen R15-Raster passen (Schulterlinie 0,237 Studs unter der
+  Torso-Oberkante, Ellbogen 41,9 %, Handgelenk 85,6 % der Armlänge, Knie
+  41,1 %, Fußgelenk 87,4 % der Beinlänge). Ist das der Fall, wird exakt wie
+  Roblox montiert; sonst werden die Gelenke auf das Raster gesetzt und jedes
+  Segment lückenlos zwischen seine beiden Gelenke gelegt (Größe aus dem
+  Gelenkabstand, Querlage aus dem distalen Gelenk). Beides steht als
+  `Rig-Audit:`-Hinweis im Log und im Manifest unter `rig_audit`.
 * **CFrame-Rotationen:** Werden vollständig gelesen (explizite Matrix
   *und* die 24 Sonder-Rotationen der Binärspec) und bei Accessoires
   angewendet – ein um 90° gedrehtes Bruststück steht sonst seitlich
