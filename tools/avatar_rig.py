@@ -789,6 +789,9 @@ def _segment_between_joints(
     ts = [-p[1] for p in local]
     t_lo, t_hi = min(ts), max(ts)
     extent = max(1e-6, t_hi - t_lo)
+    # Nur entlang der Glied-Achse auf den Gelenkabstand bringen (Breite und
+    # Tiefe bleiben unangetastet) - so behaelt das Teil seine Proportionen
+    # quer zur Achse und die Innenkante bleibt am Torso.
     scale = span / extent
     scale = min(max(scale, R15_MIN_SEGMENT_SCALE), R15_MAX_SEGMENT_SCALE)
     # Quer zur Glied-Achse auf das *distale* Gelenk zentrieren: in R15 sitzt
@@ -812,8 +815,8 @@ def _segment_between_joints(
     if len(mesh.normals) == len(mesh.positions):
         for n in mesh.normals:
             nl = _mat3_vec(inv, n)
-            scaled = _normalize((nl[0], nl[1] / scale, nl[2]))
-            normals.append(_mat3_vec(frame_rot, scaled))
+            normals.append(_normalize(_mat3_vec(
+                frame_rot, (nl[0], nl[1] / max(scale, 1e-6), nl[2]))))
     return MeshData(
         positions=positions,
         normals=normals,
