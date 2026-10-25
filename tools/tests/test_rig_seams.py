@@ -431,7 +431,7 @@ def test_rotation_local_erhaelt_abstaende():
 
 
 # ---------------------------------------------------------------------------
-# 7) Falsch skalierte Bundles: Segmente werden auf das R15-Raster gesetzt
+# 7) Falsch skalierte Bundles: nichts wird gestaucht
 # ---------------------------------------------------------------------------
 
 def test_grosse_bundles_werden_nicht_gestaucht():
@@ -484,4 +484,4 @@ def test_grosse_bundles_werden_nicht_gestaucht():
     lower_top = max(arm.positions[i][1] for i in range(sl, el))
     assert upper_bottom < lower_top
     # Nichts wurde umgerastert -> keine Raster-Warnung.
-    assert not any("R15-Raster" in note for note in rig.notes)
+    assert not any("gestaucht" in note for note in rig.notes)

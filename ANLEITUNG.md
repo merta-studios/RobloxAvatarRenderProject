@@ -273,22 +273,19 @@ Besonderheiten:
   (`part1 = part0 * C0 * Transform * C1⁻¹`, RCC `EmoteUtility.lua`)
   **starr je Segment** im Frame des Eltern-Attachments angewandt.
   Erst *ohne* Attachment-Daten greift der alte senkrechte Stapel-Fallback.
-* **R15-Raster (Retargeting):** Konvertierte Bundles tragen häufig frei
-  erfundene `MeshPart.Size`-Werte (z. B. ein „Oberarm“ mit 2,6 statt 1,0
-  Studs) und Attachments mitten im Mesh. Würde man das 1:1 übernehmen,
-  hingen die Glieder übereinander („Schulter zu tief“) und die Drehpunkte
-  lägen in der Teilmitte („Unterarm dreht um den falschen Punkt“). Die
-  Pipeline prüft deshalb je Extremität, ob die Gelenk-Attachments zum
-  kanonischen R15-Raster passen (Schulterlinie 0,237 Studs unter der
-  Torso-Oberkante, Ellbogen 41,9 %, Handgelenk 85,6 % der Armlänge, Knie
-  41,1 %, Fußgelenk 87,4 % der Beinlänge). Ist das der Fall, wird exakt wie
-  Roblox montiert; sonst werden die Gelenke auf das Raster gesetzt und jedes
-  Segment lückenlos zwischen seine beiden Gelenke gelegt: die Länge folgt dem
-  Gelenkabstand (maximal auf das 0,3- bis 2,6-Fache begrenzt), Breite und
-  Tiefe bleiben unverändert, die Querlage richtet sich am distalen Gelenk aus.
-  So bleibt die Naht zu, ohne die Silhouette zu verbiegen. Beides steht als
-  `Rig-Audit:`-Hinweis im Log und im Manifest unter `rig_audit` (inkl.
-  `gelenke`, `segmente` und den Rohdaten der Bundle-Segmente).
+* **Motor6D-Montage (Gelenke & Nähte):** Konvertierte Bundles tragen häufig
+  frei erfundene `MeshPart.Size`-Werte und Attachments, die nicht zur Geometrie
+  passen. Roblox selbst skaliert beim Avatar-Aufbau nichts: jedes Segment
+  behält seine Mesh-Größe und hängt über `C0`/`C1` an seinem Elternteil
+  (`Kind = Eltern · C0 · C1⁻¹`). Genau so montiert die Pipeline – die Länge
+  einer Extremität ergibt sich damit aus den Meshes, nicht aus Tabellenwerten.
+  Dadurch bleiben Drehpunkte und Proportionen des Bundles erhalten (kein
+  „Schulter zu tief“, kein „Unterarm dreht um den falschen Punkt“, keine
+  gestauchten Arme). Nur echte Platzhalter werden ersetzt: ein fehlendes
+  Attachment, eines außerhalb des Meshes oder eines, das exakt auf dem
+  Elterngelenk klebt – dann wird das Gelenk an die untere Deckfläche des
+  Segments gelegt. Alle Eingriffe stehen als `Rig-Audit:`-Hinweis im Log und im
+  Manifest unter `rig_audit` (inkl. `gelenke`, `segmente`, `segment_rohdaten`).
 * **CFrame-Rotationen:** Werden vollständig gelesen (explizite Matrix
   *und* die 24 Sonder-Rotationen der Binärspec) und bei Accessoires
   angewendet – ein um 90° gedrehtes Bruststück steht sonst seitlich

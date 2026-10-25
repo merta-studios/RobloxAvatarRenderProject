@@ -105,17 +105,18 @@ ein, `emote_zeit` wählt den Frame. Welche Quelle genutzt wurde, steht im Log
 (`ausgeruestet: …`) und im Manifest unter `render.pose_details`. Ein lokaler
 Pfad in `emote_datei` hat Vorrang.
 
-![Vergleich: verschobene Gelenke vorher, R15-Raster nachher](docs/rig_seams_vergleich.png)
+![Vergleich: verschobene Gelenke vorher, korrekte Montage nachher](docs/rig_seams_vergleich.png)
 
-**Rig-Genauigkeit:** Jede Extremität wird gegen das kanonische R15-Raster
-geprüft (Schulterlinie, Ellbogen-/Handgelenk-, Knie-/Fußgelenk-Anteile). Passt
-ein Bundle (fehlende Attachments, Platzhalter `(0,0,0)`, falsche
-`MeshPart.Size`), werden die Gelenke auf das Raster gesetzt und die Segmente
-lückenlos dazwischen eingepasst (Länge = Gelenkabstand, Breite/Tiefe
-unverändert) – statt sie übereinander zu hängen. Alle
-Eingriffe stehen als `Rig-Audit:`-Warnung im Log und im Manifest (`rig_audit`
-mit `joint_spans`, `gelenke`, `segmente`, `segment_rohdaten`); derselbe Block
-landet in der Step Summary des Render-Workflows.
+**Rig-Genauigkeit:** Jedes Segment behält seine Mesh-Größe und hängt an
+seinen eigenen `RigAttachment`s – exakt nach der Roblox-Regel
+`Kind = Eltern · C0 · C1⁻¹`. Es wird nichts gestaucht oder auf ein fremdes
+Raster gezogen; die Gelenke liegen dort, wo das Bundle sie definiert, und die
+Naht zwischen zwei Segmenten bleibt zu. Nur echte Platzhalter (Attachment
+fehlt, liegt außerhalb des Meshes oder klebt exakt auf dem Elterngelenk)
+werden aus der Geometrie ersetzt (untere Deckfläche). Alle Eingriffe stehen als
+`Rig-Audit:`-Warnung im Log und im Manifest (`rig_audit` mit `joint_spans`,
+`gelenke`, `segmente`, `segment_rohdaten`); derselbe Block landet in der Step
+Summary des Render-Workflows.
 
 **Emote-Posen** (`pose = "emote:<ID>"`): Die Pipeline lädt das Emote aus dem
 Roblox-Katalog und wendet exakt die Haltung an, die auch das
