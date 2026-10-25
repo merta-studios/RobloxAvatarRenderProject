@@ -1,27 +1,31 @@
-"""Der klassische Standard-Koerper aus Roblox' Mannequin.
+"""Der R15-Standard-Avatar (Blockkoerper) ersetzt fehlende Koerperteile.
 
-Bug-Report (Runde 6): "die Standard-Avatar-Teile sehen immer noch nicht wie die
-exakten Teile aus" und "die Schultern sind wieder zu weit oben".
+Bug-Report (Runde 8): "Der Standard Avatar ist nicht der richtige blocky
+R15 standard", "Arme komplett kaputt, ueberall Ober- Unterarm und Hand
+verstreut", "Beine falsch rum, Fuesse schauen nach hinten".
 
-Ursache (an den Daten belegt, nicht geschaetzt):
+Ursachen:
 
-* Die Koerperteile dieses Avatars sind **klassische** Teile. Ihre Roh-Meshes
-  stimmen auf drei Nachkommastellen mit ``ClassicMannequin.fbx`` ueberein
-  (Oberarm 0.749 x 0.888 x 0.584 usw.) - es sind also genau die offiziellen
-  Standard-Teile, nur eben nicht die R15-*Block*-Meshes.
-* Die Schulter wurde anschliessend von ``R15_ARM_TOP_BAND`` ("hoechstens 2-6 %
-  unter der Torso-Oberkante") auf 4 % unter die Oberkante gezogen. Im
-  Mannequin sitzt die Armoberkante aber **21,6 %** der Torso-Hoehe unter der
-  Oberkante - der Arm hing dadurch 0,28 Studs zu hoch.
+* Als Standard wurde der **klassische** Koerper (``ClassicMannequin.fbx``)
+  eingesetzt - die R6-Optik mit schmalen Gliedern und Fuessen mit Zehen.
+  Roblox ersetzt fehlende Teile bei einem R15-Avatar aber durch den
+  **R15-Blockkoerper** (``BlockyCharacter.fbx``: quadratische 1x1-Blockteile).
+* Die *ausgeruesteten* Arme wurden dabei durch umgehaengte Classic-Teile
+  ersetzt. Deren Drehpunkte stimmten nicht mehr mit den ``*RigAttachment``-
+  Daten ueberein, die die Pose benutzt - im Emote lagen Oberarm, Unterarm
+  und Hand verstreut. Zusaetzlich schaute der Classic-Fuss mit den Zehen
+  nach hinten (+Z statt -Z).
 
-Die Tests hier pruefen, dass beides nicht mehr passieren kann:
+Festgelegt wird hier:
 
-* die Referenzdatei liefert 15 Teile mit den dokumentierten Maßen,
-* Arme und Beine werden relativ zum echten Torso genau wie im Mannequin
-  gesetzt (Armoberkante 21,6 %, Beinlaenge 131,7 % der Torso-Hoehe),
-* die Gelenke kommen aus den ``*RigAttachment``-Daten der Teile (Schulter
-  0,27 Studs ueber der OberTorso-Mitte) - identisch mit dem Mannequin,
-* ein echtes Bundle mit anderen Maßen wird **nicht** ersetzt.
+* ``reference/standard_r15.json`` (aus ``BlockyCharacter.fbx``) liefert die
+  15 Blockteile mit den dokumentierten Massen.
+* Fehlende Extremitaeten werden daraus gebaut: drei Segmente mit
+  quadratischem Querschnitt (halbe Torso-Breite, wie R15-Block 1x1 Studs).
+* Ausgeruestete Teile bleiben **unangetastet**: Montage exakt ueber ihre
+  RigAttachments (``Kind = Eltern * C0 * C1^-1``), keine Schulterlinien-
+  Konstante, keine Laengen-Normierung, keine Ersetzung. Die klassische
+  Referenz (``classic_body.json``) bleibt nur als Mass-Abgleich erhalten.
 
     python3 -m pytest tools/tests/test_standard_koerper.py -q
 """
@@ -53,6 +57,14 @@ def klassisch():
     return body
 
 
+@pytest.fixture(scope="module")
+def standard():
+    body = mannequin.cached(mannequin.STANDARD_PATH)
+    if body is None or not body.meshes:
+        pytest.skip("reference/standard_r15.json fehlt")
+    return body
+
+
 def _att(pos, rot=I3):
     return {"position": pos, "rotation": rot}
 
@@ -79,7 +91,7 @@ def _arm_segmente(koerper):
 
 
 def _torso_segmente(koerper):
-    """Torso aus den Mannequin-Teilen (wie beim echten Avatar)."""
+    """Torso-Segmente mit RigAttachments (wie beim echten Avatar)."""
     teile = []
     for name in ("LowerTorso", "UpperTorso"):
         teile.append(_seg(name, koerper.meshes[name], koerper.sizes[name], {
@@ -94,76 +106,90 @@ def _torso_segmente(koerper):
     return teile
 
 
-def test_referenz_enthaelt_die_15_standard_teile(klassisch):
+def _rig(segs, **kw):
+    return avatar_rig.assemble_r15_rig(
+        segs, None, roblox_api.DEFAULT_BODY_COLORS,
+        dict(roblox_api.DEFAULT_SCALES), headless=True, **kw)
+
+
+def test_standard_referenz_enthaelt_die_15_blockteile(standard):
+    """R15-Blockkoerper aus BlockyCharacter.fbx: 15 Teile, exakte Masse."""
+    assert len(standard.meshes) == 15
+    assert set(mannequin.PART_NAMES) <= set(standard.meshes)
+    # Dokumentierte Masse des offiziellen R15-Blockkoerpers (Studs).
+    assert standard.sizes["UpperTorso"] == pytest.approx((2.0, 1.6, 1.0), abs=2e-3)
+    assert standard.sizes["LowerTorso"] == pytest.approx((2.0, 0.4, 1.0), abs=2e-3)
+    assert standard.sizes["LeftUpperArm"] == pytest.approx((1.0, 1.1687, 1.0), abs=2e-3)
+    assert standard.sizes["LeftLowerLeg"] == pytest.approx((1.0, 1.1931, 1.0), abs=2e-3)
+    # Der Block-Fuss ist ein flacher Quader (1 x 0,3 x 1) - keine Zehen, die
+    # nach hinten zeigen koennten.
+    assert standard.sizes["LeftFoot"] == pytest.approx((1.0, 0.3, 1.0), abs=2e-3)
+    for teil in standard.meshes.values():
+        assert len(teil.positions) > 50
+        assert len(teil.faces) > 50
+
+
+def test_klassische_referenz_bleibt_zum_massabgleich(klassisch):
+    """Der klassische Koerper bleibt als Referenzdatei erhalten."""
     assert len(klassisch.meshes) == 15
-    assert set(mannequin.PART_NAMES) <= set(klassisch.meshes)
-    # Dokumentierte Maße des offiziellen Mannequins (Studs).
-    assert klassisch.sizes["UpperTorso"] == pytest.approx((1.3034, 1.6987, 0.842),
-                                                          abs=2e-3)
-    assert klassisch.sizes["LeftUpperArm"] == pytest.approx((0.7489, 0.8883, 0.5844),
-                                                            abs=2e-3)
-    for teil in klassisch.meshes.values():
-        assert len(teil.positions) > 100
-        assert len(teil.faces) > 100
-        assert len(teil.uvs) == len(teil.positions)
+    assert klassisch.sizes["UpperTorso"] == pytest.approx(
+        (1.3034, 1.6987, 0.842), abs=2e-3)
+    assert klassisch.metrics["arm_top_below_torso"] == pytest.approx(0.216, abs=0.01)
 
 
-def test_teile_sitzen_wie_im_mannequin(klassisch):
-    """Armoberkante 21,6 % und Beinlaenge 131,7 % der Torso-Hoehe."""
-    lo, hi = (-0.464, 0.0, -0.358), (0.464, 1.663, 0.358)
-    arme = mannequin.place_part(klassisch, "links_arm", (lo, hi))
-    beine = mannequin.place_part(klassisch, "links_bein", (lo, hi))
-    torso_h = hi[1] - lo[1]
-    arm_lo, arm_hi = arme[0].mesh.bbox()
-    arm_oben = arme[0].center[1] + arm_hi[1]
-    assert arm_oben == pytest.approx(hi[1] - 0.216 * torso_h, abs=0.01 * torso_h)
-    bein_lo, bein_hi = beine[0].mesh.bbox()
-    oben = beine[0].center[1] + bein_hi[1]
-    unten = beine[-1].center[1] + beine[-1].mesh.bbox()[0][1]
-    assert (oben - unten) / torso_h == pytest.approx(1.317, abs=0.03)
-    # Die Beine greifen wie im Mannequin in den Torso (kein Spalt).
-    assert oben > lo[1]
-    _ = (arm_lo, bein_lo)
+def test_ausgeruesteter_arm_bleibt_unangetastet(klassisch):
+    """Die Arme des Avatars werden nicht ersetzt und nicht umgehaengt.
 
-
-def test_rig_setzt_die_schulter_auf_die_mannequin_hoehe(klassisch):
-    """Schultergelenk 21,6 % unter der Torso-Oberkante - ohne Schulterband."""
-    rig = avatar_rig.assemble_r15_rig(
-        {"torso": _torso_segmente(klassisch),
-         "links_arm": _arm_segmente(klassisch)}, None,
-        roblox_api.DEFAULT_BODY_COLORS, dict(roblox_api.DEFAULT_SCALES),
-        headless=True, classic_body=klassisch)
-    assert any("ClassicMannequin" in n for n in rig.notes)
-    # Kein Schulterband-Eingriff mehr (der schob den Arm auf 4 %).
+    Frueher ersetzte der Classic-Zweig sie durch senkrecht gedrehte
+    Mannequin-Teile - danach zeigten die Pose-Drehpunkte ins Leere und die
+    Segmente lagen im Emote verstreut. Jetzt gilt: Schulter-, Ellbogen- und
+    Handgelenk liegen exakt auf den RigAttachments, die Geometrie ist die
+    der ausgeruesteten Teile, nichts wird verschoben oder normiert.
+    """
+    segmente = _arm_segmente(klassisch)
+    rig = _rig({"torso": _torso_segmente(klassisch), "links_arm": segmente})
+    # Weder ersetzt noch per Schulterband verschoben noch laengennormiert.
+    assert not any("Standard-Avatar" in n and "links_arm" in n for n in rig.notes)
     assert not any("Schulterlinie" in n for n in rig.notes)
-    t_lo, t_hi = rig.body_meshes["torso"].bbox()
-    torso_h = t_hi[1] - t_lo[1]
+    assert not any("gebracht (Faktor" in n for n in rig.notes)
+    # Schulter exakt auf dem Torso-Attachment (kein Band, kein Offset).
     schulter = rig.joint_positions["LeftUpperArm"]
-    assert (t_hi[1] - schulter[1]) / torso_h == pytest.approx(0.216, abs=0.02)
-    assert schulter[0] < 0  # linker Arm liegt links (Szene schaut nach -Z)
-    # Der Arm haengt senkrecht: Ellenbogen genau unter der Schulter.
+    att_pos = rig.world_attachments["LeftShoulderRigAttachment"][0]
+    assert schulter == pytest.approx(att_pos, abs=1e-6)
+    # Die Kette haengt an den Attachments nach unten: Ellbogen unter der
+    # Schulter, Handgelenk unter dem Ellbogen.
     ellbogen = rig.joint_positions["LeftLowerArm"]
-    assert ellbogen[0] == pytest.approx(schulter[0], abs=0.02)
-    assert ellbogen[2] == pytest.approx(schulter[2], abs=0.02)
+    hand = rig.joint_positions["LeftHand"]
     assert ellbogen[1] < schulter[1]
-    # Und die sichtbare Armoberkante liegt tiefer als das alte Band (4 %).
-    arm_lo, arm_hi = rig.body_meshes["links_arm"].bbox()
-    assert 0.05 < (t_hi[1] - arm_hi[1]) / torso_h < 0.30
+    assert hand[1] < ellbogen[1]
+    assert ellbogen == pytest.approx(
+        rig.world_attachments["LeftElbowRigAttachment"][0], abs=1e-6)
+    # Geometrie der ausgeruesteten Teile (nicht ersetzt): gleiche Flaechenzahl.
+    erwartet = sum(len(s["mesh"].faces) for s in segmente)
+    assert len(rig.body_meshes["links_arm"].faces) == erwartet
 
 
-def test_fehlende_beine_kommen_aus_dem_mannequin(klassisch):
-    """Frueher wurden fehlende Beine aus R15-Block-Meshes/Quadern gebaut."""
-    rig = avatar_rig.assemble_r15_rig(
-        {"torso": _torso_segmente(klassisch)}, None,
-        roblox_api.DEFAULT_BODY_COLORS, dict(roblox_api.DEFAULT_SCALES),
-        headless=True, classic_body=klassisch)
+def test_fehlende_beine_kommen_aus_dem_r15_standard(klassisch):
+    """Nicht getragene Beine = R15-Blockkoerper, nicht Classic, kein Klotz."""
+    rig = _rig({"torso": _torso_segmente(klassisch)},
+               standard_meshes=mannequin.standard_meshes())
+    assert any("Standard-Avatar" in n and "links_bein" in n for n in rig.notes)
+    spans = rig.segment_spans["links_bein"]
+    assert [s for s, _a, _b in spans] == ["LeftUpperLeg", "LeftLowerLeg", "LeftFoot"]
     bein = rig.body_meshes["links_bein"]
-    # Das Mannequin-Bein hat 222 + 124 + 231 Dreiecke - kein Quader (12).
+    # Block-Meshes des Standards (788 Flaechen), kein Quader (36).
     assert len(bein.faces) > 300
     t_lo, t_hi = rig.body_meshes["torso"].bbox()
+    torso_w = t_hi[0] - t_lo[0]
+    torso_h = t_hi[1] - t_lo[1]
     lo, hi = bein.bbox()
-    assert (hi[1] - lo[1]) / (t_hi[1] - t_lo[1]) == pytest.approx(1.317, abs=0.08)
-    # UVs des Standard-Koerpers (Roblox-Kleidungsvorlage) bleiben erhalten.
+    # Fuss auf dem Boden, Beinlaenge = Torso-Hoehe (R15-Verhaeltnis).
+    assert lo[1] == pytest.approx(0.0, abs=1e-6)
+    assert (hi[1] - lo[1]) == pytest.approx(torso_h, rel=0.05)
+    # Quadratischer Block-Querschnitt: halbe Torso-Breite, Tiefe = Breite.
+    assert (hi[0] - lo[0]) == pytest.approx(0.5 * torso_w, rel=0.05)
+    assert (hi[2] - lo[2]) == pytest.approx(hi[0] - lo[0], rel=0.05)
+    # Kleidungs-UVs der Roblox-Vorlage (Hose) auf allen Segmenten.
     assert all(0.0 <= u <= 1.0 and 0.0 <= v <= 1.0 for u, v in bein.uvs)
 
 
@@ -183,21 +209,17 @@ def test_fremdes_bundle_wird_nicht_ersetzt(klassisch):
             "LeftWristRigAttachment": _att((0.0, 1.0, 0.0)),
         }),
     ]
-    rig = avatar_rig.assemble_r15_rig(
-        {"torso": _torso_segmente(klassisch), "links_arm": segmente}, None,
-        roblox_api.DEFAULT_BODY_COLORS, dict(roblox_api.DEFAULT_SCALES),
-        headless=True, classic_body=klassisch)
-    assert not any("links_arm" in n and "ClassicMannequin" in n for n in rig.notes)
+    rig = _rig({"torso": _torso_segmente(klassisch), "links_arm": segmente})
+    assert not any("Standard-Avatar" in n and "links_arm" in n for n in rig.notes)
     arm = rig.body_meshes["links_arm"]
     lo, hi = arm.bbox()
     assert hi[1] - lo[1] > 2.5  # die 2-Studs-Segmente des Pakets
 
 
-def test_ohne_referenz_bleibt_der_bisherige_weg(klassisch):
-    """Ohne ``classic_body`` aendert sich nichts (Rueckfall bleibt erhalten)."""
-    rig = avatar_rig.assemble_r15_rig(
-        {"torso": _torso_segmente(klassisch)}, None,
-        roblox_api.DEFAULT_BODY_COLORS, dict(roblox_api.DEFAULT_SCALES),
-        headless=True)
-    assert not any("ClassicMannequin" in n for n in rig.notes)
-    assert "links_arm" in rig.body_meshes
+def test_ohne_standard_meshes_bleibt_der_r15_rueckfall(klassisch):
+    """Fehlt die Referenzdatei, entstehen R15-Quader gleicher Masse."""
+    rig = _rig({"torso": _torso_segmente(klassisch)})
+    spans = rig.segment_spans["links_bein"]
+    assert [s for s, _a, _b in spans] == ["LeftUpperLeg", "LeftLowerLeg", "LeftFoot"]
+    lo, hi = rig.body_meshes["links_bein"].bbox()
+    assert lo[1] == pytest.approx(0.0, abs=1e-6)

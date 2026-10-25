@@ -17,7 +17,6 @@ Details siehe ANLEITUNG.md, Abschnitt "Einschraenkungen".
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -69,22 +68,6 @@ R15_LIMB_TOLERANCE = 0.15
 #: Ab dieser Abweichung werden linkes und rechtes Bein angeglichen (sonst
 #: steht der Avatar auf einem Bein in der Luft).
 R15_LEG_SYMMETRY_TOLERANCE = 1.05
-#: R15-Schulterlinie: 0,5 Studs unter der Oberkante bei 2 Studs Torso-Hoehe -
-#: also ein Viertel der Torso-Hoehe. Autoren-Attachments in diesem Bereich
-#: bleiben unangetastet.
-R15_SHOULDER_FRACTION_OF_TORSO = 0.25
-#: Erlaubtes Band fuer die Oberkante des Oberarms, in Torso-Hoehen unter der
-#: Torso-Oberkante. Zwei Bug-Reports stecken die Grenzen ab: ein Arm, dessen
-#: Oberkante ueber der Torso-Oberkante liegt, wirkt "zu hoch"; einer, der ein
-#: Zehntel darunter beginnt, wirkt "viel zu niedrig". Deshalb: hoechstens 2 %
-#: darueber (praktisch buendig) und hoechstens 6 % darunter. Liegt der Arm
-#: ausserhalb, wird er starr auf die Mitte des Bandes (4 %) verschoben.
-R15_ARM_TOP_BAND = (0.02, 0.06)
-R15_ARM_TOP_TARGET = 0.04
-#: Ueberlappung der Standard-Avatar-Segmente (Faktor auf die Segmenthoehe).
-#: Die R15-Block-Meshes sind an den Enden abgerundet; ohne Ueberlappung
-#: entstehen sichtbare Luecken zwischen Ober- und Unterglied.
-R15_STANDARD_SEGMENT_OVERLAP = 1.12
 
 #: Meshes des **Standard-Avatars** (R15-Block-Koerper). Roblox baut den
 #: Standard-Koerper in der Engine aus genau diesen FileMesh-Assets; sie haben
@@ -923,78 +906,21 @@ def has_rig_attachments(segments_by_part: Dict[str, List[Dict[str, Any]]], head_
     return False
 
 
-def _rot_to_down(axis: Tuple[float, float, float]) -> Matrix3:
-    """Rotation, die ``axis`` auf (0,-1,0) abbildet (Bind-Pose senkrecht)."""
-    length = math.sqrt(sum(float(c) * float(c) for c in axis))
-    if length < 1e-9:
-        return IDENTITY_MAT3
-    d = (axis[0] / length, axis[1] / length, axis[2] / length)
-    up = (0.0, -1.0, 0.0)
-    dot = sum(d[i] * up[i] for i in range(3))
-    if dot > 1.0 - 1e-9:
-        return IDENTITY_MAT3
-    if dot < -1.0 + 1e-9:
-        return ((1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, -1.0))
-    ax = (d[1] * up[2] - d[2] * up[1],
-          d[2] * up[0] - d[0] * up[2],
-          d[0] * up[1] - d[1] * up[0])
-    norm = math.sqrt(sum(c * c for c in ax))
-    ax = (ax[0] / norm, ax[1] / norm, ax[2] / norm)
-    angle = math.acos(max(-1.0, min(1.0, dot)))
-    c, si = math.cos(angle), math.sin(angle)
-    x, y, z = ax
-    return (
-        (c + x * x * (1 - c), x * y * (1 - c) - z * si, x * z * (1 - c) + y * si),
-        (y * x * (1 - c) + z * si, c + y * y * (1 - c), y * z * (1 - c) - x * si),
-        (z * x * (1 - c) - y * si, z * y * (1 - c) + x * si, c + z * z * (1 - c)),
-    )
-
-
-def _classic_segment_matches(raw: Optional[Dict[str, Any]],
-                             reference: Any) -> bool:
-    """Ist das vorhandene Segment-Mesh genau dieses Standard-Teil?
-
-    Nur dann darf es durch die Referenzgeometrie ersetzt werden. Ein
-    ausgeruestetes Bundle (z. B. ein Korblox-Arm) hat andere Maße und bleibt
-    unangetastet. Verglichen wird die Roh-Mesh-Groesse (Mannequin-Einheiten)
-    mit der Groesse des Teils im offiziellen Mannequin.
-    """
-    if not raw:
-        return True
-    mesh = raw.get("mesh")
-    if mesh is None or getattr(mesh, "is_empty", True):
-        return True
-    lo, hi = mesh.bbox()
-    size = (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])
-    for i in range(3):
-        target = max(1e-6, float(reference[i]))
-        if abs(size[i] - float(reference[i])) > 0.06 * target:
-            return False
-    return True
-
-
 def _standard_segment_mesh(raw: Optional[MeshData], width: float, height: float,
                            depth: float, slice_name: str) -> Optional[MeshData]:
     """Skaliert ein Standard-Avatar-Mesh auf die R15-Masse eines Segments.
 
-    Das R15-Block-Mesh kommt als Einheitskoerper (SpecialMesh-Standard), seine
-    Proportionen ergeben sich erst aus der Part-Groesse. Deshalb wird es auf
-    genau die Maße gezogen, die auch der Quader-Fallback haette, und bekommt
-    die Kleidungs-UVs des Abschnitts (Shirt/Hose).
+    Die R15-Blockteile sind Einheitskoerper (SpecialMesh-Standard), ihre
+    Proportionen ergeben sich erst aus der Teil-Groesse. Deshalb wird das Mesh
+    auf genau die Maße gezogen, die das Segment im R15-Standard hat, und
+    bekommt die Kleidungs-UVs seines Abschnitts (Shirt/Hose).
     """
     if raw is None or raw.is_empty:
         return None
     lo, hi = raw.bbox()
     size = (max(1e-6, hi[0] - lo[0]), max(1e-6, hi[1] - lo[1]),
             max(1e-6, hi[2] - lo[2]))
-    # Die Block-Meshes haben abgerundete Enden. Stossen zwei Segmente exakt
-    # aufeinander, bleiben zwischen den Rundungen Luecken (der Koerper wirkt
-    # wie gestapelte Wuerfel). Deshalb wird jedes Segment etwas hoeher
-    # gezogen und ueberlappt seine Nachbarn - die Naht ist dann geschlossen,
-    # die Silhouette bleibt die des Standard-Koerpers.
-    scaled = raw.transform(
-        (width / size[0], height * R15_STANDARD_SEGMENT_OVERLAP / size[1],
-         depth / size[2]))
+    scaled = raw.transform((width / size[0], height / size[1], depth / size[2]))
     center = scaled.center()
     scaled = scaled.transform(1.0, (-center[0], -center[1], -center[2]))
     return apply_limb_uvs_projected(scaled, slice_name)
@@ -1007,7 +933,6 @@ def assemble_r15_rig(
     scales: Dict[str, Any],
     headless: bool = False,
     standard_meshes: Optional[Dict[str, MeshData]] = None,
-    classic_body: Any = None,
 ) -> RiggedAvatar:
     """Setzt einen kompletten R15-Avatar ueber exakte `*RigAttachment`-Gelenke zusammen.
 
@@ -1016,13 +941,11 @@ def assemble_r15_rig(
     ausgeruesteten Koerperteilen die Quader-Notloesung: gleiche R15-Masse und
     Gelenk-Kette, aber die gerundete Silhouette des Standard-Koerpers.
 
-    ``classic_body`` (``mannequin.ClassicBody``) ist Roblox' offizieller
-    klassischer Standard-Koerper aus ``ClassicMannequin.fbx``. Damit werden
-    Arme und Beine exakt so gesetzt, wie Roblox selbst sie setzt: echte
-    Teil-Meshes, Gelenke auf der Oberkante jedes Glieds, Lage relativ zum
-    echten Torso des Avatars. Das ist die einzige Quelle fuer Schulter-,
-    Ellbogen- und Knieposition - es gibt keine Prozentkonstanten mehr, die
-    nachjustiert werden muessten.
+    ``standard_meshes`` enthaelt die *echten* R15-Blockteile des
+    Standard-Avatars (``reference/standard_r15.json``, gebaut aus Roblox'
+    ``BlockyCharacter.fbx``). Sie ersetzen nicht ausgeruestete Koerperteile -
+    die Teile des Avatars selbst bleiben unangetastet und haengen an ihren
+    eigenen RigAttachments.
     """
     standard_meshes = standard_meshes or {}
     sw = _clamp(scales.get("width"), 0.55, 1.60)
@@ -1290,94 +1213,6 @@ def assemble_r15_rig(
         """
         names = [name for name, _att in chain]
 
-        # --- 1) Offizieller Standard-Koerper (Roblox-Mannequin) -------------
-        # Liegt die Referenzgeometrie vor, wird die Extremitaet genau wie im
-        # Mannequin gesetzt: identische Teil-Meshes, Gelenke auf der Oberkante
-        # jedes Glieds, Lage relativ zum echten Torso des Avatars. Damit ist
-        # die Schulter dort, wo Roblox sie hat - ohne Schulterband, ohne
-        # Laengen-Normierung, ohne Verschiebung.
-        classic_placed: Optional[List[Any]] = None
-        if classic_body is not None:
-            try:
-                import mannequin as _mannequin
-                _cand = _mannequin.place_part(classic_body, part_name,
-                                              torso_mesh.bbox())
-            except Exception:  # pragma: no cover - Referenzdaten fehlen
-                _cand = None
-            _sizes = getattr(classic_body, "sizes", {}) or {}
-            if _cand and len(_cand) == len(names) and all(
-                _cand[i].name == names[i] for i in range(len(names))
-            ) and all(
-                seg.name not in seg_lookup
-                or _classic_segment_matches(raw_parts.get(seg.name),
-                                            _sizes.get(seg.name, seg.size))
-                for seg in _cand
-            ):
-                classic_placed = _cand
-        if classic_placed is not None:
-            # Bind-Pose senkrecht: das Mannequin zeigt den Koerper in A-Pose
-            # (Arme ~30 Grad ausgestellt). Roblox haengt die Glieder dagegen
-            # senkrecht auf; gedreht wird um den Gelenkpunkt des Teils, und
-            # zwar so, dass Gelenk -> naechstes Gelenk nach unten zeigt. Die
-            # Gelenk-Abstaende stammen aus den *RigAttachments* der Teile
-            # (Roblox-Rig), damit die Naht genau so bleibt wie bei Roblox.
-            _slices = ("upper", "lower", "end")
-            _joint = classic_placed[0].joint
-            for index, seg in enumerate(classic_placed):
-                _mesh, _atts, _tr = seg_lookup.get(seg.name, (seg.mesh, {}, False))
-                _atts = dict(_atts or {})
-                _slice = _slices[index] if index < len(_slices) else "end"
-                _half = seg.size[1] / 2.0
-                _prox_entry = _atts.get(chain[index][1]) if index < len(chain) else None
-                _prox = (_prox_entry[0] if _prox_entry is not None
-                         else (0.0, _half, 0.0))
-                _dist_entry = (_atts.get(chain[index + 1][1])
-                               if index + 1 < len(chain) else None)
-                if _dist_entry is not None:
-                    _dist = _dist_entry[0]
-                elif index + 1 < len(classic_placed):
-                    # Ohne Attachment: naechstes Gelenk aus dem Mannequin.
-                    _nxt = classic_placed[index + 1].joint
-                    _ctr = seg.center
-                    _dist = (_nxt[0] - _ctr[0], _nxt[1] - _ctr[1],
-                             _nxt[2] - _ctr[2])
-                else:
-                    _dist = (0.0, -_half, 0.0)
-                _axis = (_dist[0] - _prox[0], _dist[1] - _prox[1],
-                         _dist[2] - _prox[2])
-                _rot = _rot_to_down(_axis)
-                _len = math.sqrt(sum(c * c for c in _axis))
-                # Mesh in Gelenk-Koordinaten, senkrecht ausgerichtet.
-                _local = []
-                for _p in seg.mesh.positions:
-                    _rel = (_p[0] - _prox[0], _p[1] - _prox[1], _p[2] - _prox[2])
-                    _local.append(_mat3_vec(_rot, _rel))
-                _seg_mesh = apply_limb_uvs_projected(
-                    MeshData(positions=_local, normals=[], uvs=[], faces=list(seg.mesh.faces),
-                             source_version=seg.mesh.source_version), _slice)
-                register_segment(seg.name, _seg_mesh, _atts, _joint,
-                                 IDENTITY_MAT3, not _tr)
-                joint_pos[seg.name] = _joint
-                joint_frames[seg.name] = (_prox_entry[1] if _prox_entry is not None
-                                          else IDENTITY_MAT3)
-                segment_driver[seg.name] = seg.name
-                # Naechstes Gelenk senkrecht unter dem aktuellen.
-                _joint = (_joint[0], _joint[1] - _len, _joint[2])
-            notes.append(
-                f"Extremitaet '{part_name}': offizieller Standard-Koerper, "
-                "senkrecht aufgehaengt (Roblox-ClassicMannequin: echte "
-                "Teil-Meshes, Gelenke aus den RigAttachments).")
-            _named = [(seg.name, placed_seg_mesh[seg.name])
-                      for seg in classic_placed if seg.name in placed_seg_mesh]
-            _merged, _spans = _merge_with_spans(_named)
-            body_meshes[part_name] = _merged
-            segment_spans[part_name] = _spans
-            _top = classic_placed[0].joint
-            _bottom = _joint
-            chain_spans[part_name] = {"span": _dist3(_top, _bottom),
-                                      "rescale": None, "factor": 1.0}
-            return 0.0, _top[1]
-
         if any(name in seg_lookup for name in names):
             root = root_att[0]
             # --- Durchgang 1: starre Montage, Platzierungen mitschreiben -----
@@ -1500,54 +1335,39 @@ def assemble_r15_rig(
                                       "factor": factor}
             return delta, top_vorher
         # --- Kein einziges Segment vorhanden --------------------------------
-        # Fruehere Fassung baute *einen* Klotz fuer die ganze Extremitaet -
-        # im Render sah das aus wie ein eckiger Quader ohne Knie und ohne
-        # Fuss (Bug-Report: "Beine sind einfach nur eckige Quader"). Jetzt
-        # entstehen drei Quader in R15-Proportionen, exakt auf der
-        # Gelenk-Kette: Ober-/Unterglied plus Hand bzw. Fuss (der Fuss steht
-        # vorne ueber, wie beim klassischen Roblox-Koerper).
+        # Nicht getragene Koerperteile ersetzt Roblox durch den Standard-
+        # Avatar. Dafuer werden hier die *echten* R15-Blockteile aus Roblox'
+        # ``BlockyCharacter.fbx`` eingesetzt (``reference/standard_r15.json``):
+        # Ober-/Unterglied plus Hand bzw. Fuss, quadratischer Querschnitt von
+        # einer halben Torso-Breite (R15: 1x1 Studs bei 2 Studs Torso-Breite)
+        # und die kanonischen R15-Laengenanteile. Der Querschnitt bleibt
+        # quadratisch, damit die Blockteile nicht verzerrt werden.
         root = root_att[0]
         total = max(0.30, placeholder_len)
+        fracs = (0.384, 0.411, 0.205) if kind == "leg" else (0.389, 0.407, 0.204)
+        lw = max(0.08, 0.5 * torso_w)
+        ld = lw
         if kind == "leg":
-            # Echte R15-Blockmasse: Oberschenkel 0,775 / Unterschenkel 0,829 /
-            # Fuss 0,415 Studs (Summe 2,019 bei 2,0 Studs Torso-Hoehe) und ein
-            # quadratischer Querschnitt von 1x1 Studs bei 2 Studs Torso-Breite
-            # (also die halbe Torso-Breite je Bein, wie beim Standard-Avatar).
-            # Die Beine sind *zwei* Koerper: eine schmale Luft zur Mitte, sonst
-            # verschmelzen sie optisch zu einem Klotz.
-            fracs = (0.384, 0.411, 0.205)
-            lw = max(0.08, 0.46 * torso_w)
-            ld = lw
-            gap = 0.03 * torso_w
-            lx = sign * (gap + lw / 2.0)
-            foot_depth = 1.22 * ld
-            foot_shift = 0.16 * ld
+            # Hueft-Attachment sitzt in R15 ueber der Beinmitte.
+            lx = root[0] if abs(root[0]) > 1e-3 else sign * 0.5 * torso_w
         else:
-            # Echte R15-Blockmasse: Oberarm 0,672 / Unterarm 0,703 / Hand 0,352.
-            fracs = (0.389, 0.407, 0.204)
-            lw = max(0.08, 0.34 * torso_w)
-            ld = max(0.08, 0.62 * torso_d)
-            lx = (root[0] if abs(root[0]) > 1e-3
-                  else sign * (0.5 * torso_w + 0.5 * lw))
-            foot_depth = ld
-            foot_shift = 0.0
+            # Schulter-Attachment sitzt an der Torso-Kante - der Arm haengt
+            # aussen buendig daneben.
+            lx = (root[0] + sign * lw / 2.0 if abs(root[0]) > 1e-3
+                  else sign * (0.5 * torso_w + lw / 2.0))
+        z = root[2]
         y = root[1]
         # Kleidungs-Texturen (Shirt/Hose) decken das ganze Glied ab. Jedes
         # Segment bekommt deshalb *seinen* Ausschnitt der Textur-Vorlage -
-        # sonst wiederholt sich das Muster (Saum, Bluemchen) an jedem
-        # Segment und das Bein bekommt Streifen.
+        # sonst wiederholt sich das Muster (Saum, Bluemchen) an jedem Segment.
         slices = ("upper", "lower", "end")
         for index, name in enumerate(names):
             h = total * fracs[index] if index < len(fracs) else 0.1
-            is_foot = kind == "leg" and index == len(names) - 1
-            depth = foot_depth if is_foot else ld
-            # Fussspitze zeigt nach vorne (-Z), die Ferse bleibt hinten.
-            z = root[2] - (foot_shift if is_foot else 0.0)
             slice_name = slices[index] if index < len(slices) else "end"
-            box = _standard_segment_mesh(
-                standard_meshes.get(name), lw, h, depth, slice_name)
+            box = _standard_segment_mesh(standard_meshes.get(name), lw, h, ld,
+                                         slice_name)
             if box is None:
-                box = apply_limb_box_uvs(make_box(lw, h, depth, (0.0, 0.0, 0.0)),
+                box = apply_limb_box_uvs(make_box(lw, h, ld, (0.0, 0.0, 0.0)),
                                          slice_name)
             origin = (lx, y - h / 2.0, z)
             register_segment(name, box, {}, origin, IDENTITY_MAT3, True)
@@ -1556,9 +1376,9 @@ def assemble_r15_rig(
             joint_frames[name] = IDENTITY_MAT3
             y -= h
         notes.append(
-            f"Extremitaet '{part_name}': nicht ausgeruestet - Standard-Avatar "
-            f"eingesetzt (R15-Blockkoerper aus {'Ober-/Unterschenkel und Fuss' if kind == 'leg' else 'Ober-/Unterarm und Hand'} "
-            "in Standard-Massen, kein Klotz).")
+            f"Extremitaet '{part_name}': nicht ausgeruestet - R15-Standard-"
+            f"Avatar (Blockkoerper) eingesetzt ({'Ober-/Unterschenkel und Fuss' if kind == 'leg' else 'Ober-/Unterarm und Hand'}"
+            " in Standard-Massen, quadratischer Querschnitt).")
         named = [(n, placed_seg_mesh[n]) for n in names if n in placed_seg_mesh]
         merged, spans = _merge_with_spans(named)
         body_meshes[part_name] = merged
@@ -1568,42 +1388,25 @@ def assemble_r15_rig(
     t_lo, t_hi = torso_mesh.bbox()
     torso_w = max(1e-3, t_hi[0] - t_lo[0])
     torso_h = max(1e-3, t_hi[1] - t_lo[1])
-    torso_d = max(1e-3, t_hi[2] - t_lo[2])
 
-    # --- 2a) Schulter- und Hueftlinie an der sichtbaren Torso-Geometrie ------
-    # Autor der Wahrheit sind die RigAttachments des Torsos: Roblox montiert die
-    # Arme genau dort. Bei Standard-R15 liegt die Schulter 0,5 Studs unter der
-    # Oberkante der 2 Studs hohen Torso-Haelfte, also bei 25 % der Hoehe.
-    # Autoren-Werte in diesem Band bleiben deshalb unangetastet. Ein frueherer
-    # Eingriff zog *jede* Schulter auf 4 % unter die Oberkante und haengte die
-    # Arme damit sichtbar zu hoch ("Schultern sind zu hoch"). Nur klar
-    # unbrauchbare Marker - oberhalb der Oberkante oder tiefer als 55 % der
-    # Torso-Hoehe (dann haengen die Arme am Bauch) - werden auf die
-    # R15-Schulterlinie gezogen. Die Huefte sitzt an der Unterkante.
+    # --- 2a) Schulter- und Hueftlinie ---------------------------------------
+    # Es gibt hier *keine* Schulterlinien-Konstante mehr. Die Arme haengen an
+    # den RigAttachments des Torsos - genau dort, wo Roblox sie montiert.
+    # Nur ein Marker, der gar nicht auf dem Torso liegt (fehlerhaftes Bundle),
+    # wird auf die Torso-Kante zurueckgeholt; sonst bleibt alles wie autorisiert.
     def _torso_band_joint(att_name: str, kind: str, sign: float) -> None:
         att = world_atts.get(att_name)
         if att is None:
             return
         x, y, z = att[0]
         if kind == "shoulder":
-            # R15-Schulterlinie: 0,5 Studs unter der Oberkante bei 2 Studs
-            # Torso-Hoehe = ein Viertel der Hoehe.
-            kanonisch = t_hi[1] - R15_SHOULDER_FRACTION_OF_TORSO * torso_h
-            zu_hoch = y > t_hi[1] + 0.02 * torso_h
-            zu_tief = y < t_hi[1] - 0.55 * torso_h
-            if zu_hoch or zu_tief:
-                lage = ("ueber der Torso-Oberkante" if zu_hoch else
-                        f"{_de(t_hi[1] - y)} Studs unter der Torso-Oberkante "
-                        f"(bei {_de(torso_h)} Studs Torso-Hoehe)")
+            if y > t_hi[1] + 0.05 * torso_h or y < t_lo[1]:
                 notes.append(
-                    f"Gelenk '{att_name}': Schulter lag {lage} - auf die "
-                    f"R15-Schulterlinie gesetzt ({_de(R15_SHOULDER_FRACTION_OF_TORSO * 100, 0)} % "
-                    "der Torso-Hoehe unter der Oberkante).")
-                y = kanonisch
-            # Nicht weiter innen als 40 % der halben Torso-Breite.
-            min_x = 0.40 * torso_w / 2.0
-            if abs(x) < min_x:
-                x = sign * min_x
+                    f"Gelenk '{att_name}': Schulter lag ausserhalb des Torsos - "
+                    "auf die Torso-Oberkante gesetzt.")
+                y = t_hi[1]
+            if abs(x) < 0.25 * torso_w / 2.0:
+                x = sign * 0.25 * torso_w / 2.0
         else:  # hip
             if y < t_lo[1] - 0.05 * torso_h or y > t_lo[1] + 0.25 * torso_h:
                 notes.append(
@@ -1615,6 +1418,7 @@ def assemble_r15_rig(
     for _side, _sign in (("Right", 1.0), ("Left", -1.0)):
         _torso_band_joint(f"{_side}ShoulderRigAttachment", "shoulder", _sign)
         _torso_band_joint(f"{_side}HipRigAttachment", "hip", _sign)
+
     for part_name, side, sign in (("rechts_arm", "Right", 1.0), ("links_arm", "Left", -1.0)):
         u_name, l_name, h_name = f"{side}UpperArm", f"{side}LowerArm", f"{side}Hand"
         shoulder_att = world_atts.get(
@@ -1623,13 +1427,6 @@ def assemble_r15_rig(
              IDENTITY_MAT3))
         joint_pos[u_name] = shoulder_att[0]
         joint_frames[u_name] = shoulder_att[1]
-        # Schulterband: Lage der *sichtbaren* Oberkante des Oberarms.
-        # Nicht der Attachment-Wert entscheidet, sondern wo der Arm optisch
-        # beginnt: sitzt er deutlich unter der Torso-Oberkante, haengen die
-        # Arme am Bauch; ragt er darueber, wirken die Schultern hochgezogen.
-        band = (t_hi[1] - R15_ARM_TOP_BAND[1] * torso_h,
-                t_hi[1] - R15_ARM_TOP_BAND[0] * torso_h,
-                t_hi[1] - R15_ARM_TOP_TARGET * torso_h)
         delta, top_vorher = _mount_chain(
             part_name,
             [(u_name, f"{side}ShoulderRigAttachment"),
@@ -1639,32 +1436,9 @@ def assemble_r15_rig(
             (-sign, 0.0, 0.0),
             R15_ARM_LENGTH_PER_TORSO_HEIGHT * R15_WRIST_FRACTION_OF_ARM * torso_h,
             R15_ARM_LENGTH_PER_TORSO_HEIGHT * torso_h,
-            "nur_verlaengern",
+            "nie",
             "arm",
-            sign,
-            align_top=band)
-        if abs(delta) > 1e-4:
-            lage = ("ueber der Torso-Oberkante" if top_vorher > band[1] else
-                    f"{_de(t_hi[1] - top_vorher)} Studs unter der "
-                    "Torso-Oberkante")
-            shoulder_att = ((shoulder_att[0][0], shoulder_att[0][1] + delta,
-                             shoulder_att[0][2]), shoulder_att[1])
-            world_atts[f"{side}ShoulderRigAttachment"] = shoulder_att
-            # Schulter-Accessoires (z. B. Taschen-Katze) sitzen am
-            # *ShoulderAttachment* - der wandert mit, sonst rutscht das
-            # Accessoire am Verschub vorbei in die Achsel.
-            accessoire = world_atts.get(f"{side}ShoulderAttachment")
-            if accessoire is not None:
-                world_atts[f"{side}ShoulderAttachment"] = (
-                    (accessoire[0][0], accessoire[0][1] + delta,
-                     accessoire[0][2]), accessoire[1])
-            joint_pos[u_name] = shoulder_att[0]
-            joint_frames[u_name] = shoulder_att[1]
-            notes.append(
-                f"Schulter '{side}': Oberkante des Oberarms lag {lage} - "
-                "starr auf die Schulterlinie verschoben (Gelenke, Segment-"
-                "groessen und Naehte unveraendert).")
-
+            sign)
     # 3) Beine (Hip -> Knee -> Ankle), gleiche Montage wie die Arme.
     for part_name, side, sign in (("rechts_bein", "Right", 1.0), ("links_bein", "Left", -1.0)):
         u_name, l_name, f_name = f"{side}UpperLeg", f"{side}LowerLeg", f"{side}Foot"

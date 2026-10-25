@@ -1,22 +1,15 @@
-"""Der offizielle **klassische Standard-Koerper** aus Roblox' Mannequin-Datei.
+"""Roblox' offizielle Standard-Koerper als Referenzgeometrie.
 
-Roblox stellt den klassischen Standard-Koerper als Referenzdatei bereit
-(``ClassicMannequin.fbx``). Dieses Modul liest ihn ein und leitet daraus alles
-ab, was die Pipeline fuer nicht ausgeruestete Koerperteile braucht:
+Zwei Referenzdateien, beide aus der offiziellen Doku:
 
-* die **exakten Meshes** der 15 Standard-Teile (keine nachgebauten Quader),
-* die **exakten Gelenk- und Laengenverhaeltnisse** des Standard-Koerpers,
-  bezogen auf die Torso-Hoehe.
+* ``BlockyCharacter.fbx`` - der **R15-Blockkoerper** (Standard-Avatar, 15
+  Blockteile). Daraus kommt die Geometrie fuer nicht getragene Koerperteile
+  (``reference/standard_r15.json``).
+* ``ClassicMannequin.fbx`` - der **klassische** Koerper (R6-Optik). Er dient
+  dem Abgleich der Koerpermaße (``reference/classic_body.json``).
 
-Damit sind Schulterlinie, Arm- und Beinlaengen nicht mehr geschaetzt, sondern
-stammen aus Roblox' eigenen Daten::
-
-    body = ClassicBody.load()          # reference/classic_body.json
-    seg = body.segment("LeftUpperLeg")  # MeshData im Standard-Mass
-    props = body.leg_proportions()      # Anteile der Beinlaenge
-
-Ist die Referenzdatei nicht vorhanden, liefert :func:`load` ``None`` und die
-Pipeline faellt auf die (dann gekennzeichnete) Naeherung zurueck.
+Ist eine Referenzdatei nicht vorhanden, liefert :func:`cached` ``None`` und
+die Pipeline faellt auf ihre Quader-Notloesung zurueck.
 """
 
 from __future__ import annotations
@@ -24,13 +17,15 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from roblox_mesh import MeshData
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 DEFAULT_PATH = os.path.join(ROOT, "reference", "classic_body.json")
+#: R15-Blockkoerper (Standard-Avatar) als Referenzgeometrie.
+STANDARD_PATH = os.path.join(ROOT, "reference", "standard_r15.json")
 
 #: Reihenfolge der Standard-Teile (wie im FBX benannt).
 PART_NAMES = (
@@ -133,116 +128,6 @@ def build_from_fbx(fbx_path: str) -> ClassicBody:
     return body
 
 
-@dataclass
-class PlacedSegment:
-    """Ein Standard-Teil, platziert im Avatar-Koerper.
-
-    ``mesh`` liegt im **Teil-Koordinatensystem** (Ursprung = Teilmitte) -
-    genau die Konvention der Roblox-``MeshPart`` und damit auch der
-    ``*RigAttachment``-Offsets. ``center`` ist die Teilmitte in Weltmaßen,
-    ``joint`` die Oberkante in der Teilmitte (Roblox-Gelenk, falls das Teil
-    keine eigenen Attachments mitbringt).
-    """
-
-    name: str
-    mesh: MeshData
-    center: Tuple[float, float, float]
-    joint: Tuple[float, float, float]
-    size: Tuple[float, float, float]
-
-
-def torso_frame(body: "ClassicBody",
-                torso_bbox: Tuple[Tuple[float, float, float],
-                                  Tuple[float, float, float]]
-                ) -> Tuple[List[float], List[float], List[float]]:
-    """Abbildung Mannequin-Raum -> Avatar-Raum, aus den echten Torso-Maßen.
-
-    Der Torso des Avatars ist die Referenz: Breite, Hoehe und Tiefe des
-    *tatsaechlich* vorhandenen Torso-Meshes bestimmen den Maßstab, die
-    Unterkante und die Mitte bestimmen die Lage. Damit sitzen alle
-    Standard-Teile genau dort, wo Roblox sie im Mannequin setzt - unabhaengig
-    von Koerper-Skalen oder Proportionen des Avatars.
-    """
-    lo, hi = torso_bbox
-    m = body.metrics
-    scale = [
-        (hi[0] - lo[0]) / m.get("torso_width", 1.0),
-        (hi[1] - lo[1]) / m.get("torso_height", 1.0),
-        (hi[2] - lo[2]) / m.get("torso_depth", 1.0),
-    ]
-    ut_lo, ut_hi = _mannequin_torso_box(body)
-    offset = [
-        (lo[0] + hi[0]) / 2.0 - (ut_lo[0] + ut_hi[0]) / 2.0 * scale[0],
-        lo[1] - ut_lo[1] * scale[1],
-        (lo[2] + hi[2]) / 2.0 - (ut_lo[2] + ut_hi[2]) / 2.0 * scale[2],
-    ]
-    return scale, offset, [ut_lo, ut_hi]
-
-
-def _mannequin_torso_box(body: "ClassicBody") -> Tuple[Tuple[float, float, float],
-                                                       Tuple[float, float, float]]:
-    """Torso-Box des Mannequins (untere Kante LowerTorso, obere UpperTorso)."""
-    ut = body.positions["UpperTorso"]
-    ut_size = body.sizes["UpperTorso"]
-    lt = body.positions["LowerTorso"]
-    lt_size = body.sizes["LowerTorso"]
-    lo = (ut[0] - ut_size[0] / 2.0, lt[1] - lt_size[1] / 2.0,
-          ut[2] - ut_size[2] / 2.0)
-    hi = (ut[0] + ut_size[0] / 2.0, ut[1] + ut_size[1] / 2.0,
-          ut[2] + ut_size[2] / 2.0)
-    return lo, hi
-
-
-def place_segment(body: "ClassicBody", name: str,
-                  torso_bbox: Tuple[Tuple[float, float, float],
-                                    Tuple[float, float, float]]
-                  ) -> Optional[PlacedSegment]:
-    """Ein Standard-Teil exakt wie im Mannequin in den Avatar setzen.
-
-    Das Mesh bleibt im Teil-Koordinatensystem (Ursprung = Teilmitte, wie bei
-    jeder Roblox-``MeshPart``); nur Lage und Maßstab kommen aus dem Mannequin.
-    """
-    mesh = body.meshes.get(name)
-    center = body.positions.get(name)
-    size = body.sizes.get(name)
-    if mesh is None or center is None or size is None:
-        return None
-    scale, offset, _box = torso_frame(body, torso_bbox)
-    # Im Mannequin liegt "Left" bei +X, in der Szene bei -X (der Avatar schaut
-    # nach -Z). Gespiegelt wird die *ganze* Seite, Mesh und Gelenk gemeinsam -
-    # relativ zueinander bleibt dadurch alles identisch.
-    center_world = (-(center[0] * scale[0] + offset[0]),
-                    center[1] * scale[1] + offset[1],
-                    center[2] * scale[2] + offset[2])
-    local = [(-p[0] * scale[0], p[1] * scale[1], p[2] * scale[2])
-             for p in mesh.positions]
-    placed_mesh = MeshData(positions=local, normals=[], uvs=list(mesh.uvs),
-                           faces=list(mesh.faces), source_version=mesh.source_version)
-    joint = (center_world[0], center_world[1] + size[1] * scale[1] / 2.0,
-             center_world[2])
-    world_size = (size[0] * scale[0], size[1] * scale[1], size[2] * scale[2])
-    return PlacedSegment(name=name, mesh=placed_mesh, center=center_world,
-                         joint=joint, size=world_size)
-
-
-def place_part(body: "ClassicBody", part: str,
-               torso_bbox: Tuple[Tuple[float, float, float],
-                                 Tuple[float, float, float]]
-               ) -> Optional[List[PlacedSegment]]:
-    """Alle Segmente eines Koerperteils (`LeftArm`, `links_arm`, ...) setzen."""
-    part = PART_ALIASES.get(part, part)
-    names = SEGMENTS_BY_PART.get(part)
-    if not names:
-        return None
-    out = []
-    for name in names:
-        seg = place_segment(body, name, torso_bbox)
-        if seg is None:
-            return None
-        out.append(seg)
-    return out
-
-
 def _derive_metrics(world: Dict[str, Tuple[Tuple[float, float, float],
                                             Tuple[float, float, float]]]) -> Dict[str, float]:
     """Alle Verhaeltnisse aus den echten Teil-Positionen ableiten.
@@ -318,6 +203,41 @@ def _derive_metrics(world: Dict[str, Tuple[Tuple[float, float, float],
 # JSON-Zwischenspeicher (damit zur Renderzeit kein FBX-Parser laufen muss)
 # ---------------------------------------------------------------------------
 
+def build_standard_from_fbx(fbx_path: str) -> ClassicBody:
+    """Liest den R15-Blockkoerper (``BlockyCharacter.fbx``).
+
+    Die Datei legt die 15 Blockteile als Einzelteile nebeneinander ab (kein
+    aufgebautes Rig). Fuer die Pipeline zaehlen nur Form und Groesse der
+    Teile: jedes Mesh wird auf seine Mitte zentriert, ``sizes`` haelt die
+    natuerlichen Maße. Die Lage im Koerper ergibt sich beim Einbau aus den
+    kanonischen R15-Anteilen (``avatar_rig``).
+    """
+    import fbx  # lokal, wie in build_from_fbx
+
+    doc = fbx.read_document(fbx_path)
+    by_name = {p.name: p for p in doc.parts}
+    body = ClassicBody(source=os.path.basename(fbx_path))
+    for name in PART_NAMES:
+        part = by_name.get(f"{name}_Geo") or by_name.get(name)
+        if part is None or not part.positions:
+            continue
+        lo, hi = part.bbox()
+        center = tuple((lo[i] + hi[i]) / 2.0 for i in range(3))
+        size = tuple(hi[i] - lo[i] for i in range(3))
+        positions = [(p[0] - center[0], p[1] - center[1], p[2] - center[2])
+                     for p in part.positions]
+        body.meshes[name] = MeshData(
+            positions=positions,
+            normals=[],
+            uvs=list(part.uvs) if len(part.uvs) == len(positions) else [],
+            faces=list(part.faces),
+            source_version="roblox-r15-blocky",
+        )
+        body.sizes[name] = size
+        body.positions[name] = (0.0, 0.0, 0.0)
+    return body
+
+
 def dump_json(body: ClassicBody, path: str) -> None:
     payload: Dict[str, Any] = {
         "source": body.source,
@@ -374,3 +294,13 @@ def cached(path: str = DEFAULT_PATH) -> Optional[ClassicBody]:
     if path not in _CACHE:
         _CACHE[path] = load(path)
     return _CACHE[path]
+
+
+def standard_meshes(path: str = STANDARD_PATH) -> Dict[str, MeshData]:
+    """R15-Blockteile des Standard-Avatars (Segmentname -> Mesh).
+
+    Leeres Dict, wenn die Referenzdatei fehlt - dann baut die Pipeline die
+    fehlenden Teile als Quader gleicher Maße.
+    """
+    body = cached(path)
+    return dict(body.meshes) if body is not None else {}

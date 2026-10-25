@@ -1197,25 +1197,16 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 texture_for_part["kopf"] = rel_head
                 clothing_kind_by_file[rel_head] = "composited"
 
-    # Roblox' offizieller klassischer Standard-Koerper (ClassicMannequin.fbx).
-    # Er liefert die *echten* Standard-Teile und ihre Gelenke, statt sie
-    # nachzubauen - damit sitzen Schultern, Ellbogen und Knie exakt wie bei
-    # Roblox.
-    classic_body = mannequin.cached()
-    if classic_body is None:
-        _fbx = os.path.join(mannequin.ROOT, "reference", "official",
-                            "ClassicMannequin.fbx")
-        if os.path.exists(_fbx):
-            try:
-                classic_body = mannequin.build_from_fbx(_fbx)
-                mannequin.dump_json(classic_body, mannequin.DEFAULT_PATH)
-                log("      . Standard-Koerper aus ClassicMannequin.fbx gelesen")
-            except Exception as exc:  # pragma: no cover - FBX-Leser
-                classic_body = None
-                warnings.append(f"Standard-Koerper nicht lesbar: {exc}")
-    if classic_body is not None:
-        log(f"      . Standard-Koerper: {len(classic_body.meshes)} Teile "
-            f"aus {classic_body.source}")
+    # R15-Standard-Avatar (BlockyCharacter.fbx -> reference/standard_r15.json):
+    # die echten Blockteile von Roblox ersetzen nicht getragene Koerperteile.
+    # Lokal vorhandene Referenz hat Vorrang vor nichts; heruntergeladene
+    # Block-Meshes (gleiche Geometrie von den Roblox-Servern) ergaenzen sie.
+    _standard_ref = mannequin.standard_meshes()
+    if _standard_ref:
+        for _seg, _mesh in _standard_ref.items():
+            standard_meshes.setdefault(_seg, _mesh)
+        log(f"      . Standard-Avatar: {len(_standard_ref)} R15-Blockteile "
+            "aus reference/standard_r15.json")
 
     # Exakten R15-Gelenk-Rig berechnen (liefert Welt-Attachments + Skinning-Gelenke
     # sowie bei echten RBXM-RigAttachments die 1:1-Gelenkgeometrie aller Koerperteile)
@@ -1227,7 +1218,6 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         scales,
         headless=headless["active"],
         standard_meshes=standard_meshes,
-        classic_body=classic_body,
     )
     # Hinweise des Gelenk-Audits (abgeleitete Attachments, ersetzte
     # Platzhalter-Gelenke) sichtbar machen - sie erklaeren, warum ein Teil
@@ -1542,6 +1532,12 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         # Zuordnung zum passenden Knochen (Hut -> Kopf, Gear -> rechte Hand,
         # Rucksack -> oberer Torso ...).
         placed = apply_accessory_pose(pose_ctx, placed, int(mesh_part["type_id"]))
+        if not placed.is_empty:
+            _alo, _ahi = placed.bbox()
+            accessory_diag[-1]["bbox_welt"] = {
+                "min": [round(float(v), 3) for v in _alo],
+                "max": [round(float(v), 3) for v in _ahi],
+            }
 
         acc_tex = mesh_part.get("texture_file")
         acc_tex_kind = None
@@ -1720,6 +1716,20 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 for k, v in (getattr(rig_avatar, "joint_positions", {}) or {}).items()
             },
             "segment_rohdaten": dict(getattr(rig_avatar, "segment_info", {}) or {}),
+            # Kopf-BBox und die Welt-Attachments, an denen Hut/Haar/Brille
+            # haengen - damit laesst sich ein verrutschtes Gesichts-
+            # Accessoire in Studs nachmessen statt zu raten.
+            "kopf": ({
+                "bbox_min": [round(c, 3) for c in rig_avatar.head_mesh.bbox()[0]],
+                "bbox_max": [round(c, 3) for c in rig_avatar.head_mesh.bbox()[1]],
+                "attachments": {
+                    name: [round(c, 3) for c in att[0]]
+                    for name, att in (rig_avatar.world_attachments or {}).items()
+                    if name in ("HatAttachment", "HairAttachment",
+                                "FaceFrontAttachment", "FaceCenterAttachment")
+                },
+            } if getattr(rig_avatar, "head_mesh", None) is not None else {}),
+            "accessoires": list(accessory_diag),
             "segmente": {
                 seg: {"bbox_min": [round(c, 3) for c in mesh.bbox()[0]],
                       "bbox_max": [round(c, 3) for c in mesh.bbox()[1]]}

@@ -112,33 +112,28 @@ exakt nach der Roblox-Regel `Kind = Eltern · C0 · C1⁻¹`. Einzelne Segmente
 werden nie gestaucht oder gestreckt, die Naht zwischen zwei Segmenten bleibt zu,
 und Gelenke sitzen dort, wo Roblox sie setzt:
 
-* **Standard-Körper = Originalgeometrie.** Der Körper dieses Avatars ist der
-  *klassische* Roblox-Körper; seine Teile stimmen auf drei Nachkommastellen mit
-  Roblox' offizieller Referenzdatei `ClassicMannequin.fbx` überein (Oberarm
-  0,749 × 0,888 × 0,584 usw.). Die Pipeline liest diese Datei deshalb direkt
-  ein (`tools/mannequin.py`, `tools/fbx.py`) und erzeugt daraus
-  `reference/classic_body.json`: alle 15 Teile mit Mesh, Maßen und Lage im
-  Mannequin. Nichts wird mehr nachgebaut.
-* **Schultern und Gelenke.** Arme und Beine stehen exakt wie im Mannequin,
-  bezogen auf den *echten* Torso des Avatars: Das Schultergelenk liegt
-  **21,6 % der Torso-Höhe unter der Torso-Oberkante**, die Beinlänge beträgt
-  **131,7 %** der Torso-Höhe. Aufgehängt wird **senkrecht** (das Mannequin
-  selbst zeigt eine A-Pose mit ~30° ausgestellten Armen): gedreht wird um den
-  Gelenkpunkt des Teils, die Gelenkabstände kommen aus den
-  `*RigAttachment`s – Naht und Drehpunkt bleiben also exakt wie bei Roblox.
-  Es gibt **keine** Prozentkonstanten für die Schulterlinie mehr; die frühere
-  „Schulterband“-Verschiebung (Arm starr auf 4 % unter die Oberkante) war die
-  Ursache für hochgezogene Schultern und ist für den Standard-Körper
-  abgeschaltet.
-* **Fehlende Körperteile** (z. B. Beine, wenn nur Torso und Arme getragen
-  werden) ersetzt Roblox durch den **Standard-Avatar** – nicht durch weitere
-  Teile des getragenen Pakets. Die Pipeline setzt dafür die Teile aus
-  `classic_body.json` ein: echte Silhouette, die Kleidungs-UVs der Roblox-
-  Vorlage (Shirt/Hose, 264×284) und Gelenke auf den Teilkanten. Kein Quader,
-  keine R15-Block-Ersatzgeometrie.
-* **Fremde Bundles bleiben unangetastet.** Weicht ein getragenes Segment in
-  seinen Maßen von der Referenz ab (z. B. ein Korblox-Arm), wird es weiterhin
-  über seine eigenen Attachments montiert.
+* **Montage wie bei Roblox.** Jedes ausgerüstete Segment hängt über seine
+  `*RigAttachment`s am Elternteil (`Kind = Eltern · C0 · C1⁻¹`) – Drehpunkte
+  und Nähte sind damit exakt die des Spiels, und die Pose dreht um dieselben
+  Gelenke. Es gibt **keine** Schulterlinien-Konstante und keine
+  Längen-Normierung mehr: Die frühere „Schulterband“-Verschiebung setzte die
+  Schultern zu hoch, ein späteres Ersetzen der Arme durch umgehängte
+  Ersatzteile ließ Ober-/Unterarm und Hand im Emote auseinanderfliegen –
+  beides ist entfernt.
+* **Fehlende Körperteile = R15-Standard-Avatar.** Trägt der Avatar ein Teil
+  gar nicht (z. B. keine Beine), setzt Roblox den **R15-Blockkörper** ein.
+  Die Pipeline nutzt dafür die echten Blockteile aus Roblox' offizieller
+  `BlockyCharacter.fbx` (`reference/standard_r15.json`): Ober-/Unterglied
+  plus Hand bzw. Fuß mit quadratischem Querschnitt (1×1 Studs bei 2 Studs
+  Torso-Breite), ergänzt um die von Roblox heruntergeladenen R15-Block-Meshes
+  desselben Körpers. Kein einzelner Klotz, keine Classic-Teile.
+* **Referenzdateien.** `tools/probe_reference.py` lädt Roblox' offizielle
+  FBX-Dateien nach `reference/official/`, `tools/build_mannequin.py` macht
+  daraus zwei kompakte JSONs, die `tools/mannequin.py` zur Renderzeit liest:
+  `standard_r15.json` (R15-Blockkörper, der Standard-Avatar) und
+  `classic_body.json` (klassischer Körper, nur noch als Maß-Abgleich – der
+  Körper dieses Avatars ist klassisch, seine Teile stimmen mit
+  `ClassicMannequin.fbx` überein).
 * **Beine** behalten die Länge ihres Bundles (Roblox normiert nicht). Nur wenn
   linkes und rechtes Bein voneinander abweichen, wird das kürzere gleichmäßig
   angeglichen, damit beide Füße auf dem Boden stehen.
