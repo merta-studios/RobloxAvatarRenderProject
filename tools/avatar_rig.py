@@ -905,6 +905,10 @@ def assemble_r15_rig(
         _raw = raw_parts.get(_seg_name, {})
         segment_info[_seg_name] = {
             "class": _raw.get("rbxm_class"),
+            # Rohgeometrie VOR dem Strecken auf MeshPart.Size - zeigt, ob die
+            # Bundle-Groesse zur Geometrie passt (Diagnose der Gelenk-Naht).
+            "raw_mesh_size": ([round(float(v), 4) for v in _raw["mesh"].size()]
+                              if _raw.get("mesh") is not None else None),
             "rbxm_size": ([round(float(v), 4) for v in _raw["rbxm_size"]]
                           if _raw.get("rbxm_size") else None),
             "mesh_size": [round(float(v), 4) for v in _entry[0].size()],
