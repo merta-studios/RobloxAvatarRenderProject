@@ -1601,6 +1601,27 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             f"gerendert (layered_clothing = '{layered_clothing_modus}'): "
             + ", ".join(str(item["name"]) for item in layered_ausgelassen))
 
+    # UV-Bereich der Stirnflaeche des Kopfes: welcher Ausschnitt der
+    # Gesichts-Textur landet vorn auf dem Gesicht? (Diagnose Brille/Gesicht)
+    kopf_front_uv = None
+    if rig_avatar is not None and getattr(rig_avatar, "head_mesh", None) is not None:
+        _hm = rig_avatar.head_mesh
+        if _hm.uvs and _hm.faces:
+            _fus = []
+            for _f in _hm.faces:
+                if len(_f) < 3:
+                    continue
+                _pts = [_hm.positions[i] for i in _f[:3]]
+                if roblox_mesh._face_normal(_pts[0], _pts[1], _pts[2])[2] < -0.5:
+                    _fus.extend(_hm.uvs[i] for i in _f[:3])
+            if _fus:
+                kopf_front_uv = {
+                    "min": [round(min(u for u, _v in _fus), 3),
+                            round(min(v for _u, v in _fus), 3)],
+                    "max": [round(max(u for u, _v in _fus), 3),
+                            round(max(v for _u, v in _fus), 3)],
+                }
+
     # ---- Manifest ---------------------------------------------------------
     bounds_lo = [1e9, 1e9, 1e9]
     bounds_hi = [-1e9, -1e9, -1e9]
@@ -1739,6 +1760,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 "uv_max": ([round(max(u for u, _v in rig_avatar.head_mesh.uvs), 3),
                             round(max(v for _u, v in rig_avatar.head_mesh.uvs), 3)]
                            if rig_avatar.head_mesh.uvs else None),
+                "front_uv": kopf_front_uv,
                 "bbox_min": [round(c, 3) for c in rig_avatar.head_mesh.bbox()[0]],
                 "bbox_max": [round(c, 3) for c in rig_avatar.head_mesh.bbox()[1]],
                 "attachments": {

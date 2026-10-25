@@ -397,7 +397,7 @@ jobs:
           try:
               m = json.load(open("build/manifest.json"))
               src = (m.get("rig_audit", {}).get("kopf", {}).get("textur", {}) or {}).get("src")
-              for rel in {src, "textures/_comp_head.png"}:
+              for rel in {src, "textures/_comp_head.png", "parts/kopf_mesh.obj"}:
                   if rel and os.path.exists(os.path.join("build", rel)):
                       shutil.copy(os.path.join("build", rel),
                                   os.path.join(dbg, os.path.basename(rel)))
