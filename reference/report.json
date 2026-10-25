@@ -1,0 +1,107 @@
+{
+ "avatar_3d": {
+  "attempts": [
+   {
+    "http": 403,
+    "url": "https://thumbnails.roblox.com/v1/users/avatar-3d?userId=9767435332"
+   },
+   {
+    "http": 400,
+    "url": "https://thumbnails.roblox.com/v1/users/avatar?userId=9767435332&size=420x420&format=Png&isCircular=false"
+   }
+  ],
+  "user_id": 9767435332
+ },
+ "standard_meshes": {
+  "Head": {
+   "asset_id": 387941905,
+   "bytes": 14520,
+   "error": "Kein FileMesh-Header ('version X.YY') gefunden",
+   "http": 200
+  },
+  "LeftFoot": {
+   "asset_id": 387939912,
+   "bytes": 1629,
+   "error": "Kein FileMesh-Header ('version X.YY') gefunden",
+   "http": 200
+  },
+  "LeftHand": {
+   "asset_id": 387939233,
+   "bytes": 1680,
+   "error": "Kein FileMesh-Header ('version X.YY') gefunden",
+   "http": 200
+  },
+  "LeftLowerArm": {
+   "asset_id": 387938971,
+   "bytes": 3045,
+   "error": "Kein FileMesh-Header ('version X.YY') gefunden",
+   "http": 200
+  },
+  "LeftLowerLeg": {
+   "asset_id": 387939489,
+   "bytes": 3660,
+   "error": "Kein FileMesh-Header ('version X.YY') gefunden",
+   "http": 200
+  },
+  "LeftUpperArm": {
+   "asset_id": 387938468,
+   "bytes": 2178,
+   "error": "Kein FileMesh-Header ('version X.YY') gefunden",
+   "http": 200
+  },
+  "LeftUpperLeg": {
+   "asset_id": 387939645,
+   "bytes": 3601,
+   "error": "Kein FileMesh-Header ('version X.YY') gefunden",
+   "http": 200
+  },
+  "LowerTorso": {
+   "asset_id": 387941715,
+   "bytes": 1559,
+   "error": "Kein FileMesh-Header ('version X.YY') gefunden",
+   "http": 200
+  },
+  "RightFoot": {
+   "asset_id": 387941196,
+   "bytes": 1627,
+   "error": "Kein FileMesh-Header ('version X.YY') gefunden",
+   "http": 200
+  },
+  "RightHand": {
+   "asset_id": 387940548,
+   "bytes": 1670,
+   "error": "Kein FileMesh-Header ('version X.YY') gefunden",
+   "http": 200
+  },
+  "RightLowerArm": {
+   "asset_id": 387940356,
+   "bytes": 3135,
+   "error": "Kein FileMesh-Header ('version X.YY') gefunden",
+   "http": 200
+  },
+  "RightLowerLeg": {
+   "asset_id": 387940802,
+   "bytes": 3577,
+   "error": "Kein FileMesh-Header ('version X.YY') gefunden",
+   "http": 200
+  },
+  "RightUpperArm": {
+   "asset_id": 387940113,
+   "bytes": 2159,
+   "error": "Kein FileMesh-Header ('version X.YY') gefunden",
+   "http": 200
+  },
+  "RightUpperLeg": {
+   "asset_id": 387940976,
+   "bytes": 3568,
+   "error": "Kein FileMesh-Header ('version X.YY') gefunden",
+   "http": 200
+  },
+  "UpperTorso": {
+   "asset_id": 387941468,
+   "bytes": 1476,
+   "error": "Kein FileMesh-Header ('version X.YY') gefunden",
+   "http": 200
+  }
+ }
+}

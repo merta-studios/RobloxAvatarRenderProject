@@ -93,7 +93,7 @@ def fetch_standard_meshes(out_dir: str, log: List[str]) -> Dict[str, Any]:
         with open(path, "wb") as fh:
             fh.write(raw)
         try:
-            mesh = roblox_mesh.parse(raw)
+            mesh = roblox_mesh.parse(roblox_api.maybe_decompress(raw))
             lo, hi = mesh.bbox()
             size = [hi[i] - lo[i] for i in range(3)]
             entry.update({
@@ -147,7 +147,9 @@ def fetch_avatar_3d(user_id: int, out_dir: str, log: List[str],
                     max_obj_bytes: int = 12_000_000) -> Dict[str, Any]:
     info: Dict[str, Any] = {"user_id": user_id, "attempts": []}
     model: Optional[Dict[str, Any]] = None
-    for url in (f"https://thumbnails.roblox.com/v1/users/avatar-3d?userId={user_id}",
+    for url in (f"https://thumbnails.roblox.com/v1/users/avatar-3d?userIds={user_id}",
+                f"https://thumbnails.roblox.com/v1/users/avatar?userIds={user_id}"
+                "&size=720x720&format=Png&isCircular=false",
                 f"https://thumbnails.roblox.com/v1/users/avatar?userId={user_id}"
                 "&size=420x420&format=Png&isCircular=false"):
         status, payload = _json(url)
@@ -157,6 +159,18 @@ def fetch_avatar_3d(user_id: int, out_dir: str, log: List[str],
                    f"{' (3D-Modell)' if model else ''}")
         if model:
             break
+        # 2D-Thumbnail: kein Modell, aber ein Bild als Vergleichsvorlage.
+        if isinstance(payload, dict) and payload.get("data"):
+            png_url = payload["data"][0].get("imageUrl")
+            if png_url:
+                status_png, raw_png = _http(png_url)
+                if status_png == 200 and raw_png:
+                    os.makedirs(os.path.join(out_dir, "avatar2d"), exist_ok=True)
+                    with open(os.path.join(out_dir, "avatar2d", "avatar.png"),
+                              "wb") as fh:
+                        fh.write(raw_png)
+                    info["avatar2d"] = "avatar2d/avatar.png"
+                    log.append("  + 2D-Avatar-Thumbnail gespeichert")
     if not model:
         return info
 
