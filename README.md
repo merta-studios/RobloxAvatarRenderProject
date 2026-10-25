@@ -109,17 +109,25 @@ Pfad in `emote_datei` hat Vorrang.
 
 **Rig-Genauigkeit:** Jedes Segment hängt an seinen eigenen `RigAttachment`s –
 exakt nach der Roblox-Regel `Kind = Eltern · C0 · C1⁻¹`. Einzelne Segmente
-werden nie gestaucht oder gestreckt (das hat die Arme vorher plattgedrückt),
-die Naht zwischen zwei Segmenten bleibt zu. Passt eine Extremität als Ganzes
-nicht zum R15-Skelett (Korblox-Bein: Kette 1,24 statt 1,75 Studs, der Fuß hing
-in der Luft), wird sie mit **einem** Faktor auf allen drei Achsen auf die
-kanonische Länge gebracht – Silhouette und Proportionen bleiben erhalten, beide
-Füße stehen auf dem Boden. Arme werden dabei nur verlängert, nie gestaucht.
-Echte Platzhalter (Attachment fehlt, liegt außerhalb des Meshes oder in der
-Segmentmitte) werden aus der Geometrie ersetzt (Deckfläche). Alle Eingriffe
-stehen als `Rig-Audit:`-Warnung im Log und im Manifest (`rig_audit` mit
-`joint_spans`, `gelenke`, `segmente`, `segment_rohdaten`); derselbe Block landet
-in der Step Summary des Render-Workflows.
+werden nie gestaucht oder gestreckt, die Naht zwischen zwei Segmenten bleibt zu,
+und Gelenke sitzen dort, wo Roblox sie setzt:
+
+* **Schultern/Hüften** werden an der sichtbaren Torso-Geometrie ausgerichtet.
+  Marker, die deutlich zu tief sitzen (mehr als ein Viertel der Torso-Höhe unter
+  der Oberkante), werden auf die Schulterlinie gezogen – sonst hängen die Arme
+  am Bauch.
+* **Fehlende Körperteile** (z. B. Beine, wenn nur Torso und Arme getragen
+  werden) werden aus demselben Körperpaket nachgeladen (`assets/{id}/bundles`).
+  Erst wenn das Paket nicht ermittelbar ist, entstehen R15-Quader – aber als
+  Ober-/Unterschenkel plus Fuß, nie als ein Klotz.
+* **Beine** behalten die Länge ihres Bundles (Roblox normiert nicht). Nur wenn
+  linkes und rechtes Bein voneinander abweichen, wird das kürzere gleichmäßig
+  angeglichen, damit beide Füße auf dem Boden stehen.
+
+Alle Eingriffe stehen als `Rig-Audit:`-Warnung im Log und im Manifest
+(`rig_audit` mit `joint_spans`, `gelenke`, `segmente`, `segment_rohdaten`); dazu
+listet `assets` alle getragenen Assets und `koerperpaket_abfragen` die
+Katalog-Aufrufe. Derselbe Block landet in der Step Summary des Render-Workflows.
 
 **Emote-Posen** (`pose = "emote:<ID>"`): Die Pipeline lädt das Emote aus dem
 Roblox-Katalog und wendet exakt die Haltung an, die auch das
