@@ -1249,16 +1249,16 @@ def assemble_r15_rig(
         root = root_att[0]
         total = max(0.30, placeholder_len)
         if kind == "leg":
-            # Klassische R15-Proportionen: Oberschenkel 42 %, Unterschenkel
-            # 43 %, Fuss 15 % der Beinlaenge. Die Beine sind *zwei* Koerper:
-            # Innenkante mit Luft zur Mitte (sonst verschmelzen sie optisch zu
-            # einem Klotz), Tiefe nie groesser als der Torso.
             # Echte R15-Blockmasse: Oberschenkel 0,775 / Unterschenkel 0,829 /
-            # Fuss 0,415 Studs (Summe 2,019 bei 2,0 Studs Torso-Hoehe).
+            # Fuss 0,415 Studs (Summe 2,019 bei 2,0 Studs Torso-Hoehe) und ein
+            # quadratischer Querschnitt von 1x1 Studs bei 2 Studs Torso-Breite
+            # (also die halbe Torso-Breite je Bein, wie beim Standard-Avatar).
+            # Die Beine sind *zwei* Koerper: eine schmale Luft zur Mitte, sonst
+            # verschmelzen sie optisch zu einem Klotz.
             fracs = (0.384, 0.411, 0.205)
-            lw = max(0.08, 0.42 * torso_w)
-            ld = max(0.08, 0.80 * torso_d)
-            gap = 0.05 * torso_w
+            lw = max(0.08, 0.46 * torso_w)
+            ld = lw
+            gap = 0.03 * torso_w
             lx = sign * (gap + lw / 2.0)
             foot_depth = 1.22 * ld
             foot_shift = 0.16 * ld
