@@ -69,6 +69,41 @@ R15_LIMB_TOLERANCE = 0.15
 #: steht der Avatar auf einem Bein in der Luft).
 R15_LEG_SYMMETRY_TOLERANCE = 1.05
 
+# ---------------------------------------------------------------------------
+# Exakte Gelenk-Fraktionen des R15-Standard-Avatars.
+#
+# Quelle: offizielle Roblox-Referenz "Standard R15 Rig and Attachments"
+# (UnificationScale.Target.Rigging) - die Gelenke liegen exakt auf den
+# RigAttachments der Standard-Meshes. Anteil der Extremitaets-Gesamtlaenge,
+# gemessen vom proximalen Gelenk:
+#   Arm:  Schulter -> Ellbogen -> Handgelenk -> Handinnenflaeche
+#   Bein:  Huefte    -> Knie    -> Sprunggelenk -> Sohle
+# Die bisherigen Werte (0,389/0,407/0,204 und 0,384/0,411/0,205) stammten
+# aus keiner Norm: damit wurde die Hand ca. 42 % und der Fuss ca. 63 % zu
+# gross, die Ober-/Unterarme ca. 7 % zu kurz skaliert.
+R15_ARM_FRACTIONS = (0.419051, 0.437010, 0.143939)
+R15_LEG_FRACTIONS = (0.410941, 0.463088, 0.125971)
+
+#: Anker des R15-Standard-Kopfes (lokal im Kopf-Modell, Studs bei Head-Scale
+#: 1). NeckRigAttachment/HatAttachment sind die offiziellen Standardwerte
+#: (siehe Humanoid:BuildRigFromAttachments); die Gesichtsanker liegen auf
+#: Augenhoehe (FaceFront) bzw. Gesichtsmitte (FaceCenter). Quelle: offizielle
+#: BlockyCharacter.fbx (FaceFront_Att/FaceCenter_Att) - Brillen und
+#: Gesichts-Accessoires sassen bisher auf Kopfmitte, also zu weit über den
+#: Augen. Die Y-Verschiebung ist als Anteil vom Kopfradius gegeben, damit
+#: sie mit der Kopfgroesse skaliert.
+R15_HEAD_NECK_ATTACHMENT = (0.0, -0.5, 0.0)
+R15_HEAD_HAT_ATTACHMENT = (0.0, 0.6, 0.0)
+R15_HEAD_FACE_FRONT_Y_RADIUS = -0.5690
+R15_HEAD_FACE_CENTER_Y_RADIUS = -0.7260
+
+#: Schulter-Attachment des R15-Standard-Torsos: 0,237 Studs unter der
+#: Torso-Oberkante (offizielle Referenz: UpperTorso-ShoulderRigAttachment
+#: liegt bei y = 0,563 im UpperTorso-Modell, dessen Ursprung bei y = 1,0
+#: ist -> 1,563 bei 2,0 Studs Torso-Hoehe). War bisher 1,4 - die Schultern
+#: sassen also zu weit nach unten.
+R15_SHOULDER_BELOW_TORSO_TOP = 0.237
+
 #: Meshes des **Standard-Avatars** (R15-Block-Koerper). Roblox baut den
 #: Standard-Koerper in der Engine aus genau diesen FileMesh-Assets; sie haben
 #: keine Katalog-/Bundle-ID, sind aber als Mesh-Assets (AssetTypeId 4) ladbar.
@@ -154,11 +189,15 @@ class BodyMetrics:
         if name == "head_top":
             if self.hat_base_y is not None:
                 return (0.0, self.hat_base_y, 0.0)
-            return (0.0, self.head_center_y + self.head_radius * 0.95, 0.0)
+            return (0.0, self.head_center_y + self.head_radius, 0.0)
         if name == "head_center":
             return (0.0, self.head_center_y, 0.0)
         if name == "face_front":
-            return (0.0, self.head_center_y, -(self.head_radius * 0.80))
+            # Augenhoehe (offizielle BlockyCharacter.fbx): Brillen sassen
+            # bisher auf Kopfmitte, also zu weit oben.
+            return (0.0, self.head_center_y
+                    + R15_HEAD_FACE_FRONT_Y_RADIUS * self.head_radius,
+                    -(self.head_radius))
         if name == "neck":
             return (0.0, self.shoulder_y + 0.1, 0.0)
         if name == "shoulders":
@@ -906,6 +945,32 @@ def has_rig_attachments(segments_by_part: Dict[str, List[Dict[str, Any]]], head_
     return False
 
 
+def _standard_head_face_attachments(
+    head_center: Tuple[float, float, float],
+    head_r: float,
+) -> Dict[str, Tuple[Tuple[float, float, float], Matrix3]]:
+    """Gesichtsanker des R15-Standard-Kopfes (Augenhoehe).
+
+    FaceFrontAttachment (Brillen, Masken ...) liegt auf Augenhoehe,
+    FaceCenterAttachment in der Gesichtsmitte - beide *unter* der Kopfmitte,
+    genau wie in der offiziellen BlockyCharacter.fbx (FaceFront_Att/
+    FaceCenter_Att). Bisher wurden beide auf Kopfmitte gesetzt, wodurch
+    Brillen zu weit über den Augen sassen.
+    """
+    return {
+        "FaceCenterAttachment": (
+            (head_center[0],
+             head_center[1] + R15_HEAD_FACE_CENTER_Y_RADIUS * head_r,
+             head_center[2]),
+            IDENTITY_MAT3),
+        "FaceFrontAttachment": (
+            (head_center[0],
+             head_center[1] + R15_HEAD_FACE_FRONT_Y_RADIUS * head_r,
+             head_center[2] - head_r),
+            IDENTITY_MAT3),
+    }
+
+
 def _standard_segment_mesh(raw: Optional[MeshData], width: float, height: float,
                            depth: float, slice_name: str) -> Optional[MeshData]:
     """Skaliert ein Standard-Avatar-Mesh auf die R15-Masse eines Segments.
@@ -1161,8 +1226,8 @@ def assemble_r15_rig(
             "RightHipRigAttachment": ((0.5 * sw, -0.2 * sh, 0.0), IDENTITY_MAT3),
             "NeckRigAttachment": ((0.0, 1.8 * sh, 0.0), IDENTITY_MAT3),
             "NeckAttachment": ((0.0, 1.8 * sh, 0.0), IDENTITY_MAT3),
-            "LeftShoulderRigAttachment": ((-1.0 * sw, 1.4 * sh, 0.0), IDENTITY_MAT3),
-            "RightShoulderRigAttachment": ((1.0 * sw, 1.4 * sh, 0.0), IDENTITY_MAT3),
+            "LeftShoulderRigAttachment": ((-1.0 * sw, (1.8 - R15_SHOULDER_BELOW_TORSO_TOP) * sh, 0.0), IDENTITY_MAT3),
+            "RightShoulderRigAttachment": ((1.0 * sw, (1.8 - R15_SHOULDER_BELOW_TORSO_TOP) * sh, 0.0), IDENTITY_MAT3),
             "LeftCollarAttachment": ((-1.0 * sw, 1.8 * sh, 0.0), IDENTITY_MAT3),
             "RightCollarAttachment": ((1.0 * sw, 1.8 * sh, 0.0), IDENTITY_MAT3),
             "BodyFrontAttachment": ((0.0, 1.0 * sh, -0.5 * sd), IDENTITY_MAT3),
@@ -1344,7 +1409,7 @@ def assemble_r15_rig(
         # quadratisch, damit die Blockteile nicht verzerrt werden.
         root = root_att[0]
         total = max(0.30, placeholder_len)
-        fracs = (0.384, 0.411, 0.205) if kind == "leg" else (0.389, 0.407, 0.204)
+        fracs = R15_LEG_FRACTIONS if kind == "leg" else R15_ARM_FRACTIONS
         lw = max(0.08, 0.5 * torso_w)
         ld = lw
         if kind == "leg":
@@ -1372,7 +1437,11 @@ def assemble_r15_rig(
             origin = (lx, y - h / 2.0, z)
             register_segment(name, box, {}, origin, IDENTITY_MAT3, True)
             segment_driver[name] = name
-            joint_pos[name] = (lx, y, z)
+            # Gelenk = Attachment (nicht Segmentmitte): beim R15-Standard
+            # haengt die Schulter am Torso-Rand (x = root[0]), das Segment
+            # schwebt daneben - sonst rotiert der Arm um seine eigene Mitte
+            # und die Pose verrutscht.
+            joint_pos[name] = (root[0], y, z)
             joint_frames[name] = IDENTITY_MAT3
             y -= h
         notes.append(
@@ -1523,22 +1592,20 @@ def assemble_r15_rig(
                     "Standardwert an der Kopfmitte verwendet.")
         world_atts.setdefault("HatAttachment", ((head_center[0], head_center[1] + 0.6 * shead, head_center[2]), IDENTITY_MAT3))
         world_atts.setdefault("HairAttachment", world_atts["HatAttachment"])
-        world_atts.setdefault("FaceCenterAttachment", (head_center, IDENTITY_MAT3))
-        world_atts.setdefault("FaceFrontAttachment", ((head_center[0], head_center[1], head_center[2] - head_r), IDENTITY_MAT3))
+        for _akk, _av in _standard_head_face_attachments(head_center, head_r).items():
+            world_atts.setdefault(_akk, _av)
     elif not headless:
         head_r = 0.60 * shead
         head_center = (neck_att[0][0], neck_att[0][1] + 0.5 * shead, neck_att[0][2])
         head_world = make_sphere(head_r, 32, 22, head_center)
         world_atts["HatAttachment"] = ((head_center[0], head_center[1] + 0.6 * shead, head_center[2]), IDENTITY_MAT3)
         world_atts["HairAttachment"] = world_atts["HatAttachment"]
-        world_atts["FaceCenterAttachment"] = (head_center, IDENTITY_MAT3)
-        world_atts["FaceFrontAttachment"] = ((head_center[0], head_center[1], head_center[2] - head_r), IDENTITY_MAT3)
+        world_atts.update(_standard_head_face_attachments(head_center, head_r))
     else:
         head_center = (neck_att[0][0], neck_att[0][1] + 0.5 * shead, neck_att[0][2])
         world_atts["HatAttachment"] = ((head_center[0], head_center[1] + 0.6 * shead, head_center[2]), IDENTITY_MAT3)
         world_atts["HairAttachment"] = world_atts["HatAttachment"]
-        world_atts["FaceCenterAttachment"] = (head_center, IDENTITY_MAT3)
-        world_atts["FaceFrontAttachment"] = ((head_center[0], head_center[1], head_center[2] - head_r), IDENTITY_MAT3)
+        world_atts.update(_standard_head_face_attachments(head_center, head_r))
 
     # Echte R15-UpperTorsos enthalten bereits den modellierten Hals und Headless-
     # Avatare duerfen niemals einen kuenstlichen Quader-Hals am Kragen zeigen.
