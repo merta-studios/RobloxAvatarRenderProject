@@ -1288,10 +1288,16 @@ def assemble_r15_rig(
                 classic_placed = _cand
         if classic_placed is not None:
             first_joint = None
+            _slices = ("upper", "lower", "end")
             for index, seg in enumerate(classic_placed):
                 _mesh, _atts, _tr = seg_lookup.get(seg.name, (seg.mesh, {}, False))
                 _atts = dict(_atts or {})
-                register_segment(seg.name, seg.mesh, _atts, seg.center,
+                # Kleidungs-UVs: die Vorlage des klassischen Koerpers
+                # (264x284) wird ueber die Flaechennormalen projiziert -
+                # damit landen Shirt/Hose genau wie bei Roblox auf dem Glied.
+                _slice = _slices[index] if index < len(_slices) else "end"
+                _mesh_seg = apply_limb_uvs_projected(seg.mesh, _slice)
+                register_segment(seg.name, _mesh_seg, _atts, seg.center,
                                  IDENTITY_MAT3, not _tr)
                 # Gelenk = echtes RigAttachment des Teils (Roblox-Drehpunkt);
                 # fehlt es, die Oberkante in der Teilmitte.
