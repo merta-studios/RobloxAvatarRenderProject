@@ -1183,7 +1183,15 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         or texture_for_part.get("kopf_mesh")
         or texture_for_part.get("kopf")
     )
+    head_diag: Dict[str, Any] = {"src": head_tex_src}
     if head_tex_src and head_tex_src in texture_bytes_by_rel:
+        try:
+            from PIL import Image as _PILImage
+            import io as _io
+            head_diag["src_size"] = list(
+                _PILImage.open(_io.BytesIO(texture_bytes_by_rel[head_tex_src])).size)
+        except Exception:
+            pass
         head_comp = avatar_uv.composite_face_texture(
             avatar_rig.rgb01(color_hex_by_part.get("kopf", "#c7ac78")),
             texture_bytes_by_rel[head_tex_src],
@@ -1724,6 +1732,13 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                     name: [round(float(v), 3) for v in (info.get("position") or ())]
                     for name, info in ((head_mesh or {}).get("attachments") or {}).items()
                 },
+                "textur": head_diag,
+                "uv_min": ([round(min(u for u, _v in rig_avatar.head_mesh.uvs), 3),
+                            round(min(v for _u, v in rig_avatar.head_mesh.uvs), 3)]
+                           if rig_avatar.head_mesh.uvs else None),
+                "uv_max": ([round(max(u for u, _v in rig_avatar.head_mesh.uvs), 3),
+                            round(max(v for _u, v in rig_avatar.head_mesh.uvs), 3)]
+                           if rig_avatar.head_mesh.uvs else None),
                 "bbox_min": [round(c, 3) for c in rig_avatar.head_mesh.bbox()[0]],
                 "bbox_max": [round(c, 3) for c in rig_avatar.head_mesh.bbox()[1]],
                 "attachments": {
