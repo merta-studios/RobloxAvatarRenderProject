@@ -44,6 +44,24 @@ ACCESSORY_LAYOUT: Dict[int, Dict[str, Any]] = {
 }
 
 
+#: Kanonische R15-Proportionen (Roblox "Rig and Attachments"), bezogen auf die
+#: Torso-Hoehe. Konvertierte Bundles liefern Mesh-Groessen und Attachments, die
+#: zueinander nicht passen (z. B. ein Korblox-Bein mit 0,86 statt 1,03 Studs
+#: Hoehe, ein Fuss als 0,26-Wuerfel) - dann steht der Avatar auf einem Bein in
+#: der Luft. Die Extremitaet wird deshalb als Ganzes auf ihre kanonische Laenge
+#: gebracht, und zwar mit *einem* Faktor fuer alle drei Achsen: die Silhouette
+#: bleibt erhalten, nichts wird plattgedrueckt.
+R15_ARM_LENGTH_PER_TORSO_HEIGHT = 0.869   # Schulter -> Handende
+R15_WRIST_FRACTION_OF_ARM = 0.856         # Schulter -> Handgelenk
+R15_LEG_LENGTH_PER_TORSO_HEIGHT = 1.0
+R15_ANKLE_FRACTION_OF_LEG = 0.874         # Huefte -> Fussgelenk
+R15_LIMB_SCALE_MIN = 0.60                 # Sicherheitsnetz gegen kaputte Daten
+R15_LIMB_SCALE_MAX = 1.60
+#: Darunter bleibt das Bundle exakt so, wie es ist (Authentizitaet vor
+#: Normierung) - erst bei groesserer Abweichung wird skaliert.
+R15_LIMB_TOLERANCE = 0.15
+
+
 def _de(value: float, nd: int = 2) -> str:
     """Zahl mit Komma statt Punkt (deutsche Schreibweise fuer Notizen)."""
     return f"{value:.{nd}f}".replace(".", ",")
@@ -888,13 +906,15 @@ def assemble_r15_rig(
         origin: Tuple[float, float, float],
         rot: Matrix3 = IDENTITY_MAT3,
         visible: bool = True,
+        scale: float = 1.0,
     ) -> None:
-        placed = local_mesh.rotate(rot).transform(1.0, origin)
+        placed = local_mesh.rotate(rot).transform(scale, origin)
         placed_seg_mesh[seg_name] = placed
         placed_seg_vis[seg_name] = visible
         for aname, (apos, arot) in local_atts.items():
             ra = _mat3_vec(rot, apos)
-            wpos = (origin[0] + ra[0], origin[1] + ra[1], origin[2] + ra[2])
+            wpos = (origin[0] + scale * ra[0], origin[1] + scale * ra[1],
+                    origin[2] + scale * ra[2])
             world_atts[aname] = (wpos, _mat3_mul(rot, arot))
 
     joint_spans: Dict[str, float] = {}
@@ -919,6 +939,22 @@ def assemble_r15_rig(
     def _dist3(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> float:
         return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2) ** 0.5
 
+    def _attachment_is_centered(
+        mesh: MeshData, pos: Tuple[float, float, float]) -> bool:
+        """Klebt der Marker praktisch in der Segmentmitte (Platzhalter)?
+
+        Ein Gelenk in der Teilmitte laesst das Kind um seine eigene Mitte
+        drehen ("Unterarm dreht um den falschen Punkt"). Echte Marker liegen
+        nahe der Deckflaeche - bei grossen Bundles relativ zur halben Hoehe
+        gemessen, damit der Korblox-Arm (Schulter 0,38 bei 1,31 Halbhoehe)
+        nicht faelschlich als Platzhalter gilt.
+        """
+        if mesh.is_empty:
+            return True
+        lo, hi = mesh.bbox()
+        half = max(1e-6, (hi[1] - lo[1]) / 2.0)
+        return abs(pos[1]) < 0.15 * half
+
     def _chain_child_attachment(
         seg_name: str,
         att_name: str,
@@ -942,9 +978,15 @@ def assemble_r15_rig(
         # unterhalb der Mesh-Mitte (Schulterplatte/Stacheln darueber). Ein
         # solcher Marker ist gueltig - ihn zu verwerfen hat den Arm um
         # 1,7 Studs nach unten verschoben.
-        if own is not None and _attachment_is_plausible(mesh, own[0]):
+        if own is not None and _attachment_is_plausible(mesh, own[0]) \
+                and not _attachment_is_centered(mesh, own[0]):
             return own
-        reason = "fehlt" if own is None else "liegt ausserhalb des Meshes"
+        if own is None:
+            reason = "fehlt"
+        elif not _attachment_is_plausible(mesh, own[0]):
+            reason = "liegt ausserhalb des Meshes"
+        else:
+            reason = "liegt mitten im Segment (Platzhalter)"
         placed_rot = _mat3_mul(parent_att[1], _mat3_transpose(child_rot))
         notes.append(
             f"Segment '{seg_name}': Attachment '{att_name}' {reason} - "
@@ -975,15 +1017,26 @@ def assemble_r15_rig(
             extent = max(placed.size()) if not placed.is_empty else 0.0
             if att is not None:
                 span = _dist3(att[0], parent_att[0])
-                # Nur echte Platzhalter ersetzen: ein Gelenk, das praktisch
-                # auf dem Elterngelenk klebt (gleicher Punkt) oder gar nicht
-                # am Segment liegt. Alles andere ist authored und wird
-                # uebernommen - Roblox montiert genauso.
+                # Welt-"oben" des Gelenk-Frames: R15-Attachments zeigen mit +Y
+                # nach oben, das Glied laeuft nach -Y.
+                up = _mat3_vec(parent_att[1], (0.0, 1.0, 0.0))
+                projections = [_dot(p, up) for p in placed.positions]
+                spread = ((max(projections) - min(projections))
+                          if projections else 0.0)
+                center = ((max(projections) + min(projections)) / 2.0
+                          if projections else 0.0)
+                # Platzhalter: klebt am Elterngelenk, liegt oberhalb der
+                # Segmentmitte (dann dreht das Kind im Elternteil) oder gar
+                # nicht am Segment.
                 too_close = span < max(0.02, 0.10 * extent)
+                above_center = _dot(att[0], up) > center - 0.05 * spread
                 off_mesh = not _attachment_is_plausible(placed, att[0])
-                if too_close or off_mesh:
-                    reason = ("liegt ausserhalb des Segments" if off_mesh
-                              else "liegt auf dem Elterngelenk")
+                if too_close or above_center or off_mesh:
+                    reason = ("liegt ausserhalb des Segments"
+                              if off_mesh and not (too_close or above_center)
+                              else ("liegt mitten im Segment"
+                                    if above_center and not too_close
+                                    else "liegt zu nah am Elterngelenk"))
                     notes.append(
                         f"Gelenk '{att_name}' {reason} (Platzhalter-Attachment) - "
                         "an die Segment-Unterkante gesetzt.")
@@ -1068,17 +1121,32 @@ def assemble_r15_rig(
         chain: List[Tuple[str, str]],
         root_att: Tuple[Tuple[float, float, float], Matrix3],
         inward_world: Optional[Tuple[float, float, float]],
+        canonical_len: float,
+        scale_mode: str,
         fallback_box: Tuple[float, float, float],
         fallback_center: Tuple[float, float, float],
     ) -> None:
-        """Haengt die vorhandenen Segmente einer Extremitaet aneinander."""
+        """Haengt die Segmente einer Extremitaet starr an ihren Attachments auf.
+
+        Montage wie bei Roblox (``Kind = Eltern * C0 * C1^-1``): kein Segment
+        wird gestaucht oder gestreckt, die Gelenke sitzen auf den Attachments.
+        Zusaetzlich wird die *ganze* Extremitaet mit einem einzigen Faktor auf
+        ihre kanonische Laenge gebracht - gleichmaessig auf allen drei Achsen,
+        damit die Silhouette unangetastet bleibt.
+        """
         names = [name for name, _att in chain]
         if any(name in seg_lookup for name in names):
+            root = root_att[0]
+            # --- Durchgang 1: starre Montage, Platzierungen mitschreiben -----
+            placement: Dict[str, Tuple[MeshData, Dict[str, Any],
+                                       Tuple[float, float, float], Matrix3, bool]] = {}
+            chain_joints: Dict[str, Tuple[Tuple[float, float, float], Matrix3]] = {}
             parent_att = root_att
             for index, (seg_name, att_name) in enumerate(chain):
                 if index > 0:
                     joint_pos[seg_name] = parent_att[0]
                     joint_frames[seg_name] = parent_att[1]
+                    chain_joints[seg_name] = parent_att
                 if seg_name in seg_lookup:
                     rot_s, origin_s = _attach_placement(
                         parent_att,
@@ -1088,19 +1156,56 @@ def assemble_r15_rig(
                     mesh_s, atts_s, tr_s = seg_lookup[seg_name]
                     register_segment(seg_name, mesh_s, atts_s, origin_s, rot_s,
                                      not tr_s)
+                    placement[seg_name] = (mesh_s, atts_s, origin_s, rot_s,
+                                           not tr_s)
                     segment_driver[seg_name] = seg_name
                     if index + 1 < len(chain):
                         parent_att = _chain_next_joint(
                             seg_name, chain[index + 1][1], parent_att)
                 elif index + 1 < len(chain):
-                    # Segment fehlt: naechstes Gelenk ans Ende des letzten
-                    # vorhandenen Segments legen (kein Pivot im Nichts).
                     previous = next((n for n, _a in reversed(chain[:index])
                                      if n in placed_seg_mesh), None)
                     if previous is not None:
                         joint_pos[chain[index + 1][0]] = _face_center(
                             placed_seg_mesh[previous], (0.0, -1.0, 0.0))
                         joint_frames.setdefault(chain[index + 1][0], parent_att[1])
+                        chain_joints[chain[index + 1][0]] = (
+                            joint_pos[chain[index + 1][0]],
+                            joint_frames[chain[index + 1][0]])
+            distal = parent_att
+
+            # --- Faktor fuer die gesamte Extremitaet -------------------------
+            span = _dist3(root, distal[0])
+            factor = 1.0
+            if span > 1e-3 and canonical_len > 1e-3:
+                ideal = canonical_len / span
+                # "immer": Beine muessen den Boden erreichen, sonst steht der
+                # Avatar auf einem Bein in der Luft (Korblox-Bein: 1,24 statt
+                # 1,75 Studs).
+                # "nur_verlaengern": Arme werden nur gestreckt, nie gestaucht -
+                # ein absichtlich langer Bundle-Arm (Korblox Deathspeaker)
+                # bleibt lang, ein zu kurzer Arm waechst auf Huefthoehe.
+                darf = scale_mode == "immer" or ideal > 1.0
+                if darf and abs(ideal - 1.0) > R15_LIMB_TOLERANCE:
+                    factor = max(R15_LIMB_SCALE_MIN,
+                                 min(R15_LIMB_SCALE_MAX, ideal))
+            if abs(factor - 1.0) > 1e-3:
+                notes.append(
+                    f"Extremitaet '{part_name}': Gelenk-Kette {_de(span)} Studs "
+                    f"auf {_de(canonical_len)} Studs gebracht (Faktor "
+                    f"{_de(factor)} gleichmaessig auf allen Achsen - keine "
+                    "Verzerrung).")
+                # --- Durchgang 2: um das Wurzelgelenk skalieren --------------
+                for seg_name, (mesh_s, atts_s, origin_s, rot_s,
+                               vis) in placement.items():
+                    scaled = tuple(root[i] + factor * (origin_s[i] - root[i])
+                                   for i in range(3))
+                    register_segment(seg_name, mesh_s, atts_s, scaled, rot_s,
+                                     vis, scale=factor)
+                for seg_name, (jpos, jframe) in chain_joints.items():
+                    joint_pos[seg_name] = tuple(
+                        root[i] + factor * (jpos[i] - root[i]) for i in range(3))
+                    joint_frames[seg_name] = jframe
             named = [(n, placed_seg_mesh[n]) for n in names
                      if n in placed_seg_mesh and placed_seg_vis[n]]
             merged, spans = _merge_with_spans(named)
@@ -1118,6 +1223,7 @@ def assemble_r15_rig(
 
     t_lo, t_hi = torso_mesh.bbox()
     torso_w = max(1e-3, t_hi[0] - t_lo[0])
+    torso_h = max(1e-3, t_hi[1] - t_lo[1])
     for part_name, side, sign in (("rechts_arm", "Right", 1.0), ("links_arm", "Left", -1.0)):
         u_name, l_name, h_name = f"{side}UpperArm", f"{side}LowerArm", f"{side}Hand"
         shoulder_att = world_atts.get(
@@ -1133,6 +1239,8 @@ def assemble_r15_rig(
              (h_name, f"{side}WristRigAttachment")],
             shoulder_att,
             (-sign, 0.0, 0.0),
+            R15_ARM_LENGTH_PER_TORSO_HEIGHT * R15_WRIST_FRACTION_OF_ARM * torso_h,
+            "nur_verlaengern",
             (1.0 * sw, 2.0 * sh, 1.0 * sd),
             (sign * (torso_w / 2.0 + 0.5 * sw), shoulder_att[0][1] - sh,
              shoulder_att[0][2]))
@@ -1152,6 +1260,8 @@ def assemble_r15_rig(
              (f_name, f"{side}AnkleRigAttachment")],
             hip_att,
             None,
+            R15_LEG_LENGTH_PER_TORSO_HEIGHT * R15_ANKLE_FRACTION_OF_LEG * torso_h,
+            "immer",
             (1.0 * sw, 2.0 * sh, 1.0 * sd),
             (sign * 0.5 * sw, hip_att[0][1] - sh, hip_att[0][2]))
 

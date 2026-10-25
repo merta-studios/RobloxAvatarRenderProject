@@ -167,12 +167,21 @@ def test_platzhalter_gelenke_landen_an_der_segmentunterkante():
     # Ein Gelenk, das exakt auf dem Elterngelenk klebt, ist ein Platzhalter:
     # es wird an die Segmentunterkante gelegt (statt den Unterarm in den
     # Oberarm zu schieben) - der Unterarm beginnt dort und haengt darunter.
+    arm = rig.body_meshes["links_arm"]
+    spans = {seg: (s, e) for seg, s, e in rig.segment_spans["links_arm"]}
+    sl, el = spans["LeftLowerArm"]
+    lower_top = max(arm.positions[i][1] for i in range(sl, el))
+    lower_bottom = min(arm.positions[i][1] for i in range(sl, el))
     assert wrist[1] < elbow[1]
-    assert wrist[1] == pytest.approx(elbow[1] - 1.0519 / 2, abs=1e-3)
-    lo, hi = rig.body_meshes["links_arm"].bbox()
+    # Gelenk an der Deckflaeche: Oberkante des Unterarms == Ellbogen,
+    # Unterkante == Handgelenk (skalenunabhaengig, keine Teilmitte).
+    assert lower_top == pytest.approx(elbow[1], abs=1e-6)
+    assert lower_bottom == pytest.approx(wrist[1], abs=1e-6)
+    lo, hi = arm.bbox()
     # Kein Segment wurde gestaucht: die Armhoehe ist mindestens so gross wie
     # das laengste Einzelsegment (1,17 Studs) - nicht auf 0,x zusammengedrueckt.
     assert hi[1] - lo[1] > 1.0
+    # Die Platzhalter-Erkennung ist im Audit dokumentiert.
     assert any("Platzhalter" in note for note in rig.notes)
 
 
@@ -485,3 +494,84 @@ def test_grosse_bundles_werden_nicht_gestaucht():
     assert upper_bottom < lower_top
     # Nichts wurde umgerastert -> keine Raster-Warnung.
     assert not any("gestaucht" in note for note in rig.notes)
+
+
+# ---------------------------------------------------------------------------
+# 8) Inkonsistente Bundles: ein Faktor pro Extremitaet, Fuesse auf dem Boden
+# ---------------------------------------------------------------------------
+
+def test_kurzes_bein_wird_gleichmaessig_auf_kanonische_laenge_gebracht():
+    """Korblox-Bein (real): Huefte->Knie 0,86, Knie->Fussgelenk 0,60 - zusammen
+    1,24 statt der kanonischen 1,75 Studs. Vorher stand der Avatar auf einem
+    Bein in der Luft (rechter Fuss 0,6 Studs ueber dem Boden). Die Extremitaet
+    wird deshalb als Ganzes skaliert - mit *einem* Faktor auf allen Achsen,
+    damit das Bein nicht plattgedrueckt wird."""
+    segs = {
+        "torso": _torso(),
+        "links_bein": [
+            _seg("LeftUpperLeg", (0.8153, 1.0267, 0.8159), {
+                "LeftHipRigAttachment": _att((-0.0529, 0.316, 0.0169)),
+                "LeftKneeRigAttachment": _att((-0.0529, -0.506, 0.0169)),
+            }),
+            _seg("LeftLowerLeg", (0.8301, 1.0376, 0.9252), {
+                "LeftKneeRigAttachment": _att((-0.0169, 0.2896, -0.0499)),
+                "LeftAnkleRigAttachment": _att((-0.0169, -0.6364, -0.0499)),
+            }),
+            _seg("LeftFoot", (0.727, 0.5679, 1.2969), {
+                "LeftAnkleRigAttachment": _att((0.0129, -0.0566, 0.1421)),
+            }),
+        ],
+        "rechts_bein": [
+            # Originalgroessen des Korblox-Bundles: deutlich kleiner als ein
+            # Standardbein, der Fuss ist ein 0,26-Studs-Wuerfel.
+            _seg("RightUpperLeg", (0.3142, 0.8622, 0.3906), {
+                "RightHipRigAttachment": _att((0.0188, 0.2418, 0.03)),
+                "RightKneeRigAttachment": _att((0.1168, -0.7032, -0.1079)),
+            }),
+            _seg("RightLowerLeg", (0.3501, 0.5965, 0.2993), {
+                "RightKneeRigAttachment": _att((0.0103, 0.2647, -0.0671)),
+                "RightAnkleRigAttachment": _att((0.0103, -0.6616, 0.0598)),
+            }),
+            _seg("RightFoot", (0.2636, 0.2636, 0.2636), {
+                "RightAnkleRigAttachment": _att((0.0, 0.0, 0.0)),
+            }),
+        ],
+    }
+    rig = _assemble(segs)
+    left = _dist(rig.joint_positions["LeftUpperLeg"],
+                 rig.joint_positions["LeftFoot"])
+    right = _dist(rig.joint_positions["RightUpperLeg"],
+                  rig.joint_positions["RightFoot"])
+    # Beide Beine sind gleich lang (kein Bein in der Luft) - das kurze wird
+    # auf die Laenge des kanonischen Beins gebracht.
+    assert right == pytest.approx(left, rel=0.05)
+    # Und zwar ohne Verzerrung: Hoehe/Breite des Oberschenkels bleibt wie
+    # authored (0,8622/0,3142) - gestaucht wurde nichts.
+    arm_like = rig.body_meshes["rechts_bein"]
+    spans = {seg: (a, b) for seg, a, b in rig.segment_spans["rechts_bein"]}
+    s0, e0 = spans["RightUpperLeg"]
+    ys = [arm_like.positions[i][1] for i in range(s0, e0)]
+    xs = [arm_like.positions[i][0] for i in range(s0, e0)]
+    assert (max(ys) - min(ys)) / (max(xs) - min(xs)) == pytest.approx(
+        0.8622 / 0.3142, rel=0.02)
+    assert any("gleichmaessig auf allen Achsen" in n for n in rig.notes)
+
+
+def test_langer_arm_wird_nicht_gestaucht():
+    """Der Korblox-Arm ist absichtlich laenger als der Standardarm (Stacheln
+    ueber der Schulter). Arme werden nur verlaengert, nie gestaucht."""
+    rig = _assemble(_arm_groups([
+        _seg("LeftUpperArm", (0.6641, 1.2, 0.8129), {
+            "LeftShoulderRigAttachment": _att((0.29, 0.3839, -0.0241)),
+            "LeftElbowRigAttachment": _att((-0.21, -0.6119, -0.0241)),
+        }),
+        _seg("LeftLowerArm", (0.8138, 1.0, 0.8621), {
+            "LeftElbowRigAttachment": _att((-0.0612, 0.3842, -0.0002)),
+            "LeftWristRigAttachment": _att((-0.0612, -0.5758, -0.0002)),
+        }),
+    ]))
+    # Kette laenger als kanonisch (1,49) -> bleibt unveraendert.
+    span = _dist(rig.joint_positions["LeftUpperArm"],
+                 rig.joint_positions["LeftHand"])
+    assert span > 1.75
+    assert not any("Faktor" in n for n in rig.notes)
