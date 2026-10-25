@@ -1237,10 +1237,13 @@ def assemble_r15_rig(
             if canonical_span > 1e-6 and not (
                     0.70 <= span / canonical_span <= 1.75):
                 return False
-            # Ein Mesh, das ein Vielfaches seines Gelenkabstands gross ist
-            # (z. B. ein 2,6-Studs-"Oberarm"), ist im Bundle falsch skaliert.
+            # Grobe Mesh/Gelenk-Missverhaeltnisse deuten auf kaputte
+            # Bundle-Groessen hin. Bewusst tolerant: Pakete wie der Korblox-
+            # Arm sind *absichtlich* groesser als ein Standard-R15-Arm und
+            # sollen nicht gestaucht werden - nur echte Ausreisser (> 3x)
+            # werden auf das Raster gesetzt.
             mesh_h = mesh_s.size()[1]
-            if mesh_h > 2.2 * max(span, 1e-6) or mesh_h < 0.55 * max(span, 1e-6):
+            if mesh_h > 3.2 * max(span, 1e-6) or mesh_h < 0.40 * max(span, 1e-6):
                 return False
             parent = point
         return True
