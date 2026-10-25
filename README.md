@@ -105,6 +105,8 @@ ein, `emote_zeit` wählt den Frame. Welche Quelle genutzt wurde, steht im Log
 (`ausgeruestet: …`) und im Manifest unter `render.pose_details`. Ein lokaler
 Pfad in `emote_datei` hat Vorrang.
 
+![Vergleich: verschobene Gelenke vorher, R15-Raster nachher](docs/rig_seams_vergleich.png)
+
 **Rig-Genauigkeit:** Jede Extremität wird gegen das kanonische R15-Raster
 geprüft (Schulterlinie, Ellbogen-/Handgelenk-, Knie-/Fußgelenk-Anteile). Passt
 ein Bundle (fehlende Attachments, Platzhalter `(0,0,0)`, falsche
