@@ -55,9 +55,9 @@ jobs:
               print(f"UserId nicht ermittelbar: {exc}", file=sys.stderr)
               print(0)
           PY
-          UID="$(tail -1 /tmp/user_id)"
-          echo "UserId: ${UID:-0}"
-          python tools/fetch_reference.py --user-id "${UID:-0}" --out reference || true
+          RBX_USER_ID="$(tail -1 /tmp/user_id)"
+          echo "UserId: ${RBX_USER_ID:-0}"
+          python tools/fetch_reference.py --user-id "${RBX_USER_ID:-0}" --out reference || true
           ls -la reference || true
 
       - name: Bericht committen
