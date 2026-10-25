@@ -305,8 +305,9 @@ def test_fehlende_beine_werden_aus_dem_koerperpaket_nachgeladen(monkeypatch):
     import roblox_api
 
     class _Resp:
-        def __init__(self, payload):
-            self.ok = True
+        def __init__(self, payload, ok=True):
+            self.ok = ok
+            self.status = 200 if ok else 404
             self._payload = payload
 
         def json(self):
@@ -315,28 +316,23 @@ def test_fehlende_beine_werden_aus_dem_koerperpaket_nachgeladen(monkeypatch):
     class _Client:
         def get(self, url, allow_status=None):
             if url.endswith("/assets/86499666/bundles"):
-                return _Resp({"data": [{"id": 192, "name": "Roblox 2.0"}]})
-            if "/assets/" in url and url.endswith("/details") and "economy" in url:
-                mapping = {86499666: 27, 86499698: 28, 86499716: 29,
-                           86499682: 30, 86499704: 31}
-                aid = int(url.split("/assets/")[1].split("/")[0])
-                return _Resp({"AssetTypeId": mapping.get(aid, 0), "Name": "Teil"})
-            if url.endswith("/bundles/192/details"):
+                return _Resp({"data": [{"id": 239, "name": "Woman"}]})
+            if url.endswith("/bundles/239/details"):
                 return _Resp({"items": [
-                    {"id": 86499666, "type": "Asset", "name": "Roblox 2.0 Torso"},
-                    {"id": 86499698, "type": "Asset", "name": "Roblox 2.0 Right Arm"},
-                    {"id": 86499716, "type": "Asset", "name": "Roblox 2.0 Left Arm"},
-                    {"id": 86499682, "type": "Asset", "name": "Roblox 2.0 Left Leg"},
-                    {"id": 86499704, "type": "Asset", "name": "Roblox 2.0 Right Leg"},
+                    {"id": 86499666, "type": "Asset", "name": "Woman Torso"},
+                    {"id": 86499698, "type": "Asset", "name": "Woman Right Arm"},
+                    {"id": 86499716, "type": "Asset", "name": "Woman Left Arm"},
+                    {"id": 86499682, "type": "Asset", "name": "Woman Left Leg"},
+                    {"id": 86499704, "type": "Asset", "name": "Woman Right Leg"},
                 ]})
-            return _Resp({})
+            return _Resp({}, ok=False)
 
     assets = [
-        {"id": 86499666, "name": "Roblox 2.0 Torso",
+        {"id": 86499666, "name": "Woman Torso",
          "assetType": {"id": 27, "name": "Torso"}},
-        {"id": 86499698, "name": "Roblox 2.0 Right Arm",
+        {"id": 86499698, "name": "Woman Right Arm",
          "assetType": {"id": 28, "name": "RightArm"}},
-        {"id": 86499716, "name": "Roblox 2.0 Left Arm",
+        {"id": 86499716, "name": "Woman Left Arm",
          "assetType": {"id": 29, "name": "LeftArm"}},
     ]
     warnings = []
