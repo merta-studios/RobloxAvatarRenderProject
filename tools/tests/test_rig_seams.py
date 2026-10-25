@@ -712,8 +712,9 @@ def test_fehlende_beine_nutzen_die_standard_avatar_meshes():
     assert hi[1] - lo[1] == pytest.approx(torso_h, rel=0.10)
     start, ende = spans["LeftUpperLeg"]
     ys = [bein.positions[i][1] for i in range(start, ende)]
-    # Exakter R15-Anteil - die Segmente werden nicht mehr verlaengert.
-    erwartet = 0.384 * torso_h
+    # Exakter R15-Anteil (kanonisches Gelenk-Fraktionen-Set) - die
+    # Segmente werden nicht mehr verlaengert.
+    erwartet = avatar_rig.R15_LEG_FRACTIONS[0] * torso_h
     assert (max(ys) - min(ys)) == pytest.approx(erwartet, rel=0.06)
     assert all(0.0 <= u <= 1.0 and 0.0 <= v <= 1.0 for u, v in bein.uvs)
 
