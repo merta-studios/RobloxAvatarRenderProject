@@ -34,19 +34,15 @@ jobs:
           PY
 
       - name: Referenz laden
+        continue-on-error: true
         env:
           USERNAME: ${{ steps.username.outputs.username }}
         run: |
-          set -euo pipefail
-          python - "$USERNAME" <<'PY'
+          mkdir -p reference
+          exec > >(tee -a reference/fetch.log) 2>&1
+          python - "$USERNAME" <<'PY' > /tmp/user_id 2>>reference/fetch.log
           import sys, json, urllib.request
           name = sys.argv[1]
-          try:
-              with urllib.request.urlopen(
-                      "https://users.roblox.com/v1/usernames/users", timeout=30) as _:
-                  pass
-          except Exception:
-              pass
           payload = json.dumps({"usernames": [name], "excludeBannedUsers": True}).encode()
           req = urllib.request.Request(
               "https://users.roblox.com/v1/usernames/users", data=payload,
@@ -54,14 +50,15 @@ jobs:
           try:
               with urllib.request.urlopen(req, timeout=30) as resp:
                   data = json.loads(resp.read())
-              uid = data["data"][0]["id"]
+              print(data["data"][0]["id"])
           except Exception as exc:
-              print(f"UserId nicht ermittelbar ({exc}) - nur Meshes")
-              uid = 0
-          open("/tmp/user_id", "w").write(str(uid))
+              print(f"UserId nicht ermittelbar: {exc}", file=sys.stderr)
+              print(0)
           PY
-          UID="$(cat /tmp/user_id)"
-          python tools/fetch_reference.py --user-id "$UID" --out reference
+          UID="$(tail -1 /tmp/user_id)"
+          echo "UserId: ${UID:-0}"
+          python tools/fetch_reference.py --user-id "${UID:-0}" --out reference || true
+          ls -la reference || true
 
       - name: Bericht committen
         run: |
@@ -70,7 +67,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # Zu grosse OBJ-Dateien nicht ins Repo (Snapshot-Limit).
           find reference -type f -size +8M -delete
-          git add reference tools/fetch_reference.py
+          git add -f reference tools/fetch_reference.py
           if git diff --cached --quiet; then
             echo "Keine Aenderungen."
             exit 0
