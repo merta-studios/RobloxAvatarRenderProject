@@ -127,21 +127,28 @@ def test_teile_sitzen_wie_im_mannequin(klassisch):
 
 
 def test_rig_setzt_die_schulter_auf_die_mannequin_hoehe(klassisch):
+    """Schultergelenk 21,6 % unter der Torso-Oberkante - ohne Schulterband."""
     rig = avatar_rig.assemble_r15_rig(
         {"torso": _torso_segmente(klassisch),
          "links_arm": _arm_segmente(klassisch)}, None,
         roblox_api.DEFAULT_BODY_COLORS, dict(roblox_api.DEFAULT_SCALES),
         headless=True, classic_body=klassisch)
     assert any("ClassicMannequin" in n for n in rig.notes)
+    # Kein Schulterband-Eingriff mehr (der schob den Arm auf 4 %).
+    assert not any("Schulterlinie" in n for n in rig.notes)
     t_lo, t_hi = rig.body_meshes["torso"].bbox()
     torso_h = t_hi[1] - t_lo[1]
-    arm_lo, arm_hi = rig.body_meshes["links_arm"].bbox()
-    # Armoberkante 21,6 % unter der Torso-Oberkante (nicht 4 %!).
-    assert (t_hi[1] - arm_hi[1]) / torso_h == pytest.approx(0.216, abs=0.02)
-    # Schultergelenk aus dem RigAttachment des Oberarms.
     schulter = rig.joint_positions["LeftUpperArm"]
-    assert (t_hi[1] - schulter[1]) / torso_h == pytest.approx(0.29, abs=0.03)
+    assert (t_hi[1] - schulter[1]) / torso_h == pytest.approx(0.216, abs=0.02)
     assert schulter[0] < 0  # linker Arm liegt links (Szene schaut nach -Z)
+    # Der Arm haengt senkrecht: Ellenbogen genau unter der Schulter.
+    ellbogen = rig.joint_positions["LeftLowerArm"]
+    assert ellbogen[0] == pytest.approx(schulter[0], abs=0.02)
+    assert ellbogen[2] == pytest.approx(schulter[2], abs=0.02)
+    assert ellbogen[1] < schulter[1]
+    # Und die sichtbare Armoberkante liegt tiefer als das alte Band (4 %).
+    arm_lo, arm_hi = rig.body_meshes["links_arm"].bbox()
+    assert 0.05 < (t_hi[1] - arm_hi[1]) / torso_h < 0.30
 
 
 def test_fehlende_beine_kommen_aus_dem_mannequin(klassisch):

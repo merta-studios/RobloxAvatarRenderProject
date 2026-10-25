@@ -17,6 +17,7 @@ Details siehe ANLEITUNG.md, Abschnitt "Einschraenkungen".
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -922,6 +923,33 @@ def has_rig_attachments(segments_by_part: Dict[str, List[Dict[str, Any]]], head_
     return False
 
 
+def _rot_to_down(axis: Tuple[float, float, float]) -> Matrix3:
+    """Rotation, die ``axis`` auf (0,-1,0) abbildet (Bind-Pose senkrecht)."""
+    length = math.sqrt(sum(float(c) * float(c) for c in axis))
+    if length < 1e-9:
+        return IDENTITY_MAT3
+    d = (axis[0] / length, axis[1] / length, axis[2] / length)
+    up = (0.0, -1.0, 0.0)
+    dot = sum(d[i] * up[i] for i in range(3))
+    if dot > 1.0 - 1e-9:
+        return IDENTITY_MAT3
+    if dot < -1.0 + 1e-9:
+        return ((1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, -1.0))
+    ax = (d[1] * up[2] - d[2] * up[1],
+          d[2] * up[0] - d[0] * up[2],
+          d[0] * up[1] - d[1] * up[0])
+    norm = math.sqrt(sum(c * c for c in ax))
+    ax = (ax[0] / norm, ax[1] / norm, ax[2] / norm)
+    angle = math.acos(max(-1.0, min(1.0, dot)))
+    c, si = math.cos(angle), math.sin(angle)
+    x, y, z = ax
+    return (
+        (c + x * x * (1 - c), x * y * (1 - c) - z * si, x * z * (1 - c) + y * si),
+        (y * x * (1 - c) + z * si, c + y * y * (1 - c), y * z * (1 - c) - x * si),
+        (z * x * (1 - c) - y * si, z * y * (1 - c) + x * si, c + z * z * (1 - c)),
+    )
+
+
 def _classic_segment_matches(raw: Optional[Dict[str, Any]],
                              reference: Any) -> bool:
     """Ist das vorhandene Segment-Mesh genau dieses Standard-Teil?
@@ -1287,49 +1315,68 @@ def assemble_r15_rig(
             ):
                 classic_placed = _cand
         if classic_placed is not None:
-            first_joint = None
+            # Bind-Pose senkrecht: das Mannequin zeigt den Koerper in A-Pose
+            # (Arme ~30 Grad ausgestellt). Roblox haengt die Glieder dagegen
+            # senkrecht auf; gedreht wird um den Gelenkpunkt des Teils, und
+            # zwar so, dass Gelenk -> naechstes Gelenk nach unten zeigt. Die
+            # Gelenk-Abstaende stammen aus den *RigAttachments* der Teile
+            # (Roblox-Rig), damit die Naht genau so bleibt wie bei Roblox.
             _slices = ("upper", "lower", "end")
+            _joint = classic_placed[0].joint
             for index, seg in enumerate(classic_placed):
                 _mesh, _atts, _tr = seg_lookup.get(seg.name, (seg.mesh, {}, False))
                 _atts = dict(_atts or {})
-                # Kleidungs-UVs: die Vorlage des klassischen Koerpers
-                # (264x284) wird ueber die Flaechennormalen projiziert -
-                # damit landen Shirt/Hose genau wie bei Roblox auf dem Glied.
                 _slice = _slices[index] if index < len(_slices) else "end"
-                _mesh_seg = apply_limb_uvs_projected(seg.mesh, _slice)
-                register_segment(seg.name, _mesh_seg, _atts, seg.center,
-                                 IDENTITY_MAT3, not _tr)
-                # Gelenk = echtes RigAttachment des Teils (Roblox-Drehpunkt);
-                # fehlt es, die Oberkante in der Teilmitte.
-                _att_name = chain[index][1] if index < len(chain) else ""
-                _entry = _atts.get(_att_name)
-                if _entry is not None:
-                    joint = (seg.center[0] + _entry[0][0],
-                             seg.center[1] + _entry[0][1],
-                             seg.center[2] + _entry[0][2])
+                _half = seg.size[1] / 2.0
+                _prox_entry = _atts.get(chain[index][1]) if index < len(chain) else None
+                _prox = (_prox_entry[0] if _prox_entry is not None
+                         else (0.0, _half, 0.0))
+                _dist_entry = (_atts.get(chain[index + 1][1])
+                               if index + 1 < len(chain) else None)
+                if _dist_entry is not None:
+                    _dist = _dist_entry[0]
+                elif index + 1 < len(classic_placed):
+                    # Ohne Attachment: naechstes Gelenk aus dem Mannequin.
+                    _nxt = classic_placed[index + 1].joint
+                    _ctr = seg.center
+                    _dist = (_nxt[0] - _ctr[0], _nxt[1] - _ctr[1],
+                             _nxt[2] - _ctr[2])
                 else:
-                    joint = seg.joint
-                joint_pos[seg.name] = joint
-                joint_frames[seg.name] = (_entry[1] if _entry is not None
+                    _dist = (0.0, -_half, 0.0)
+                _axis = (_dist[0] - _prox[0], _dist[1] - _prox[1],
+                         _dist[2] - _prox[2])
+                _rot = _rot_to_down(_axis)
+                _len = math.sqrt(sum(c * c for c in _axis))
+                # Mesh in Gelenk-Koordinaten, senkrecht ausgerichtet.
+                _local = []
+                for _p in seg.mesh.positions:
+                    _rel = (_p[0] - _prox[0], _p[1] - _prox[1], _p[2] - _prox[2])
+                    _local.append(_mat3_vec(_rot, _rel))
+                _seg_mesh = apply_limb_uvs_projected(
+                    MeshData(positions=_local, normals=[], uvs=[], faces=list(seg.mesh.faces),
+                             source_version=seg.mesh.source_version), _slice)
+                register_segment(seg.name, _seg_mesh, _atts, _joint,
+                                 IDENTITY_MAT3, not _tr)
+                joint_pos[seg.name] = _joint
+                joint_frames[seg.name] = (_prox_entry[1] if _prox_entry is not None
                                           else IDENTITY_MAT3)
                 segment_driver[seg.name] = seg.name
-                if first_joint is None:
-                    first_joint = joint
+                # Naechstes Gelenk senkrecht unter dem aktuellen.
+                _joint = (_joint[0], _joint[1] - _len, _joint[2])
             notes.append(
-                f"Extremitaet '{part_name}': offizieller Standard-Koerper "
-                "gesetzt (Roblox-ClassicMannequin - echte Teil-Meshes, "
-                "Gelenke auf den RigAttachments des Teils).")
+                f"Extremitaet '{part_name}': offizieller Standard-Koerper, "
+                "senkrecht aufgehaengt (Roblox-ClassicMannequin: echte "
+                "Teil-Meshes, Gelenke aus den RigAttachments).")
             _named = [(seg.name, placed_seg_mesh[seg.name])
                       for seg in classic_placed if seg.name in placed_seg_mesh]
             _merged, _spans = _merge_with_spans(_named)
             body_meshes[part_name] = _merged
             segment_spans[part_name] = _spans
-            _last = classic_placed[-1]
-            _top = first_joint or _last.joint
-            _end = (_top[0], _last.center[1] - _last.size[1] / 2.0, _top[2])
-            chain_spans[part_name] = {"span": _dist3(_top, _end),
+            _top = classic_placed[0].joint
+            _bottom = _joint
+            chain_spans[part_name] = {"span": _dist3(_top, _bottom),
                                       "rescale": None, "factor": 1.0}
-            return 0.0, (first_joint or classic_placed[0].joint)[1]
+            return 0.0, _top[1]
 
         if any(name in seg_lookup for name in names):
             root = root_att[0]
