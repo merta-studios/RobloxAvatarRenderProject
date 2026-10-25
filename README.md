@@ -109,7 +109,8 @@ Pfad in `emote_datei` hat Vorrang.
 geprüft (Schulterlinie, Ellbogen-/Handgelenk-, Knie-/Fußgelenk-Anteile). Passt
 ein Bundle (fehlende Attachments, Platzhalter `(0,0,0)`, falsche
 `MeshPart.Size`), werden die Gelenke auf das Raster gesetzt und die Segmente
-lückenlos dazwischen eingepasst – statt sie übereinander zu hängen. Alle
+lückenlos dazwischen eingepasst (Länge = Gelenkabstand, Breite/Tiefe
+unverändert) – statt sie übereinander zu hängen. Alle
 Eingriffe stehen als `Rig-Audit:`-Warnung im Log und im Manifest (`rig_audit`
 mit `joint_spans`, `gelenke`, `segmente`, `segment_rohdaten`); derselbe Block
 landet in der Step Summary des Render-Workflows.

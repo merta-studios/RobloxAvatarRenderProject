@@ -283,9 +283,12 @@ Besonderheiten:
   Torso-Oberkante, Ellbogen 41,9 %, Handgelenk 85,6 % der Armlänge, Knie
   41,1 %, Fußgelenk 87,4 % der Beinlänge). Ist das der Fall, wird exakt wie
   Roblox montiert; sonst werden die Gelenke auf das Raster gesetzt und jedes
-  Segment lückenlos zwischen seine beiden Gelenke gelegt (Größe aus dem
-  Gelenkabstand, Querlage aus dem distalen Gelenk). Beides steht als
-  `Rig-Audit:`-Hinweis im Log und im Manifest unter `rig_audit`.
+  Segment lückenlos zwischen seine beiden Gelenke gelegt: die Länge folgt dem
+  Gelenkabstand (maximal auf das 0,3- bis 2,6-Fache begrenzt), Breite und
+  Tiefe bleiben unverändert, die Querlage richtet sich am distalen Gelenk aus.
+  So bleibt die Naht zu, ohne die Silhouette zu verbiegen. Beides steht als
+  `Rig-Audit:`-Hinweis im Log und im Manifest unter `rig_audit` (inkl.
+  `gelenke`, `segmente` und den Rohdaten der Bundle-Segmente).
 * **CFrame-Rotationen:** Werden vollständig gelesen (explizite Matrix
   *und* die 24 Sonder-Rotationen der Binärspec) und bei Accessoires
   angewendet – ein um 90° gedrehtes Bruststück steht sonst seitlich
