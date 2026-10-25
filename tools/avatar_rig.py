@@ -1512,6 +1512,15 @@ def assemble_r15_rig(
             # echter Kopfhoehe ueber dem offenen Kragen wie im Spiel.
             head_center = h_orig
             head_r = 0.60 * shead
+        # Fehlen die echten Kopf-Attachments im RBXM, greifen Standardwerte
+        # an der Kopfmitte - Hut/Brille sitzen dann nur noch ungefaehr.
+        # Sichtbar machen statt still zu raten (Brille sass so zu hoch).
+        for _att_name in ("HatAttachment", "HairAttachment",
+                          "FaceCenterAttachment", "FaceFrontAttachment"):
+            if _att_name not in world_atts:
+                notes.append(
+                    f"Kopf: Attachment '{_att_name}' fehlt im Kopf-Teil - "
+                    "Standardwert an der Kopfmitte verwendet.")
         world_atts.setdefault("HatAttachment", ((head_center[0], head_center[1] + 0.6 * shead, head_center[2]), IDENTITY_MAT3))
         world_atts.setdefault("HairAttachment", world_atts["HatAttachment"])
         world_atts.setdefault("FaceCenterAttachment", (head_center, IDENTITY_MAT3))
