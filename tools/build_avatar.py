@@ -628,6 +628,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     # Manifest, warum z. B. Beine als Platzhalter entstehen: das Avatar-
     # Inventar enthaelt dann schlicht keine Bein-Assets.
     asset_log: List[Dict[str, Any]] = []
+    # Protokoll der Katalog-Abfragen fuer fehlende Koerperteile (Diagnose).
+    bodies_log: List[str] = []
     avatar_raw: Dict[str, Any] = {}
     mesh_parts: List[Dict[str, Any]] = []
     texture_bytes_by_rel: Dict[str, bytes] = {}
@@ -869,10 +871,14 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         # Unvollstaendige Koerperpakete ergaenzen: Roblox rendert fehlende
         # Teile aus demselben Paket (z. B. Beine), statt Quader zu erfinden.
         try:
-            ergaenzt = api.missing_body_parts(client, assets, warnings)
+            ergaenzt = api.missing_body_parts(client, assets, warnings, bodies_log)
         except Exception as exc:  # pragma: no cover - Netzwerk/Format
             ergaenzt = []
             warnings.append(f"Koerperpaket konnte nicht geprueft werden: {exc}")
+        if bodies_log:
+            # Diagnose: welche Katalog-Abfragen liefen (Manifest + Log).
+            for zeile in bodies_log:
+                log(f"      . Koerperpaket: {zeile}")
         for teil in ergaenzt:
             assets.append({"id": teil["id"], "name": teil["name"],
                            "assetType": {"id": teil["asset_type_id"], "name": ""}})
@@ -1604,6 +1610,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         "skipped": skipped,
         "ignored": ignored,
         "assets": asset_log,
+        "koerperpaket_abfragen": bodies_log,
         "layered_ausgelassen": layered_ausgelassen,
         "warnings": warnings,
         # R15-Segment-Spannen (Vertex-Indizes je Koerperteil in OBJ-
