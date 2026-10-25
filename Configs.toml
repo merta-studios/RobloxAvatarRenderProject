@@ -35,7 +35,7 @@ username = "SunsetSiya"
 #      -90   = nach links gedreht  -> wir sehen die linke Seite (Profil)
 #  Erlaubt ist nur -90 bis 90. Zwischenwerte wie 25 oder -40 sind ideal für
 #  eine schräge 3/4-Ansicht (früher war der Render fest auf ca. 27°).
-drehung_grad = 0
+drehung_grad = 1
 
 
 # -----------------------------------------------------------------------------
