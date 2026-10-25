@@ -278,38 +278,37 @@ Besonderheiten:
   skaliert beim Avatar-Aufbau kein einzelnes Segment: jedes hängt über
   `C0`/`C1` an seinem Elternteil (`Kind = Eltern · C0 · C1⁻¹`). Genau so
   montiert die Pipeline – Drehpunkte und Nähte stimmen damit.
-* **Standard-Körper (Originalgeometrie):** Der Körper dieses Avatars ist der
-  *klassische* Roblox-Körper – seine Teile stimmen auf drei Nachkommastellen
-  mit Roblox' offizieller Referenzdatei `ClassicMannequin.fbx` überein
-  (Oberarm 0,749 × 0,888 × 0,584, Oberschenkel 0,656 × 1,664 × 0,662 …).
-  `tools/probe_reference.py` lädt die Datei nach `reference/official/`,
-  `tools/build_mannequin.py` schreibt daraus `reference/classic_body.json`
-  (15 Teile mit Mesh, Maßen und Lage im Mannequin, plus abgeleitete
-  Verhältnisse). Zur Renderzeit liest `tools/mannequin.py` dieses JSON –
-  Standard-Teile werden also **nicht** nachgebaut.
-* **Schulterlinie (keine Konstanten mehr):** Arme und Beine werden relativ zum
-  *echten* Torso des Avatars exakt so gesetzt wie im Mannequin: Schultergelenk
-  21,6 % der Torso-Höhe unter der Torso-Oberkante, Beinlänge 131,7 % der
-  Torso-Höhe. Aufgehängt wird senkrecht - das Mannequin zeigt eine A-Pose mit
-  ~30° ausgestellten Armen, Roblox hängt die Glieder dagegen senkrecht auf.
-  Gedreht wird um den Gelenkpunkt, die Gelenkabstände kommen aus den
-  `*RigAttachment`s der Teile, sodass Naht und Drehpunkt wie bei Roblox
-  bleiben. Die frühere „Schulterband“-Regel (Arm starr auf 4 % unter die
-  Oberkante) war die Ursache für hochgezogene Schultern und greift für den
-  Standard-Körper nicht mehr.
-* **Fehlende Körperteile:** Trägt der Avatar ein Teil gar nicht (z. B. keine
-  Beine), setzt Roblox dafür den **Standard-Avatar** ein – nicht die übrigen
-  Teile des getragenen Pakets. Die Pipeline setzt dafür die Teile aus
-  `reference/classic_body.json` ein: echte Silhouette, die UVs der offiziellen
-  Roblox-Kleidungsvorlage (Shirt/Hose) und Gelenke auf den Teilkanten. Kein
-  Quader, keine R15-Block-Ersatzgeometrie.
-* **Fremde Bundles:** Weicht ein getragenes Segment in den Maßen von der
-  Referenz ab (mehr als 6 %, z. B. ein Korblox-Arm), bleibt es unangetastet und
-  wird wie bisher über seine eigenen Attachments montiert.
+* **Standard-Avatar (R15-Blockkörper):** Trägt der Avatar ein Körperteil gar
+  nicht (z. B. keine Beine), setzt Roblox dafür den **R15-Standard-Avatar**
+  ein – den Blockkörper aus quadratischen 1×1-Studs-Teilen, nicht die übrigen
+  Teile des getragenen Pakets und nicht den klassischen Körper. Die Pipeline
+  liest dafür Roblox' offizielle `BlockyCharacter.fbx`:
+  `tools/probe_reference.py` lädt sie nach `reference/official/`,
+  `tools/build_mannequin.py` schreibt daraus `reference/standard_r15.json`
+  (15 Blockteile: Mesh und Maße), `tools/mannequin.py` lädt das JSON zur
+  Renderzeit. Dazu kommen die im Bau von Roblox heruntergeladenen
+  R15-Block-Meshes desselben Körpers. Eingebaut werden Ober-/Unterglied plus
+  Hand bzw. Fuß in kanonischen R15-Anteilen, mit quadratischem Querschnitt
+  (halbe Torso-Breite) und den Kleidungs-UVs der Roblox-Vorlage (Shirt/Hose).
+  Fehlt die Referenzdatei, entstehen Quader derselben Maße. Der klassische
+  Körper (`ClassicMannequin.fbx` → `reference/classic_body.json`) bleibt als
+  Maß-Abgleich erhalten – der Körper dieses Avatars ist klassisch, seine
+  Teile stimmen mit dieser Datei überein.
+* **Schulterlinie (keine Konstanten mehr):** Ausgerüstete Arme und Beine
+  werden exakt über ihre `*RigAttachment`s montiert (`Kind = Eltern · C0 ·
+  C1⁻¹`) – Schulter, Ellbogen und Knie sitzen damit dort, wo Roblox sie
+  setzt, und die Pose dreht um dieselben Punkte. Es gibt keine
+  Schulterlinien-Prozentzahl und keine Längen-Normierung mehr: Die frühere
+  „Schulterband“-Regel (Arm starr auf 4 % unter die Torso-Oberkante) setzte
+  die Schultern zu hoch; ein zwischenzeitliches Ersetzen der Arme durch
+  senkrecht umgehängte Classic-Teile veränderte die Drehpunkte, sodass die
+  Segmente in der Pose verstreut lagen. Beides ist entfernt. Nur ein Marker,
+  der gar nicht auf dem Torso liegt (fehlerhaftes Bundle), wird auf die
+  Torso-Kante zurückgeholt.
 * **Beinlänge:** Beine behalten die Länge ihres Bundles. Weichen linkes und
   rechtes Bein um mehr als 5 % voneinander ab, wird das kürzere mit einem
   Faktor auf allen Achsen angeglichen (kein Verzerren, beide Füße auf dem
-  Boden). Arme werden nur verlängert, nie gestaucht.
+  Boden). Arme werden gar nicht mehr normiert.
 * **Platzhalter-Attachments:** Fehlt ein Marker, liegt er außerhalb des Meshes
   oder klebt er in der Segmentmitte, wird das Gelenk an die Deckfläche des
   Segments gelegt – sonst dreht das Kind um seine eigene Mitte. Alles steht als
