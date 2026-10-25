@@ -80,6 +80,10 @@ R15_SHOULDER_FRACTION_OF_TORSO = 0.25
 #: ausserhalb, wird er starr auf die Mitte des Bandes (4 %) verschoben.
 R15_ARM_TOP_BAND = (0.02, 0.06)
 R15_ARM_TOP_TARGET = 0.04
+#: Ueberlappung der Standard-Avatar-Segmente (Faktor auf die Segmenthoehe).
+#: Die R15-Block-Meshes sind an den Enden abgerundet; ohne Ueberlappung
+#: entstehen sichtbare Luecken zwischen Ober- und Unterglied.
+R15_STANDARD_SEGMENT_OVERLAP = 1.12
 
 #: Meshes des **Standard-Avatars** (R15-Block-Koerper). Roblox baut den
 #: Standard-Koerper in der Engine aus genau diesen FileMesh-Assets; sie haben
@@ -932,7 +936,14 @@ def _standard_segment_mesh(raw: Optional[MeshData], width: float, height: float,
     lo, hi = raw.bbox()
     size = (max(1e-6, hi[0] - lo[0]), max(1e-6, hi[1] - lo[1]),
             max(1e-6, hi[2] - lo[2]))
-    scaled = raw.transform((width / size[0], height / size[1], depth / size[2]))
+    # Die Block-Meshes haben abgerundete Enden. Stossen zwei Segmente exakt
+    # aufeinander, bleiben zwischen den Rundungen Luecken (der Koerper wirkt
+    # wie gestapelte Wuerfel). Deshalb wird jedes Segment etwas hoeher
+    # gezogen und ueberlappt seine Nachbarn - die Naht ist dann geschlossen,
+    # die Silhouette bleibt die des Standard-Koerpers.
+    scaled = raw.transform(
+        (width / size[0], height * R15_STANDARD_SEGMENT_OVERLAP / size[1],
+         depth / size[2]))
     center = scaled.center()
     scaled = scaled.transform(1.0, (-center[0], -center[1], -center[2]))
     return apply_limb_uvs_projected(scaled, slice_name)
