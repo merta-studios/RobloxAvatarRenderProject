@@ -98,3 +98,47 @@ drwxr-xr-x 2 runner runner 4096 Oct 25 11:42 meshes
 drwxr-xr-x 2 runner runner 4096 Oct 25 11:42 official
 -rw-r--r-- 1 runner runner 2321 Oct 25 11:42 probe.json
 -rw-r--r-- 1 runner runner 8944 Oct 25 11:42 report.json
+UserId: 9767435332
+[1/2] R15-Block-Meshes des Standard-Avatars ...
+  + LowerTorso: 48 Faces, 2.000 x 0.904 x 0.999
+  + UpperTorso: 48 Faces, 2.000 x 1.380 x 0.999
+  + Head: 846 Faces, 1.201 x 1.202 x 1.201
+  + LeftUpperArm: 72 Faces, 1.001 x 1.327 x 1.040
+  + LeftLowerArm: 126 Faces, 1.001 x 1.461 x 0.999
+  + LeftHand: 56 Faces, 1.002 x 0.428 x 0.999
+  + RightUpperArm: 72 Faces, 1.001 x 1.331 x 1.040
+  + RightLowerArm: 126 Faces, 1.001 x 1.520 x 0.999
+  + RightHand: 56 Faces, 1.002 x 0.309 x 0.999
+  + LeftUpperLeg: 134 Faces, 1.000 x 1.456 x 1.009
+  + LeftLowerLeg: 134 Faces, 1.000 x 1.452 x 1.066
+  + LeftFoot: 54 Faces, 1.000 x 0.465 x 1.012
+  + RightUpperLeg: 134 Faces, 1.006 x 1.459 x 0.999
+  + RightLowerLeg: 134 Faces, 1.006 x 1.453 x 1.077
+  + RightFoot: 54 Faces, 1.006 x 0.465 x 1.012
+[2/2] Roblox-3D-Render des Avatars (Ground Truth) ...
+  . https://thumbnails.roblox.com/v1/users/avatar-3d -> HTTP 403
+  . https://thumbnails.roblox.com/v1/users/avatar -> HTTP 200
+  + 2D-Avatar-Thumbnail gespeichert
+  . https://thumbnails.roblox.com/v1/users/avatar -> HTTP 400
+
+Bericht: reference/report.json
++ ClassicMannequin.fbx: 573324 Bytes, binary=True, zip=False, ascii=False
++ ClassicMannequin_With-Cages.fbx: 557468 Bytes, binary=True, zip=False, ascii=False
++ BlockyCharacter.fbx: 2984140 Bytes, binary=True, zip=False, ascii=False
+? https://thumbnails.roblox.com/v1/users/avatar-3d?userIds=1 -> HTTP 403: {"errors": [{"code": 0, "message": "Invalid authentication data provided"}]}
+? https://thumbnails.roblox.com/v1/users/avatar-3d?userIds=1&size=420x420&format=Obj -> HTTP 403: {"errors": [{"code": 0, "message": "Invalid authentication data provided"}]}
+? https://thumbnails.roblox.com/v1/users/avatar-3d?userIds=9767435332&size=420x420&format=Obj -> HTTP 403: {"errors": [{"code": 0, "message": "Invalid authentication data provided"}]}
+? https://thumbnails.roblox.com/v1/users/avatar?userIds=1&size=420x420&format=Obj -> HTTP 400: {"errors": [{"code": 2, "message": "The requested image format is invalid. Please see documentation for valid thumbnail format parameter name and values.", "fie
+  -> /home/runner/work/RobloxAvatarRenderProject/RobloxAvatarRenderProject/reference/classic_body.json (334 KB)
+Torso 1.303 x 1.848 x 0.842 Studs
+Armoberkante 21.6 % unter der Torso-Oberkante, Beinlaenge 131.7 % der Torso-Hoehe
+total 380
+drwxr-xr-x 5 runner runner   4096 Oct 25 11:52 .
+drwxr-xr-x 8 runner runner   4096 Oct 25 11:52 ..
+drwxr-xr-x 2 runner runner   4096 Oct 25 11:52 avatar2d
+-rw-r--r-- 1 runner runner 342459 Oct 25 11:52 classic_body.json
+-rw-r--r-- 1 runner runner   7917 Oct 25 11:52 fetch.log
+drwxr-xr-x 2 runner runner   4096 Oct 25 11:52 meshes
+drwxr-xr-x 2 runner runner   4096 Oct 25 11:52 official
+-rw-r--r-- 1 runner runner   2321 Oct 25 11:52 probe.json
+-rw-r--r-- 1 runner runner   8950 Oct 25 11:52 report.json
