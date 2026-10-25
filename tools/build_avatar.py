@@ -1720,6 +1720,10 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             # haengen - damit laesst sich ein verrutschtes Gesichts-
             # Accessoire in Studs nachmessen statt zu raten.
             "kopf": ({
+                "lokale_attachments": {
+                    name: [round(float(v), 3) for v in (info.get("position") or ())]
+                    for name, info in ((head_mesh or {}).get("attachments") or {}).items()
+                },
                 "bbox_min": [round(c, 3) for c in rig_avatar.head_mesh.bbox()[0]],
                 "bbox_max": [round(c, 3) for c in rig_avatar.head_mesh.bbox()[1]],
                 "attachments": {
