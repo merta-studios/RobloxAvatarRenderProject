@@ -54,12 +54,18 @@ ACCESSORY_LAYOUT: Dict[int, Dict[str, Any]] = {
 R15_ARM_LENGTH_PER_TORSO_HEIGHT = 0.869   # Schulter -> Handende
 R15_WRIST_FRACTION_OF_ARM = 0.856         # Schulter -> Handgelenk
 R15_LEG_LENGTH_PER_TORSO_HEIGHT = 1.0
-R15_ANKLE_FRACTION_OF_LEG = 0.874         # Huefte -> Fussgelenk
+#: Huefte -> Fussgelenk (kanonisch 1,604 Studs bei 2,0 Studs Torso).
+R15_ANKLE_FRACTION_OF_LEG = 0.80
+#: Huefte -> Sohle inklusive Fuss (kanonisch 2,02 Studs bei 2,0 Torso).
+R15_SOLE_FRACTION_OF_LEG = 1.0
 R15_LIMB_SCALE_MIN = 0.60                 # Sicherheitsnetz gegen kaputte Daten
 R15_LIMB_SCALE_MAX = 1.60
 #: Darunter bleibt das Bundle exakt so, wie es ist (Authentizitaet vor
 #: Normierung) - erst bei groesserer Abweichung wird skaliert.
 R15_LIMB_TOLERANCE = 0.15
+#: Beine werden eng auf die kanonische Laenge gebracht - nur so stehen beide
+#: Fuesse auf derselben Hoehe (Arme duerfen dagegen lang bleiben).
+R15_LEG_TOLERANCE = 0.05
 
 
 def _de(value: float, nd: int = 2) -> str:
@@ -1122,9 +1128,10 @@ def assemble_r15_rig(
         root_att: Tuple[Tuple[float, float, float], Matrix3],
         inward_world: Optional[Tuple[float, float, float]],
         canonical_len: float,
+        placeholder_len: float,
         scale_mode: str,
-        fallback_box: Tuple[float, float, float],
-        fallback_center: Tuple[float, float, float],
+        kind: str,
+        sign: float,
     ) -> None:
         """Haengt die Segmente einer Extremitaet starr an ihren Attachments auf.
 
@@ -1186,7 +1193,9 @@ def assemble_r15_rig(
                 # ein absichtlich langer Bundle-Arm (Korblox Deathspeaker)
                 # bleibt lang, ein zu kurzer Arm waechst auf Huefthoehe.
                 darf = scale_mode == "immer" or ideal > 1.0
-                if darf and abs(ideal - 1.0) > R15_LIMB_TOLERANCE:
+                tolerance = (R15_LEG_TOLERANCE if scale_mode == "immer"
+                             else R15_LIMB_TOLERANCE)
+                if darf and abs(ideal - 1.0) > tolerance:
                     factor = max(R15_LIMB_SCALE_MIN,
                                  min(R15_LIMB_SCALE_MAX, ideal))
             if abs(factor - 1.0) > 1e-3:
@@ -1212,18 +1221,88 @@ def assemble_r15_rig(
             body_meshes[part_name] = merged
             segment_spans[part_name] = spans
             return
-        # Kein einziges Segment vorhanden: Quader als Platzhalter.
-        aw, ah, ad = fallback_box
-        cx, cy, cz = fallback_center
-        body_meshes[part_name] = apply_limb_box_uvs(make_box(aw, ah, ad, (cx, cy, cz)))
-        step = ah / max(1, len(names))
+        # --- Kein einziges Segment vorhanden --------------------------------
+        # Fruehere Fassung baute *einen* Klotz fuer die ganze Extremitaet -
+        # im Render sah das aus wie ein eckiger Quader ohne Knie und ohne
+        # Fuss (Bug-Report: "Beine sind einfach nur eckige Quader"). Jetzt
+        # entstehen drei Quader in R15-Proportionen, exakt auf der
+        # Gelenk-Kette: Ober-/Unterglied plus Hand bzw. Fuss (der Fuss steht
+        # vorne ueber, wie beim klassischen Roblox-Koerper).
+        root = root_att[0]
+        total = max(0.30, placeholder_len)
+        if kind == "leg":
+            fracs = (0.40, 0.42, 0.18)
+            lw = max(0.08, 0.48 * torso_w)
+            ld = max(0.08, 0.92 * torso_d)
+            lx = sign * max(0.20 * torso_w, 0.5 * lw * 0.96)
+        else:
+            fracs = (0.44, 0.42, 0.14)
+            lw = max(0.08, 0.34 * torso_w)
+            ld = max(0.08, 0.62 * torso_d)
+            lx = root[0] if abs(root[0]) > 1e-3 else sign * (0.5 * torso_w + 0.5 * lw)
+        y = root[1]
         for index, name in enumerate(names):
-            joint_pos[name] = (cx, cy + ah / 2.0 - index * step, cz)
+            h = total * fracs[index] if index < len(fracs) else 0.1
+            depth = ld * (1.28 if (kind == "leg" and index == 2) else 1.0)
+            z = root[2] - (0.18 * ld if (kind == "leg" and index == 2) else 0.0)
+            box = apply_limb_box_uvs(make_box(lw, h, depth, (0.0, 0.0, 0.0)))
+            origin = (lx, y - h / 2.0, z)
+            register_segment(name, box, {}, origin, IDENTITY_MAT3, True)
+            segment_driver[name] = name
+            joint_pos[name] = (lx, y, z)
             joint_frames[name] = IDENTITY_MAT3
+            y -= h
+        notes.append(
+            f"Extremitaet '{part_name}': keine Mesh-Segmente im Avatar - "
+            f"Ober-/Unterglied und {'Fuss' if kind == 'leg' else 'Hand'} aus "
+            "R15-Proportionen erzeugt (kein Klotz).")
+        named = [(n, placed_seg_mesh[n]) for n in names if n in placed_seg_mesh]
+        merged, spans = _merge_with_spans(named)
+        body_meshes[part_name] = merged
+        segment_spans[part_name] = spans
+        return
 
     t_lo, t_hi = torso_mesh.bbox()
     torso_w = max(1e-3, t_hi[0] - t_lo[0])
     torso_h = max(1e-3, t_hi[1] - t_lo[1])
+    torso_d = max(1e-3, t_hi[2] - t_lo[2])
+
+    # --- 2a) Schulter- und Hueftlinie an der sichtbaren Torso-Geometrie ------
+    # Viele Bundles tragen RigAttachments, die relativ zur tatsaechlich
+    # gerenderten Torso-Hoehe zu tief sitzen (Bug: "Schultern sind viel zu
+    # weit nach unten gerutscht"). Roblox legt die Schulter praktisch auf die
+    # Torso-Oberkante (Standard-R15: 4 % der Hoehe darunter), die Huefte auf
+    # die Unterkante. Marker, die deutlich daneben liegen, werden gezogen -
+    # alles innerhalb des Bandes bleibt unangetastet.
+    def _torso_band_joint(att_name: str, kind: str, sign: float) -> None:
+        att = world_atts.get(att_name)
+        if att is None:
+            return
+        x, y, z = att[0]
+        if kind == "shoulder":
+            limit = t_hi[1] - 0.25 * torso_h
+            if y < limit:
+                new_y = t_hi[1] - 0.04 * torso_h
+                notes.append(
+                    f"Gelenk '{att_name}': Schulter lag {_de(t_hi[1] - y)} Studs "
+                    f"unter der Torso-Oberkante (bei {_de(torso_h)} Studs "
+                    f"Torso-Hoehe) - auf die Schulterlinie gesetzt.")
+                y = new_y
+            # Nicht weiter innen als 40 % der halben Torso-Breite.
+            min_x = 0.40 * torso_w / 2.0
+            if abs(x) < min_x:
+                x = sign * min_x
+        else:  # hip
+            if y < t_lo[1] - 0.05 * torso_h or y > t_lo[1] + 0.25 * torso_h:
+                notes.append(
+                    f"Gelenk '{att_name}': Huefte lag ausserhalb der unteren "
+                    "Torso-Kante - an die Unterkante gesetzt.")
+                y = t_lo[1]
+        world_atts[att_name] = ((x, y, z), att[1])
+
+    for _side, _sign in (("Right", 1.0), ("Left", -1.0)):
+        _torso_band_joint(f"{_side}ShoulderRigAttachment", "shoulder", _sign)
+        _torso_band_joint(f"{_side}HipRigAttachment", "hip", _sign)
     for part_name, side, sign in (("rechts_arm", "Right", 1.0), ("links_arm", "Left", -1.0)):
         u_name, l_name, h_name = f"{side}UpperArm", f"{side}LowerArm", f"{side}Hand"
         shoulder_att = world_atts.get(
@@ -1240,10 +1319,10 @@ def assemble_r15_rig(
             shoulder_att,
             (-sign, 0.0, 0.0),
             R15_ARM_LENGTH_PER_TORSO_HEIGHT * R15_WRIST_FRACTION_OF_ARM * torso_h,
+            R15_ARM_LENGTH_PER_TORSO_HEIGHT * torso_h,
             "nur_verlaengern",
-            (1.0 * sw, 2.0 * sh, 1.0 * sd),
-            (sign * (torso_w / 2.0 + 0.5 * sw), shoulder_att[0][1] - sh,
-             shoulder_att[0][2]))
+            "arm",
+            sign)
 
     # 3) Beine (Hip -> Knee -> Ankle), gleiche Montage wie die Arme.
     for part_name, side, sign in (("rechts_bein", "Right", 1.0), ("links_bein", "Left", -1.0)):
@@ -1260,10 +1339,13 @@ def assemble_r15_rig(
              (f_name, f"{side}AnkleRigAttachment")],
             hip_att,
             None,
-            R15_LEG_LENGTH_PER_TORSO_HEIGHT * R15_ANKLE_FRACTION_OF_LEG * torso_h,
+            # Beine muessen den Boden erreichen: Platzhalter laufen von der
+            # Huefte bis zur Sohle (Huefthoehe = Beinlaenge).
+            R15_ANKLE_FRACTION_OF_LEG * torso_h,
+            R15_SOLE_FRACTION_OF_LEG * torso_h,
             "immer",
-            (1.0 * sw, 2.0 * sh, 1.0 * sd),
-            (sign * 0.5 * sw, hip_att[0][1] - sh, hip_att[0][2]))
+            "leg",
+            sign)
 
     # 4) Kopf (NeckRigAttachment) + dezenter Halskern
     neck_att = world_atts.get("NeckRigAttachment", ((0.0, torso_mesh.bbox()[1][1], 0.0), IDENTITY_MAT3))

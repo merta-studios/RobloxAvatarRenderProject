@@ -542,9 +542,11 @@ def test_kurzes_bein_wird_gleichmaessig_auf_kanonische_laenge_gebracht():
                  rig.joint_positions["LeftFoot"])
     right = _dist(rig.joint_positions["RightUpperLeg"],
                   rig.joint_positions["RightFoot"])
-    # Beide Beine sind gleich lang (kein Bein in der Luft) - das kurze wird
-    # auf die Laenge des kanonischen Beins gebracht.
-    assert right == pytest.approx(left, rel=0.05)
+    # Beide Beine sind gleich lang (kein Bein in der Luft) - beide landen auf
+    # der kanonischen Huefte-Fussgelenk-Laenge.
+    canonical = avatar_rig.R15_ANKLE_FRACTION_OF_LEG * 2.0  # Torso 1,6 + 0,4
+    assert right == pytest.approx(canonical, rel=0.02)
+    assert left == pytest.approx(canonical, rel=0.02)
     # Und zwar ohne Verzerrung: Hoehe/Breite des Oberschenkels bleibt wie
     # authored (0,8622/0,3142) - gestaucht wurde nichts.
     arm_like = rig.body_meshes["rechts_bein"]
@@ -575,3 +577,68 @@ def test_langer_arm_wird_nicht_gestaucht():
                  rig.joint_positions["LeftHand"])
     assert span > 1.75
     assert not any("Faktor" in n for n in rig.notes)
+
+
+# ---------------------------------------------------------------------------
+# 9) Schulterlinie und Platzhalter-Beine
+# ---------------------------------------------------------------------------
+
+def test_zu_tiefe_schulter_wird_auf_die_schulterlinie_gesetzt():
+    """Bug: "Schultern sind viel zu weit nach unten gerutscht". Manche Bundles
+    tragen ein LeftShoulderRigAttachment weit unterhalb der Torso-Oberkante -
+    dann haengen die Arme mitten am Bauch. Marker deutlich unter der
+    Schulterlinie werden auf die Torso-Oberkante gezogen."""
+    torso = _torso(with_shoulder=True)
+    # Schulter auf 40 % der Torso-Hoehe unter die Oberkante legen (1,6 hoch,
+    # Oberkante bei +0.8 -> Marker bei -0.1).
+    torso[1]["attachments"]["LeftShoulderRigAttachment"] = _att((-1.0, -0.1, 0.0))
+    torso[1]["attachments"]["RightShoulderRigAttachment"] = _att((1.0, -0.1, 0.0))
+    rig = _assemble({
+        "torso": torso,
+        "links_arm": [
+            _seg("LeftUpperArm", (1.0, 1.1687, 1.0), {
+                "LeftShoulderRigAttachment": _att((0.5, 0.394327, 0.0)),
+                "LeftElbowRigAttachment": _att((0.000479, -0.334056, 0.0)),
+            }),
+            _seg("LeftLowerArm", (1.0, 1.0519, 1.0), {
+                "LeftElbowRigAttachment": _att((0.000479, 0.258688, 0.0)),
+                "LeftWristRigAttachment": _att((0.000479, -0.268097, 0.0)),
+            }),
+        ],
+    })
+    t_lo, t_hi = rig.body_meshes["torso"].bbox()
+    shoulder = rig.joint_positions["LeftUpperArm"]
+    # Schulter liegt jetzt im oberen Torso-Band (max. 25 % unter der Oberkante).
+    assert shoulder[1] > t_hi[1] - 0.25 * (t_hi[1] - t_lo[1])
+    assert shoulder[1] == pytest.approx(t_hi[1] - 0.04 * (t_hi[1] - t_lo[1]),
+                                        abs=1e-3)
+    assert any("Schulterlinie" in n for n in rig.notes)
+    # Und der Arm haengt daran: Oberkante des Oberarms endet an der Schulter.
+    arm_lo, arm_hi = rig.body_meshes["links_arm"].bbox()
+    assert arm_hi[1] > t_hi[1] - 0.15 * (t_hi[1] - t_lo[1])
+
+
+def test_platzhalter_beine_sind_kein_einzelner_klotz():
+    """Ohne Bein-Assets im Avatar (z. B. SunsetSiya) entstanden vorher zwei
+    riesige Quader - ein Klotz pro Bein, so hoch wie der Torso. Jetzt gibt es
+    Ober-/Unterschenkel und einen Fuss, und der Fuss steht auf dem Boden."""
+    rig = _assemble({"torso": _torso()})
+    bein = rig.body_meshes["links_bein"]
+    spans = rig.segment_spans["links_bein"]
+    # Drei Segmente: Ober-/Unterschenkel + Fuss (Knie beugbar).
+    assert [s for s, _a, _b in spans] == ["LeftUpperLeg", "LeftLowerLeg", "LeftFoot"]
+    lo, hi = bein.bbox()
+    assert lo[1] == pytest.approx(0.0, abs=1e-6)
+    t_lo, t_hi = rig.body_meshes["torso"].bbox()
+    torso_h = t_hi[1] - t_lo[1]
+    # Beinlaenge (Huefte bis Sohle) = Torso-Hoehe: kein Riesenklotz.
+    assert hi[1] - lo[1] == pytest.approx(torso_h, rel=0.05)
+    # Breite: beide Beine zusammen etwa so breit wie der Torso.
+    assert hi[0] - lo[0] == pytest.approx(0.48 * (t_hi[0] - t_lo[0]), rel=0.05)
+    # Der Fuss steht vorne ueber (kein flacher Abschluss).
+    s_f, e_f = {s: (a, b) for s, a, b in spans}["LeftFoot"]
+    z_foot = [bein.positions[i][2] for i in range(s_f, e_f)]
+    s_u, e_u = {s: (a, b) for s, a, b in spans}["LeftUpperLeg"]
+    z_upper = [bein.positions[i][2] for i in range(s_u, e_u)]
+    assert min(z_foot) < min(z_upper) - 0.02
+    assert any("kein Klotz" in n for n in rig.notes)

@@ -624,6 +624,10 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     textures: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
     ignored: List[Dict[str, Any]] = []
+    # Vollstaendige Liste aller getragenen Assets (Typ + Rolle). Erklaert im
+    # Manifest, warum z. B. Beine als Platzhalter entstehen: das Avatar-
+    # Inventar enthaelt dann schlicht keine Bein-Assets.
+    asset_log: List[Dict[str, Any]] = []
     avatar_raw: Dict[str, Any] = {}
     mesh_parts: List[Dict[str, Any]] = []
     texture_bytes_by_rel: Dict[str, bytes] = {}
@@ -906,6 +910,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 log(f"      - {aid} {type_name}: übersprungen (Ausrüstung)")
                 continue
 
+            asset_log.append({"id": aid, "type": type_name,
+                              "type_id": type_id, "name": label})
             dl = api.download_asset(client, aid)
             if dl.data is None:
                 skipped.append({
@@ -1587,6 +1593,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         "textures": textures,
         "skipped": skipped,
         "ignored": ignored,
+        "assets": asset_log,
         "layered_ausgelassen": layered_ausgelassen,
         "warnings": warnings,
         # R15-Segment-Spannen (Vertex-Indizes je Koerperteil in OBJ-
