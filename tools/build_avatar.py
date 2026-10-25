@@ -1311,7 +1311,32 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         head_center = pose_ctx.transform_point(head_center, "kopf")
     head_top_world = round(head_center[1] + head_radius, 3)
 
+    posed_joints: Dict[str, Any] = {}
+    if pose_ctx is not None and pose_ctx.active:
+        try:
+            for bone, joint_name in avatar_pose.BONE_JOINT.items():
+                pivot = pose_ctx.joints.get(joint_name)
+                if pivot is None:
+                    continue
+                moved = pose_ctx.transform_point(pivot, bone)
+                posed_joints[bone] = [round(float(v), 3) for v in moved]
+        except Exception:  # pragma: no cover - Diagnose darf nie scheitern
+            posed_joints = {}
+
     body_parts_from_mesh = 0
+    # Endlage jedes Koerperteils nach der Pose - landet im Manifest. Damit
+    # laesst sich pruefen, wo ein Teil tatsaechlich sitzt (statt zu raten).
+    posed_parts: Dict[str, Dict[str, Any]] = {}
+
+    def _record_pose_bbox(name: str, mesh: Optional[roblox_mesh.MeshData]) -> None:
+        if mesh is None or mesh.is_empty:
+            return
+        lo, hi = mesh.bbox()
+        posed_parts[str(name)] = {
+            "min": [round(float(v), 3) for v in lo],
+            "max": [round(float(v), 3) for v in hi],
+        }
+
     for part in body_parts:
         if part.name == "kopf":
             if headless["active"]:
@@ -1328,6 +1353,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                     placed = placed.transform(1.0, (-c[0], metrics.head_center_y - c[1], -c[2]))
                     placed = sanity_check(placed, target, "Kopf", warnings)
                 placed = apply_body_pose(pose_ctx, "kopf", placed)
+                _record_pose_bbox("kopf", placed)
                 fname = "kopf_mesh.obj"
                 placed.write_obj(os.path.join(parts_dir, fname))
                 head_texture = (head_mesh.get("texture_file")
@@ -1365,6 +1391,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 placed = sanity_check(placed, max(hi[i] - lo[i] for i in range(3)),
                                       part.name, warnings)
             placed = apply_body_pose(pose_ctx, part.name, placed)
+            _record_pose_bbox(part.name, placed)
             fname = f"{part.name}.obj"
             placed.write_obj(os.path.join(parts_dir, fname))
             body_texture = (replacement.get("texture_file")
@@ -1387,6 +1414,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             continue
 
         placed = apply_body_pose(pose_ctx, part.name, part.mesh)
+        _record_pose_bbox(part.name, placed)
         fname = f"{part.name}.obj"
         placed.write_obj(os.path.join(parts_dir, fname))
         parts.append({
@@ -1655,6 +1683,11 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             # Proportionen im Manifest / in der Step Summary.
             "parts": {p.name: [round(v, 3) for v in p.mesh.size()]
                       for p in body_parts},
+            # Lage und Groesse jedes Koerperteils NACH der Pose (Weltmaße).
+            # So ist im Manifest nachpruefbar, wo Arm/Bein wirklich sitzen.
+            "posed_parts": posed_parts,
+            # Gelenkpunkte nach der Pose (Bind-Gelenk durch die Pose gefuehrt).
+            "posed_joints": posed_joints,
         },
         "bbox": {"min": [round(v, 3) for v in bounds_lo],
                  "max": [round(v, 3) for v in bounds_hi]},
