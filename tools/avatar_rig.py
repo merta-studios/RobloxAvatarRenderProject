@@ -922,6 +922,29 @@ def has_rig_attachments(segments_by_part: Dict[str, List[Dict[str, Any]]], head_
     return False
 
 
+def _classic_segment_matches(raw: Optional[Dict[str, Any]],
+                             reference: Any) -> bool:
+    """Ist das vorhandene Segment-Mesh genau dieses Standard-Teil?
+
+    Nur dann darf es durch die Referenzgeometrie ersetzt werden. Ein
+    ausgeruestetes Bundle (z. B. ein Korblox-Arm) hat andere Maße und bleibt
+    unangetastet. Verglichen wird die Roh-Mesh-Groesse (Mannequin-Einheiten)
+    mit der Groesse des Teils im offiziellen Mannequin.
+    """
+    if not raw:
+        return True
+    mesh = raw.get("mesh")
+    if mesh is None or getattr(mesh, "is_empty", True):
+        return True
+    lo, hi = mesh.bbox()
+    size = (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])
+    for i in range(3):
+        target = max(1e-6, float(reference[i]))
+        if abs(size[i] - float(reference[i])) > 0.06 * target:
+            return False
+    return True
+
+
 def _standard_segment_mesh(raw: Optional[MeshData], width: float, height: float,
                            depth: float, slice_name: str) -> Optional[MeshData]:
     """Skaliert ein Standard-Avatar-Mesh auf die R15-Masse eines Segments.
@@ -956,6 +979,7 @@ def assemble_r15_rig(
     scales: Dict[str, Any],
     headless: bool = False,
     standard_meshes: Optional[Dict[str, MeshData]] = None,
+    classic_body: Any = None,
 ) -> RiggedAvatar:
     """Setzt einen kompletten R15-Avatar ueber exakte `*RigAttachment`-Gelenke zusammen.
 
@@ -963,6 +987,14 @@ def assemble_r15_rig(
     R15-Block-Meshes des Standard-Avatars. Sie ersetzen bei nicht
     ausgeruesteten Koerperteilen die Quader-Notloesung: gleiche R15-Masse und
     Gelenk-Kette, aber die gerundete Silhouette des Standard-Koerpers.
+
+    ``classic_body`` (``mannequin.ClassicBody``) ist Roblox' offizieller
+    klassischer Standard-Koerper aus ``ClassicMannequin.fbx``. Damit werden
+    Arme und Beine exakt so gesetzt, wie Roblox selbst sie setzt: echte
+    Teil-Meshes, Gelenke auf der Oberkante jedes Glieds, Lage relativ zum
+    echten Torso des Avatars. Das ist die einzige Quelle fuer Schulter-,
+    Ellbogen- und Knieposition - es gibt keine Prozentkonstanten mehr, die
+    nachjustiert werden muessten.
     """
     standard_meshes = standard_meshes or {}
     sw = _clamp(scales.get("width"), 0.55, 1.60)
@@ -1229,6 +1261,70 @@ def assemble_r15_rig(
         damit die Silhouette unangetastet bleibt.
         """
         names = [name for name, _att in chain]
+
+        # --- 1) Offizieller Standard-Koerper (Roblox-Mannequin) -------------
+        # Liegt die Referenzgeometrie vor, wird die Extremitaet genau wie im
+        # Mannequin gesetzt: identische Teil-Meshes, Gelenke auf der Oberkante
+        # jedes Glieds, Lage relativ zum echten Torso des Avatars. Damit ist
+        # die Schulter dort, wo Roblox sie hat - ohne Schulterband, ohne
+        # Laengen-Normierung, ohne Verschiebung.
+        classic_placed: Optional[List[Any]] = None
+        if classic_body is not None:
+            try:
+                import mannequin as _mannequin
+                _cand = _mannequin.place_part(classic_body, part_name,
+                                              torso_mesh.bbox())
+            except Exception:  # pragma: no cover - Referenzdaten fehlen
+                _cand = None
+            _sizes = getattr(classic_body, "sizes", {}) or {}
+            if _cand and len(_cand) == len(names) and all(
+                _cand[i].name == names[i] for i in range(len(names))
+            ) and all(
+                seg.name not in seg_lookup
+                or _classic_segment_matches(raw_parts.get(seg.name),
+                                            _sizes.get(seg.name, seg.size))
+                for seg in _cand
+            ):
+                classic_placed = _cand
+        if classic_placed is not None:
+            first_joint = None
+            for index, seg in enumerate(classic_placed):
+                _mesh, _atts, _tr = seg_lookup.get(seg.name, (seg.mesh, {}, False))
+                _atts = dict(_atts or {})
+                register_segment(seg.name, seg.mesh, _atts, seg.center,
+                                 IDENTITY_MAT3, not _tr)
+                # Gelenk = echtes RigAttachment des Teils (Roblox-Drehpunkt);
+                # fehlt es, die Oberkante in der Teilmitte.
+                _att_name = chain[index][1] if index < len(chain) else ""
+                _entry = _atts.get(_att_name)
+                if _entry is not None:
+                    joint = (seg.center[0] + _entry[0][0],
+                             seg.center[1] + _entry[0][1],
+                             seg.center[2] + _entry[0][2])
+                else:
+                    joint = seg.joint
+                joint_pos[seg.name] = joint
+                joint_frames[seg.name] = (_entry[1] if _entry is not None
+                                          else IDENTITY_MAT3)
+                segment_driver[seg.name] = seg.name
+                if first_joint is None:
+                    first_joint = joint
+            notes.append(
+                f"Extremitaet '{part_name}': offizieller Standard-Koerper "
+                "gesetzt (Roblox-ClassicMannequin - echte Teil-Meshes, "
+                "Gelenke auf den RigAttachments des Teils).")
+            _named = [(seg.name, placed_seg_mesh[seg.name])
+                      for seg in classic_placed if seg.name in placed_seg_mesh]
+            _merged, _spans = _merge_with_spans(_named)
+            body_meshes[part_name] = _merged
+            segment_spans[part_name] = _spans
+            _last = classic_placed[-1]
+            _top = first_joint or _last.joint
+            _end = (_top[0], _last.center[1] - _last.size[1] / 2.0, _top[2])
+            chain_spans[part_name] = {"span": _dist3(_top, _end),
+                                      "rescale": None, "factor": 1.0}
+            return 0.0, (first_joint or classic_placed[0].joint)[1]
+
         if any(name in seg_lookup for name in names):
             root = root_att[0]
             # --- Durchgang 1: starre Montage, Platzierungen mitschreiben -----
