@@ -1,0 +1,79 @@
+name: Referenz-Geometrie von Roblox laden
+
+# Laedt die R15-Block-Meshes des Standard-Avatars und Roblox' eigenen
+# 3D-Avatar-Render (OBJ) als Ground Truth in den Branch. Nur manuell bzw. bei
+# Aenderungen am Fetch-Skript - kostet keine Render-Minuten.
+on:
+  push:
+    paths:
+      - "tools/fetch_reference.py"
+      - ".github/workflows/reference.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: User-ID ermitteln
+        id: username
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import re
+          text = open("Configs.toml", encoding="utf-8").read()
+          m = re.search(r'^\s*username\s*=\s*"([^"]+)"', text, re.M)
+          print("username=" + (m.group(1) if m else "Builderman"))
+          PY
+
+      - name: Referenz laden
+        env:
+          USERNAME: ${{ steps.username.outputs.username }}
+        run: |
+          set -euo pipefail
+          python - "$USERNAME" <<'PY'
+          import sys, json, urllib.request
+          name = sys.argv[1]
+          try:
+              with urllib.request.urlopen(
+                      "https://users.roblox.com/v1/usernames/users", timeout=30) as _:
+                  pass
+          except Exception:
+              pass
+          payload = json.dumps({"usernames": [name], "excludeBannedUsers": True}).encode()
+          req = urllib.request.Request(
+              "https://users.roblox.com/v1/usernames/users", data=payload,
+              headers={"Content-Type": "application/json"})
+          try:
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  data = json.loads(resp.read())
+              uid = data["data"][0]["id"]
+          except Exception as exc:
+              print(f"UserId nicht ermittelbar ({exc}) - nur Meshes")
+              uid = 0
+          open("/tmp/user_id", "w").write(str(uid))
+          PY
+          UID="$(cat /tmp/user_id)"
+          python tools/fetch_reference.py --user-id "$UID" --out reference
+
+      - name: Bericht committen
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Zu grosse OBJ-Dateien nicht ins Repo (Snapshot-Limit).
+          find reference -type f -size +8M -delete
+          git add reference tools/fetch_reference.py
+          if git diff --cached --quiet; then
+            echo "Keine Aenderungen."
+            exit 0
+          fi
+          git commit -m "Referenz-Geometrie von Roblox (Standard-Meshes + 3D-Avatar) [skip ci]"
+          git push
