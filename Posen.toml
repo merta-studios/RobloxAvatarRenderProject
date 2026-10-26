@@ -639,6 +639,19 @@ ellbogen_beugen_grad = 10
 #  Für eine saubere Silhouette wird nur der Oberkörper eng gerahmt. Die
 #  Pipeline lädt bei dieser Pose nötigenfalls das offizielle Woman-Rig für
 #  Torso und Arme nach; die hand_form-Deformation biegt Daumen/Finger weich.
+#
+#  Die Winkel sind per FK-Rechnung auf die Proportionen des Woman-Rigs
+#  abgestimmt (schmale Schultern ±0,61, kurzer Oberarm, in der Bind-Pose
+#  nach außen/vorne geneigte Armkette) und über mehrere Avatar-Skalierungen
+#  geprüft: Ellbogen tief-außen an den Seiten, Unterarme diagonal nach
+#  oben-innen, Handgelenke knapp unter dem Kinn, Fingerspitzen treffen sich
+#  unten an der Herzspitze, Handrücken zur Kamera. Die früheren Werte
+#  (Oberarm 60/15/±30, Unterarm 60/±60 plus -0,18 Studs einwärts) waren am
+#  breiten Blocky-Standard-Rig abgestimmt und ließen die Hände auf dem
+#  Woman-Rig komplett auf die Gegenseite kreuzen (X-Arme). Achtung:
+#  `laengs_drehung_grad` wird von der Engine nicht gespiegelt – links steht
+#  deshalb das negierte Vorzeichen; `vom_koerper_weg_grad` und
+#  `handgelenk_nach_aussen_grad` spiegelt die Engine selbst (gleicher Wert).
 # -----------------------------------------------------------------------------
 [hearthands]
 beschreibung = "Beide Hände vor der Brust formen ein Herz, Ellbogen nach außen"
@@ -655,31 +668,29 @@ nach_vorne_beugen_grad = -2
 nicken_grad = 4
 
 [hearthands.linker_oberarm]
-vor_hoch_schwingen_grad = 60
-vom_koerper_weg_grad = 15
-laengs_drehung_grad = -30
+vor_hoch_schwingen_grad = 20
+vom_koerper_weg_grad = 14
+laengs_drehung_grad = -47
 
 [hearthands.linker_unterarm]
-ellbogen_beugen_grad = 60
-laengs_drehung_grad = -60
-seitlich_nach_aussen_studs = -0.18
+ellbogen_beugen_grad = 90
+laengs_drehung_grad = -26
 
 [hearthands.linke_hand]
-handgelenk_vor_beugen_grad = 12
+handgelenk_vor_beugen_grad = -75
 handgelenk_nach_aussen_grad = -12
-laengs_drehung_grad = 14
+laengs_drehung_grad = 3
 
 [hearthands.rechter_oberarm]
-vor_hoch_schwingen_grad = 60
-vom_koerper_weg_grad = 15
-laengs_drehung_grad = 30
+vor_hoch_schwingen_grad = 20
+vom_koerper_weg_grad = 14
+laengs_drehung_grad = 47
 
 [hearthands.rechter_unterarm]
-ellbogen_beugen_grad = 60
-laengs_drehung_grad = 60
-seitlich_nach_aussen_studs = -0.18
+ellbogen_beugen_grad = 90
+laengs_drehung_grad = 26
 
 [hearthands.rechte_hand]
-handgelenk_vor_beugen_grad = 12
+handgelenk_vor_beugen_grad = -75
 handgelenk_nach_aussen_grad = -12
-laengs_drehung_grad = -14
+laengs_drehung_grad = -3

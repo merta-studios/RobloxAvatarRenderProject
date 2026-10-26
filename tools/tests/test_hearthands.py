@@ -35,7 +35,16 @@ def _attachment(name, pos, parent):
 
 
 def _woman_asset(type_id):
-    """Woman-R15-Asset mit passenden Segmentnamen und RigAttachments."""
+    """Woman-R15-Asset mit den *echten* Woman-Proportionen.
+
+    Segmentgrößen und RigAttachment-Positionen stammen aus einem echten
+    Render-Lauf (Diagnose "Segment-Rohdaten"): schmaler Torso (Schulter
+    ±0,61 statt ±1,0 beim Blocky-Rig), kurzer Oberarm und eine in der
+    Bind-Pose nach außen/vorne geneigte Armkette. Genau an diesen
+    Proportionen ist die hearthands-Pose abgestimmt – mit den früheren,
+    Blocky-ähnlichen Fake-Werten (Schulter ±1,0, senkrechte Arme) wäre der
+    X-Arme-Fehler im Test unsichtbar geblieben.
+    """
     instances = []
 
     def segment(name, position, size, atts):
@@ -49,32 +58,31 @@ def _woman_asset(type_id):
             instances.append(_attachment(attachment_name, attachment_pos, parent))
 
     if type_id == 27:
-        segment("LowerTorso", (0.0, 1.5, 0.0), (2.0, 1.0, 1.0), {
-            "RootRigAttachment": (0.0, -0.5, 0.0),
-            "WaistRigAttachment": (0.0, 0.5, 0.0),
-            "LeftHipRigAttachment": (-0.5, -0.4, 0.0),
-            "RightHipRigAttachment": (0.5, -0.4, 0.0),
+        segment("LowerTorso", (0.0, 0.0, 0.0), (1.33, 0.41, 0.72), {
+            "RootRigAttachment": (0.0, -0.46, 0.02),
+            "WaistRigAttachment": (0.0, 0.10, -0.05),
+            "LeftHipRigAttachment": (-0.35, -0.21, 0.02),
+            "RightHipRigAttachment": (0.35, -0.21, 0.02),
         })
-        segment("UpperTorso", (0.0, 2.5, 0.0), (2.0, 1.0, 1.0), {
-            "WaistRigAttachment": (0.0, -0.5, 0.0),
-            "NeckRigAttachment": (0.0, 0.5, 0.0),
-            "LeftShoulderRigAttachment": (-1.0, 0.25, 0.0),
-            "RightShoulderRigAttachment": (1.0, 0.25, 0.0),
+        segment("UpperTorso", (0.0, 0.79, -0.05), (1.30, 1.70, 0.84), {
+            "WaistRigAttachment": (0.0, -0.69, 0.0),
+            "NeckRigAttachment": (0.0, 0.75, 0.08),
+            "LeftShoulderRigAttachment": (-0.61, 0.33, 0.08),
+            "RightShoulderRigAttachment": (0.61, 0.33, 0.08),
         })
     else:
         side = "Right" if type_id == 28 else "Left"
         sign = 1.0 if side == "Right" else -1.0
-        x = sign * 1.25
-        segment(f"{side}UpperArm", (x, 2.0, 0.0), (0.5, 1.0, 0.5), {
-            f"{side}ShoulderRigAttachment": (-sign * 0.25, 0.5, 0.0),
-            f"{side}ElbowRigAttachment": (0.0, -0.5, 0.0),
+        segment(f"{side}UpperArm", (sign * 0.85, 0.79, 0.03), (0.75, 0.89, 0.58), {
+            f"{side}ShoulderRigAttachment": (-sign * 0.24, 0.33, 0.0),
+            f"{side}ElbowRigAttachment": (sign * 0.16, -0.23, 0.07),
         })
-        segment(f"{side}LowerArm", (x, 1.0, 0.0), (0.5, 1.0, 0.5), {
-            f"{side}ElbowRigAttachment": (0.0, 0.5, 0.0),
-            f"{side}WristRigAttachment": (0.0, -0.5, 0.0),
+        segment(f"{side}LowerArm", (sign * 1.20, 0.18, -0.10), (0.66, 0.90, 0.59), {
+            f"{side}ElbowRigAttachment": (-sign * 0.19, 0.36, 0.07),
+            f"{side}WristRigAttachment": (sign * 0.19, -0.40, -0.20),
         })
-        segment(f"{side}Hand", (x, 0.5, 0.0), (0.5, 0.3, 0.5), {
-            f"{side}WristRigAttachment": (0.0, 0.15, 0.0),
+        segment(f"{side}Hand", (sign * 1.48, -0.37, -0.27), (0.55, 0.59, 0.53), {
+            f"{side}WristRigAttachment": (-sign * 0.09, 0.17, 0.10),
             f"{side}GripAttachment": (0.0, -0.1, -0.1),
         })
     return make_rbxm(instances)
@@ -150,7 +158,16 @@ def test_pose_context_wendet_herzform_nur_auf_handsegmente_an():
     assert posed.positions[3][0] < mesh.positions[3][0]
 
 
-def test_hearthands_bringt_beide_haende_zur_brustmitte():
+def test_hearthands_auf_standard_rig_nur_fallback_naeherung():
+    """Blocky-Standard-Rig = nur Fallback (hearthands erzwingt das Woman-Rig).
+
+    Die Pose ist auf die Woman-Proportionen abgestimmt (schmale Schultern);
+    auf dem breiten Blocky-Rig (Schulter ±1,0, lange Oberarme) treffen sich
+    die Hände deshalb nicht exakt, müssen aber deutlich zur Brustmitte
+    wandern, vor dem Torso auf Brusthöhe landen und dürfen auf keinen Fall
+    auf die Gegenseite kreuzen (der alte X-Arme-Fehler). Das exakte
+    Aufeinandertreffen sichert der Build-Test mit dem Woman-Fixture ab.
+    """
     rig = avatar_rig.assemble_r15_rig(
         {}, None, dict(roblox_api.DEFAULT_BODY_COLORS),
         dict(roblox_api.DEFAULT_SCALES),
@@ -162,22 +179,33 @@ def test_hearthands_bringt_beide_haende_zur_brustmitte():
         rig=rig, hand_form=pose["hand_form"])
     assert context.active is True
 
-    hand_bounds = {}
-    for side, part_name in (("Right", "rechts_arm"), ("Left", "links_arm")):
-        mesh = context.apply_body(part_name, rig.body_meshes[part_name])
+    def segment_center(mesh, part_name, segment_name):
         _, start, end = next(span for span in rig.segment_spans[part_name]
-                             if span[0] == f"{side}Hand")
+                             if span[0] == segment_name)
         vertices = mesh.positions[start:end]
-        center_x = sum(vertex[0] for vertex in vertices) / len(vertices)
-        center_y = sum(vertex[1] for vertex in vertices) / len(vertices)
-        assert abs(center_x) < 0.3
-        assert 3.0 < center_y < 3.7
-        hand_bounds[side] = (min(vertex[0] for vertex in vertices),
-                             max(vertex[0] for vertex in vertices))
+        return tuple(sum(vertex[i] for vertex in vertices) / len(vertices)
+                     for i in range(3))
 
-    # Die beiden Hand-Meshes treffen sich in der Brustmitte statt seitlich zu
-    # bleiben wie in der neutralen Stand-Pose.
-    assert hand_bounds["Right"][0] <= hand_bounds["Left"][1]
+    hand_centers = {}
+    for side, part_name in (("Right", "rechts_arm"), ("Left", "links_arm")):
+        bind_center = segment_center(rig.body_meshes[part_name], part_name,
+                                     f"{side}Hand")
+        mesh = context.apply_body(part_name, rig.body_meshes[part_name])
+        center = segment_center(mesh, part_name, f"{side}Hand")
+        lower_center = segment_center(mesh, part_name, f"{side}LowerArm")
+        hand_centers[side] = center
+
+        # Deutlich zur Mitte gewandert, aber auf der eigenen Seite geblieben.
+        assert abs(center[0]) < abs(bind_center[0]) - 0.8
+        assert (center[0] > 0.15) if side == "Right" else (center[0] < -0.15)
+        # Brusthöhe und klar vor dem Torso (Torso-Front bei z=-0,5).
+        assert 2.85 < center[1] < 3.45
+        assert center[2] < -0.55
+        # Unterarm/Ellbogen bleibt außerhalb der Hand (kein X-Kreuzen).
+        assert abs(lower_center[0]) > abs(center[0]) + 0.25
+
+    # Rechter Hand-Schwerpunkt bleibt rechts vom linken.
+    assert hand_centers["Right"][0] > hand_centers["Left"][0]
 
 
 def test_hearthands_build_laedt_und_verwendet_frauenteile(monkeypatch, tmp_path):
@@ -238,15 +266,58 @@ def test_hearthands_build_laedt_und_verwendet_frauenteile(monkeypatch, tmp_path)
     assert body_parts["torso"]["asset_id"] == WOMAN_IDS[27]
     assert body_parts["rechts_arm"]["asset_id"] == WOMAN_IDS[28]
     assert body_parts["links_arm"]["asset_id"] == WOMAN_IDS[29]
-    for side, part_name in (("Right", "rechts_arm"), ("Left", "links_arm")):
-        arm_obj = tmp_path / body_parts[part_name]["obj"]
-        vertices = [tuple(float(value) for value in line.split()[1:4])
-                    for line in arm_obj.read_text(encoding="utf-8").splitlines()
-                    if line.startswith("v ")]
+    def load_vertices(part_name):
+        part_obj = tmp_path / body_parts[part_name]["obj"]
+        return [tuple(float(value) for value in line.split()[1:4])
+                for line in part_obj.read_text(encoding="utf-8").splitlines()
+                if line.startswith("v ")]
+
+    def segment_vertices(part_name, segment_name):
+        vertices = load_vertices(part_name)
         _, start, end = next(span for span in manifest["segment_spans"][part_name]
-                             if span[0] == f"{side}Hand")
-        hand_center_x = sum(vertex[0] for vertex in vertices[start:end]) / (end - start)
-        assert abs(hand_center_x) < 0.5
+                             if span[0] == segment_name)
+        return vertices[start:end]
+
+    def center_of(vertices):
+        return tuple(sum(vertex[i] for vertex in vertices) / len(vertices)
+                     for i in range(3))
+
+    torso_vertices = load_vertices("torso")
+    torso_lo = tuple(min(v[i] for v in torso_vertices) for i in range(3))
+    torso_hi = tuple(max(v[i] for v in torso_vertices) for i in range(3))
+
+    hand_bounds = {}
+    for side, part_name in (("Right", "rechts_arm"), ("Left", "links_arm")):
+        hand_vertices = segment_vertices(part_name, f"{side}Hand")
+        hand_center = center_of(hand_vertices)
+        lower_center = center_of(segment_vertices(part_name, f"{side}LowerArm"))
+        x_lo = min(v[0] for v in hand_vertices)
+        x_hi = max(v[0] for v in hand_vertices)
+        y_lo = min(v[1] for v in hand_vertices)
+        hand_bounds[side] = (x_lo, x_hi)
+        sign = 1.0 if side == "Right" else -1.0
+
+        # Hand-Schwerpunkt an der Brustmitte auf der EIGENEN Seite. Mit den
+        # alten Winkeln landete er auf der Gegenseite (rechter Arm: x=-0,33,
+        # Fingerspitzen bis x=-0,72) - das X-Arme-Bild im echten Render.
+        assert -0.05 <= sign * hand_center[0] <= 0.35
+        # Auch die innerste Hand-Ecke (Fingerspitze) bleibt nahe der Mitte.
+        inner_edge = x_lo if side == "Right" else x_hi
+        assert sign * inner_edge >= -0.35
+        # Obere Brust (nicht am Hals, nicht am Bauch) und klar vor dem Torso.
+        assert torso_lo[1] + 0.5 * (torso_hi[1] - torso_lo[1]) < hand_center[1] \
+            < torso_hi[1] - 0.3
+        assert hand_center[2] < torso_lo[2] - 0.25
+        # Fingerspitzen zeigen nach unten zur Herzspitze (Hand-Unterkante
+        # deutlich unter dem Hand-Schwerpunkt), Ellbogen/Unterarm außen.
+        assert y_lo < hand_center[1] - 0.25
+        assert abs(lower_center[0]) > abs(hand_center[0]) + 0.3
+
+    # Die Hände berühren sich an der Brustmitte, ohne dass eine Hand
+    # mehrheitlich auf der Gegenseite endet.
+    assert hand_bounds["Right"][0] <= 0.10
+    assert hand_bounds["Left"][1] >= -0.10
+    assert hand_bounds["Right"][0] <= hand_bounds["Left"][1] + 0.05
     overrides = {item["id"] for item in manifest["assets"]
                  if item.get("pose_override") == "hearthands:woman_rig"}
     assert overrides == set(WOMAN_IDS.values())
