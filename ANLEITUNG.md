@@ -278,19 +278,23 @@ Besonderheiten:
   skaliert beim Avatar-Aufbau kein einzelnes Segment: jedes hängt über
   `C0`/`C1` an seinem Elternteil (`Kind = Eltern · C0 · C1⁻¹`). Genau so
   montiert die Pipeline – Drehpunkte und Nähte stimmen damit.
-* **Standard-Avatar (R15-Blockkörper):** Trägt der Avatar ein Körperteil gar
+* **Standard-Avatar (R15-Standard-Blocky):** Trägt der Avatar ein Körperteil gar
   nicht (z. B. keine Beine), setzt Roblox dafür den **R15-Standard-Avatar**
-  ein – den Blockkörper aus quadratischen 1×1-Studs-Teilen, nicht die übrigen
-  Teile des getragenen Pakets und nicht den klassischen Körper. Die Pipeline
-  liest dafür Roblox' offizielle `BlockyCharacter.fbx`:
+  ein – den Blockkörper, nicht die übrigen Teile des getragenen Pakets und
+  nicht den klassischen Körper. Die Pipeline benutzt dafür **exakt** Roblox'
+  offizielle Referenz `BlockyCharacter.fbx` (Doku „Standard R15 rigs →
+  Blocky", das Template mit „a standard R15 rig and attachments"):
   `tools/probe_reference.py` lädt sie nach `reference/official/`,
-  `tools/build_mannequin.py` schreibt daraus `reference/standard_r15.json`
-  (15 Blockteile: Mesh und Maße), `tools/mannequin.py` lädt das JSON zur
-  Renderzeit. Dazu kommen die im Bau von Roblox heruntergeladenen
-  R15-Block-Meshes desselben Körpers. Eingebaut werden Ober-/Unterglied plus
-  Hand bzw. Fuß in kanonischen R15-Anteilen, mit quadratischem Querschnitt
-  (halbe Torso-Breite) und den Kleidungs-UVs der Roblox-Vorlage (Shirt/Hose).
-  Fehlt die Referenzdatei, entstehen Quader derselben Maße. Der klassische
+  `tools/standard_r15.py` (bzw. `tools/build_mannequin.py`) schreibt daraus
+  `reference/standard_r15_rig.json` – die 15 Blockteile mit ihren
+  **Gelenken** (Skelett-Knochen → `*RigAttachment`-Paare) und ihren
+  **Accessoire-Ankern** (die `*_Att`-Marker: `Hat_Att`, `FaceFront_Att`,
+  `Neck_Att`, …). Eingebaut werden die Ersatzteile genauso wie ausgerüstete
+  (`Kind = Eltern · C0 · C1⁻¹`): Schulter, Ellbogen und Knie sitzen exakt auf
+  den Roblox-Pivots, Brillen/Hüte verschweissen exakt an
+  `FaceFrontAttachment`/`HatAttachment`, und die Kleidungs-UVs werden wie
+  gewohnt auf die Roblox-Vorlagen projiziert (Shirt/Hose). Fehlt die
+  Referenzdatei, entstehen Quader derselben Maße. Der klassische
   Körper (`ClassicMannequin.fbx` → `reference/classic_body.json`) bleibt als
   Maß-Abgleich erhalten – der Körper dieses Avatars ist klassisch, seine
   Teile stimmen mit dieser Datei überein.

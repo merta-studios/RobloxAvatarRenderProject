@@ -17,7 +17,7 @@ Dieses Modul bildet den offiziellen Roblox-R15-Humanoid-Kompositor nach:
 from __future__ import annotations
 
 import io
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 try:
     import numpy as np
@@ -418,6 +418,14 @@ _LIMB_RECTS = {
     "-X": (130, 194),
 }
 
+#: UV-Rechtecke (in Pixeln der 388x272-Torso-Vorlage) je Flaeche.
+_TORSO_RECTS = {
+    "+Z": (194, 322),   # Rueckseite
+    "-Z": (2, 130),     # Vorderseite
+    "+X": (322, 386),
+    "-X": (130, 194),
+}
+
 
 #: Rand, der beim Projizieren ausgespart wird. Die Gliedmassen-Vorlage hat
 #: zwischen den Abschnitten weisse Trennzeilen; ohne Rand ziehen die
@@ -443,20 +451,37 @@ def _limb_slice_rows(part_slice: str) -> Tuple[float, float, float, float]:
     return w, h, y0, y1
 
 
-def apply_limb_uvs_projected(mesh: MeshData, part_slice: str = "full") -> MeshData:
-    """Projiziert die R15-Gliedmassen-UVs auf ein *beliebiges* Mesh.
+def _torso_slice_rows(part_slice: str) -> Tuple[float, float, float, float]:
+    """Pixel-Zeilen fuer einen Torso-Abschnitt (wie `apply_torso_box_uvs`)."""
+    w, h = float(TORSO_MAP_SIZE[0]), float(TORSO_MAP_SIZE[1])
+    if part_slice == "upper":
+        y0, y1 = 74.0, 178.0
+    elif part_slice == "lower":
+        y0, y1 = 178.0, 202.0
+    else:
+        y0, y1 = 74.0, 202.0
+    m = _LIMB_UV_MARGIN
+    if y1 - y0 > 4 * m:
+        y0, y1 = y0 + m, y1 - m
+    return w, h, y0, y1
 
-    Fuer Quader gibt es `apply_limb_box_uvs` (feste 24 Vertices). Der
-    Standard-Avatar besteht aber aus echten Roblox-Meshes (R15-Block) mit
-    abgerundeten Kanten und eigener Topologie. Damit Shirt/Hose auch dort
-    landen, wird hier jede Dreiecksflaeche ueber ihre Normale einer der sechs
-    Quaderseiten zugeordnet und ihre Vertices in das passende UV-Rechteck der
-    `264x284`-Vorlage projiziert. Fuer einen Quader kommt exakt dasselbe
-    Ergebnis heraus wie bei `apply_limb_box_uvs`.
-    """
+
+def _project_template_uvs(
+    mesh: MeshData,
+    rects: Dict[str, Tuple[float, float]],
+    top_rect: Tuple[float, float],
+    bottom_rect: Tuple[float, float],
+    top_rows: Tuple[float, float],
+    bottom_rows: Tuple[float, float],
+    tex_w: float,
+    tex_h: float,
+    y0: float,
+    y1: float,
+) -> MeshData:
+    """Projiziert ein beliebiges Mesh ueber seine Flaechennormalen in ein
+    Quader-UV-Template (6 Rechtecke: 4 Seiten + Deck-/Bodenflaeche)."""
     if mesh.is_empty or not mesh.positions:
         return mesh
-    tex_w, tex_h, y0, y1 = _limb_slice_rows(part_slice)
     lo, hi = mesh.bbox()
     span_x = max(1e-6, hi[0] - lo[0])
     span_y = max(1e-6, hi[1] - lo[1])
@@ -468,12 +493,6 @@ def apply_limb_uvs_projected(mesh: MeshData, part_slice: str = "full") -> MeshDa
         corners = _quad_uv_from_px(tex_w, tex_h, x0 + m, y0, x1 - m, y1)
         (ul, vb), (ur, _vb2), (_ur2, vt) = corners[0], corners[1], corners[2]
         return (ul + s * (ur - ul), vb + t * (vt - vb))
-
-    # Kanten-UVs fuer Deckflaechen (Top/Bottom) - gleiche Rechtecke wie im Quader.
-    top_rect = (2, 66)
-    bottom_rect = (90, 154)
-    top_rows = (2.0, 66.0)
-    bottom_rows = (240.0, 282.0)
 
     positions: List[Tuple[float, float, float]] = []
     normals: List[Tuple[float, float, float]] = []
@@ -488,13 +507,13 @@ def apply_limb_uvs_projected(mesh: MeshData, part_slice: str = "full") -> MeshDa
         ax = max(range(3), key=lambda k: abs(n[k]))
         sign = 1.0 if n[ax] >= 0 else -1.0
         if ax == 2:      # +/-Z
-            rect = _LIMB_RECTS["+Z" if sign > 0 else "-Z"]
+            rect = rects["+Z" if sign > 0 else "-Z"]
             for q in p:
                 s = ((q[0] - lo[0]) / span_x if sign > 0
                      else (hi[0] - q[0]) / span_x)
                 uvs.append(_quad_uv(rect, s, (q[1] - lo[1]) / span_y))
         elif ax == 0:    # +/-X
-            rect = _LIMB_RECTS["+X" if sign > 0 else "-X"]
+            rect = rects["+X" if sign > 0 else "-X"]
             for q in p:
                 s = ((hi[2] - q[2]) / span_z if sign > 0
                      else (q[2] - lo[2]) / span_z)
@@ -512,6 +531,113 @@ def apply_limb_uvs_projected(mesh: MeshData, part_slice: str = "full") -> MeshDa
                 (ur, _b) = corners[1]
                 (_u, vt) = corners[2]
                 uvs.append((ul + s * (ur - ul), vb + t * (vt - vb)))
+        base = len(positions)
+        for k, q in enumerate(p):
+            positions.append(q)
+            normals.append(mesh.normals[idx[k]] if idx[k] < len(mesh.normals) else n)
+        faces.append((base, base + 1, base + 2))
+    return MeshData(
+        positions=positions, normals=normals, uvs=uvs, faces=faces,
+        colors=None, source_version=mesh.source_version,
+    )
+
+
+def apply_limb_uvs_projected(mesh: MeshData, part_slice: str = "full") -> MeshData:
+    """Projiziert die R15-Gliedmassen-UVs auf ein *beliebiges* Mesh.
+
+    Fuer Quader gibt es `apply_limb_box_uvs` (feste 24 Vertices). Der
+    Standard-Avatar besteht aber aus echten Roblox-Meshes (R15-Block) mit
+    abgerundeten Kanten und eigener Topologie. Damit Shirt/Hose auch dort
+    landen, wird hier jede Dreiecksflaeche ueber ihre Normale einer der sechs
+    Quaderseiten zugeordnet und ihre Vertices in das passende UV-Rechteck der
+    `264x284`-Vorlage projiziert. Fuer einen Quader kommt exakt dasselbe
+    Ergebnis heraus wie bei `apply_limb_box_uvs`.
+    """
+    if mesh.is_empty or not mesh.positions:
+        return mesh
+    tex_w, tex_h, y0, y1 = _limb_slice_rows(part_slice)
+    return _project_template_uvs(
+        mesh, _LIMB_RECTS,
+        top_rect=(2, 66), bottom_rect=(90, 154),
+        top_rows=(2.0, 66.0), bottom_rows=(240.0, 282.0),
+        tex_w=tex_w, tex_h=tex_h, y0=y0, y1=y1)
+
+
+def apply_torso_uvs_projected(mesh: MeshData, part_slice: str = "full") -> MeshData:
+    """Projiziert die R15-Torso-UVs (`388x272`-Vorlage) auf ein beliebiges Mesh.
+
+    Wie `apply_limb_uvs_projected`, aber mit den Torso-Rechtecken: UpperTorso
+    bekommt den Abschnitt ``upper``, LowerTorso den Abschnitt ``lower`` -
+    damit landet das Shirt exakt dort, wo die Roblox-Kleidungsvorlage es
+    erwartet (auch auf den Blockteilen des Standard-Avatars).
+    """
+    if mesh.is_empty or not mesh.positions:
+        return mesh
+    tex_w, tex_h, y0, y1 = _torso_slice_rows(part_slice)
+    return _project_template_uvs(
+        mesh, _TORSO_RECTS,
+        top_rect=(2, 130), bottom_rect=(2, 130),
+        top_rows=(10.0, 74.0), bottom_rows=(202.0, 266.0),
+        tex_w=tex_w, tex_h=tex_h, y0=y0, y1=y1)
+
+
+#: Rechteck der Gesichts-Flaeche (Vorderseite -Z) im Kopf-Textur-Layout -
+#: gemessen am offiziellen Standard-Kopf (``reference/meshes/Head.mesh``:
+#  Vorderseiten-Vertices sampeln u=[0.371..0.711], v=[0.154..0.846]).
+_HEAD_FACE_U = (0.371, 0.711)
+_HEAD_FACE_V = (0.154, 0.846)
+#: Hautregion ohne Gesicht (obere linke Ecke) fuer alle uebrigen Flaechen.
+_HEAD_SKIN_U = (0.010, 0.090)
+_HEAD_SKIN_V = (0.910, 0.990)
+
+
+def apply_head_uvs_projected(mesh: MeshData) -> MeshData:
+    """Legt das klassische Kopf-UV-Layout (Gesicht auf -Z) auf ein Mesh.
+
+    ``composite_face_texture`` erzeugt eine Textur, in der die Gesichtsgrafik
+    ueber der Hautflaeche liegt; der echte Standard-Kopf sampelt sie ueber
+    eine Vorderseiten-Projektion. Damit das Gesicht auch auf dem
+    Blocky-Standardkopf (``BlockyCharacter.fbx``) exakt sitzt, wird die
+    Vorderseite in das Gesichts-Rechteck projiziert, alles andere auf eine
+    Hautregion.
+    """
+    if mesh.is_empty or not mesh.positions:
+        return mesh
+    lo, hi = mesh.bbox()
+    span_x = max(1e-6, hi[0] - lo[0])
+    span_y = max(1e-6, hi[1] - lo[1])
+    span_z = max(1e-6, hi[2] - lo[2])
+
+    def _map(u_range, v_range, s: float, t: float) -> Tuple[float, float]:
+        return (u_range[0] + s * (u_range[1] - u_range[0]),
+                v_range[0] + t * (v_range[1] - v_range[0]))
+
+    positions: List[Tuple[float, float, float]] = []
+    normals: List[Tuple[float, float, float]] = []
+    uvs: List[Tuple[float, float]] = []
+    faces: List[Tuple[int, int, int]] = []
+    for face in mesh.faces:
+        if len(face) < 3:
+            continue
+        idx = list(face)[:3]
+        p = [mesh.positions[i] for i in idx]
+        n = _face_normal(p[0], p[1], p[2])
+        ax = max(range(3), key=lambda k: abs(n[k]))
+        sign = 1.0 if n[ax] >= 0 else -1.0
+        front = ax == 2 and sign < 0
+        u_range = _HEAD_FACE_U if front else _HEAD_SKIN_U
+        v_range = _HEAD_FACE_V if front else _HEAD_SKIN_V
+        for q in p:
+            if ax == 2:
+                s = (hi[0] - q[0]) / span_x if front else (q[0] - lo[0]) / span_x
+                t = (hi[1] - q[1]) / span_y if front else (q[1] - lo[1]) / span_y
+            elif ax == 0:
+                s = (q[2] - lo[2]) / span_z
+                t = (q[1] - lo[1]) / span_y
+            else:
+                s = (q[0] - lo[0]) / span_x
+                t = (q[2] - lo[2]) / span_z
+            uvs.append(_map(u_range, v_range, s, t))
         base = len(positions)
         for k, q in enumerate(p):
             positions.append(q)

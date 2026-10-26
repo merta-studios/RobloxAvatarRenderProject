@@ -39,7 +39,7 @@ import avatar_pose  # noqa: E402
 import avatar_rig  # noqa: E402
 import avatar_uv  # noqa: E402
 import emote_pose  # noqa: E402
-import mannequin  # noqa: E402
+import standard_r15  # noqa: E402
 import rbxm  # noqa: E402
 import render_config  # noqa: E402
 import roblox_api as api  # noqa: E402
@@ -873,10 +873,11 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         # ---- Assets ---------------------------------------------------------
         assets = list(avatar_raw.get("assets") or [])
         # Nicht ausgeruestete Koerperteile: Roblox ersetzt sie durch den
-        # Standard-Avatar, NICHT durch weitere Teile eines getragenen Pakets.
-        # Dafuer werden die echten R15-Block-Meshes von Roblox geladen
-        # (R15BlockLeftUpperLeg usw.) - das ist genau die Geometrie, aus der
-        # die Engine den Standard-Koerper baut.
+        # Standard-Avatar - den R15-Standard-Blocky-Koerper aus Roblox'
+        # offizieller Referenz ``BlockyCharacter.fbx``. Dessen exakte
+        # Geometrie, Gelenke und Accessoire-Anker liegen offline in
+        # ``reference/standard_r15_rig.json`` vor (siehe tools/standard_r15.py)
+        # und werden weiter unten als ``standard_segments`` ans Rig uebergeben.
         try:
             fehlende_teile = api.missing_body_part_names(assets)
         except Exception as exc:  # pragma: no cover - Format
@@ -889,30 +890,12 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             for teil in fehlende_teile:
                 segmente.extend(avatar_rig.STANDARD_SEGMENTS.get(teil, []))
             log(f"      . Fehlende Koerperteile: {text} -> Standard-Avatar "
-                f"({len(segmente)} Segmente)")
-            for seg_name in segmente:
-                mesh_id = avatar_rig.STANDARD_BODY_MESH_IDS.get(seg_name)
-                if not mesh_id:
-                    continue
-                raw = download_followup(mesh_id)
-                if raw is None:
-                    continue
-                try:
-                    standard_meshes[seg_name] = roblox_mesh.parse(raw)
-                except roblox_mesh.MeshParseError:
-                    continue
-            fehlende_meshes = [s for s in segmente if s not in standard_meshes]
-            if standard_meshes:
-                warnings.append(
-                    "Nicht ausgeruestete Koerperteile (" + text + "): Roblox "
-                    "setzt dafuer den Standard-Avatar ein - geladen wurden die "
-                    f"R15-Block-Meshes von Roblox ({len(standard_meshes)} "
-                    "Segmente).")
-            if fehlende_meshes:
-                warnings.append(
-                    "Standard-Avatar unvollstaendig ("
-                    + ", ".join(fehlende_meshes)
-                    + ") - diese Segmente bleiben R15-Quader.")
+                f"(R15-Blocky, {len(segmente)} Segmente)")
+            warnings.append(
+                "Nicht ausgeruestete Koerperteile (" + text + "): Roblox "
+                "setzt dafuer den Standard-Avatar ein - uebernommen wurde der "
+                "exakte R15-Standard-Blocky (BlockyCharacter.fbx: Geometrie, "
+                "Gelenke und Accessoire-Anker).")
         log(f"[3/4] {len(assets)} Assets verarbeiten ...")
 
         for index, asset in enumerate(assets[:max_assets]):
@@ -1205,20 +1188,28 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 texture_for_part["kopf"] = rel_head
                 clothing_kind_by_file[rel_head] = "composited"
 
-    # R15-Standard-Avatar (BlockyCharacter.fbx -> reference/standard_r15.json):
-    # die echten Blockteile von Roblox ersetzen nicht getragene Koerperteile.
-    # Lokal vorhandene Referenz hat Vorrang vor nichts; heruntergeladene
-    # Block-Meshes (gleiche Geometrie von den Roblox-Servern) ergaenzen sie.
-    _standard_ref = mannequin.standard_meshes()
-    if _standard_ref:
-        for _seg, _mesh in _standard_ref.items():
-            standard_meshes.setdefault(_seg, _mesh)
-        log(f"      . Standard-Avatar: {len(_standard_ref)} R15-Blockteile "
-            "aus reference/standard_r15.json")
+    # R15-Standard-Avatar: exakte Daten aus Roblox' offizieller Referenz
+    # ``BlockyCharacter.fbx`` (``reference/standard_r15_rig.json``, gebaut von
+    # tools/standard_r15.py). Sie ersetzen nicht ausgeruestete Koerperteile -
+    # Geometrie, Gelenke UND Accessoire-Anker (Hat/FaceFront/Neck/...) sind
+    # die offiziellen Roblox-Werte, nichts wird geschaetzt.
+    standard_segments = standard_r15.standard_segments()
+    if standard_segments:
+        log(f"      . Standard-Avatar: {len(standard_segments)} R15-Blockteile "
+            "(BlockyCharacter.fbx, exakte RigAttachments)")
+    for _seg, _mesh in (standard_meshes or {}).items():
+        # Historische, nur aus Geometrie bestehende Referenz - bleibt als
+        # Zweitquelle erhalten, hat aber keine Gelenkdaten.
+        if _seg not in standard_segments:
+            standard_segments[_seg] = {"mesh": _mesh, "attachments": {}}
 
     # Exakten R15-Gelenk-Rig berechnen (liefert Welt-Attachments + Skinning-Gelenke
     # sowie bei echten RBXM-RigAttachments die 1:1-Gelenkgeometrie aller Koerperteile)
-    use_r15_rig = avatar_rig.has_rig_attachments(r15_segments_by_part, head_mesh)
+    # Der Rig-Pfad greift, sobald echte RigAttachments vorliegen - oder wenn
+    # ueberhaupt keine Koerperteile ausgeruestet sind (dann kommt der komplette
+    # Koerper aus dem exakten R15-Standard, ohne geschaetzte Quader).
+    use_r15_rig = (avatar_rig.has_rig_attachments(r15_segments_by_part, head_mesh)
+                   or not body_replacements)
     rig_avatar = avatar_rig.assemble_r15_rig(
         r15_segments_by_part,
         head_mesh,
@@ -1226,6 +1217,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
         scales,
         headless=headless["active"],
         standard_meshes=standard_meshes,
+        standard_segments=standard_segments,
     )
     # Hinweise des Gelenk-Audits (abgeleitete Attachments, ersetzte
     # Platzhalter-Gelenke) sichtbar machen - sie erklaeren, warum ein Teil

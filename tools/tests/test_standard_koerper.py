@@ -45,6 +45,7 @@ import avatar_rig  # noqa: E402
 import mannequin  # noqa: E402
 import roblox_api  # noqa: E402
 import roblox_mesh  # noqa: E402
+import standard_r15  # noqa: E402
 
 I3 = avatar_rig.IDENTITY_MAT3
 
@@ -170,25 +171,39 @@ def test_ausgeruesteter_arm_bleibt_unangetastet(klassisch):
 
 
 def test_fehlende_beine_kommen_aus_dem_r15_standard(klassisch):
-    """Nicht getragene Beine = R15-Blockkoerper, nicht Classic, kein Klotz."""
+    """Nicht getragene Beine = exakter R15-Standard (BlockyCharacter.fbx).
+
+    Montiert ueber die echten RigAttachments (Motor6D-Semantik) - die
+    Gelenke liegen damit exakt auf den Roblox-Pivots, nichts wird auf
+    geschaetzte Fraktionen gestreckt.
+    """
     rig = _rig({"torso": _torso_segmente(klassisch)},
-               standard_meshes=mannequin.standard_meshes())
-    assert any("Standard-Avatar" in n and "links_bein" in n for n in rig.notes)
+               standard_segments=standard_r15.standard_segments())
+    assert any("Standard-Avatar" in n and "LeftUpperLeg" in n for n in rig.notes)
     spans = rig.segment_spans["links_bein"]
     assert [s for s, _a, _b in spans] == ["LeftUpperLeg", "LeftLowerLeg", "LeftFoot"]
     bein = rig.body_meshes["links_bein"]
     # Block-Meshes des Standards (788 Flaechen), kein Quader (36).
     assert len(bein.faces) > 300
-    t_lo, t_hi = rig.body_meshes["torso"].bbox()
-    torso_w = t_hi[0] - t_lo[0]
-    torso_h = t_hi[1] - t_lo[1]
     lo, hi = bein.bbox()
-    # Fuss auf dem Boden, Beinlaenge = Torso-Hoehe (R15-Verhaeltnis).
+    # Fuss auf dem Boden (das Gesamt-Rig wird auf y = 0 gestellt).
     assert lo[1] == pytest.approx(0.0, abs=1e-6)
-    assert (hi[1] - lo[1]) == pytest.approx(torso_h, rel=0.05)
-    # Quadratischer Block-Querschnitt: halbe Torso-Breite, Tiefe = Breite.
-    assert (hi[0] - lo[0]) == pytest.approx(0.5 * torso_w, rel=0.05)
-    assert (hi[2] - lo[2]) == pytest.approx(hi[0] - lo[0], rel=0.05)
+    # EXAKTE Gelenke: Knie und Fussgelenk sitzen auf den RigAttachments des
+    # Standard-Rigs (Pivots wie in Roblox), nicht in Segmentmitten.
+    assert rig.joint_positions["LeftUpperLeg"] == pytest.approx(
+        rig.world_attachments["LeftHipRigAttachment"][0], abs=1e-6)
+    assert rig.joint_positions["LeftLowerLeg"] == pytest.approx(
+        rig.world_attachments["LeftKneeRigAttachment"][0], abs=1e-6)
+    assert rig.joint_positions["LeftFoot"] == pytest.approx(
+        rig.world_attachments["LeftAnkleRigAttachment"][0], abs=1e-6)
+    # Natuerliche Masse des Standard-Blocks: 1,0 x 1,0 Studs Querschnitt,
+    # Huefte bis Sohle = exakte Standard-Laenge (2,038 Studs). Das
+    # Oberbein-Mesh ueberragt das Hueftgelenk wie im Original leicht.
+    assert (hi[0] - lo[0]) == pytest.approx(1.0, abs=0.03)
+    assert (hi[2] - lo[2]) == pytest.approx(1.0, abs=0.03)
+    hip_y = rig.joint_positions["LeftUpperLeg"][1]
+    assert (hip_y - lo[1]) == pytest.approx(2.038, rel=0.03)
+    assert 0.0 < (hi[1] - hip_y) < 0.2
     # Kleidungs-UVs der Roblox-Vorlage (Hose) auf allen Segmenten.
     assert all(0.0 <= u <= 1.0 and 0.0 <= v <= 1.0 for u, v in bein.uvs)
 

@@ -20,10 +20,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from avatar_uv import (apply_limb_box_uvs, apply_limb_uvs_projected,
-                       apply_torso_box_uvs)
+from avatar_uv import (apply_head_uvs_projected, apply_limb_box_uvs,
+                       apply_limb_uvs_projected, apply_torso_box_uvs,
+                       apply_torso_uvs_projected)
 from roblox_mesh import MeshData, make_box, make_sphere
 from roblox_api import brick_color_hex, hex_to_rgb
+
+# Exakte R15-Standard-Rig-Daten (aus Roblox' BlockyCharacter.fbx abgeleitet,
+# siehe tools/standard_r15.py). Ersetzt alle frueheren Schaetz-Konstanten.
+import standard_r15  # noqa: E402
 
 # AssetTypeId -> Layout fuer Accessoires
 ACCESSORY_LAYOUT: Dict[int, Dict[str, Any]] = {
@@ -84,31 +89,40 @@ R15_LEG_SYMMETRY_TOLERANCE = 1.05
 R15_ARM_FRACTIONS = (0.419051, 0.437010, 0.143939)
 R15_LEG_FRACTIONS = (0.410941, 0.463088, 0.125971)
 
-#: Anker des R15-Standard-Kopfes (lokal im Kopf-Modell, Studs bei Head-Scale
-#: 1). NeckRigAttachment/HatAttachment sind die offiziellen Standardwerte
-#: (siehe Humanoid:BuildRigFromAttachments); die Gesichtsanker liegen auf
-#: Augenhoehe (FaceFront) bzw. Gesichtsmitte (FaceCenter). Quelle: offizielle
-#: BlockyCharacter.fbx (FaceFront_Att/FaceCenter_Att) - Brillen und
-#: Gesichts-Accessoires sassen bisher auf Kopfmitte, also zu weit über den
-#: Augen. Die Y-Verschiebung ist als Anteil vom Kopfradius gegeben, damit
-#: sie mit der Kopfgroesse skaliert.
-R15_HEAD_NECK_ATTACHMENT = (0.0, -0.5, 0.0)
-R15_HEAD_HAT_ATTACHMENT = (0.0, 0.6, 0.0)
-R15_HEAD_FACE_FRONT_Y_RADIUS = -0.5690
-R15_HEAD_FACE_CENTER_Y_RADIUS = -0.7260
+#: Anker des R15-Standard-Kopfes. Quelle: Roblox' offizielle Referenzdatei
+#: ``BlockyCharacter.fbx`` (Marker ``FaceFront_Att``/``FaceCenter_Att``/
+#: ``Hat_Att``/``Neck_Att``), ausgewertet nach ``reference/standard_r15_rig.json``
+#: (siehe ``standard_r15.head_attachments``). Wichtigste Korrektur gegenueber
+#: frueheren Schaetzwerten: ``FaceFrontAttachment`` (Brillen, Masken) liegt auf
+#: der **Kopf-Mitte** an der Vorderflaeche - brillen-fremde Offsets entstehen
+#: damit auch nicht mehr, weil das Accessoire sein eigenes Attachment mitbringt.
+#: Die Werte sind als Anteil vom Kopfradius angegeben (Notfall-Fallback, falls
+#: die Spezifikationsdatei fehlt).
+R15_HEAD_NECK_ATTACHMENT = (0.0, -1.465, 0.0)
+R15_HEAD_HAT_ATTACHMENT = (0.0, 1.009, 0.0)
+R15_HEAD_FACE_FRONT_Y_RADIUS = 0.001
+R15_HEAD_FACE_CENTER_Y_RADIUS = -0.156
 
-#: Schulter-Attachment des R15-Standard-Torsos: 0,237 Studs unter der
-#: Torso-Oberkante (offizielle Referenz: UpperTorso-ShoulderRigAttachment
-#: liegt bei y = 0,563 im UpperTorso-Modell, dessen Ursprung bei y = 1,0
-#: ist -> 1,563 bei 2,0 Studs Torso-Hoehe). War bisher 1,4 - die Schultern
-#: sassen also zu weit nach unten.
-R15_SHOULDER_BELOW_TORSO_TOP = 0.237
+#: Schulter-Attachment des R15-Standard-Torsos, exakt aus
+#: ``reference/standard_r15_rig.json`` (``LeftShoulderRigAttachment`` auf
+#: ``UpperTorso``): 0,0457 Studs unter der Torso-Oberkante der 1,6 Studs
+#: hohen Standard-UpperTorso - also 2,86 % der Torso-Hoehe. Als
+#: R15_SHOULDER_BELOW_TORSO_TOP (Studs bei 2,0 Studs Torso) entspricht das
+#: 0,057. Der bisherige Wert 0,237 setzte die Schultern ~0,19 Studs zu tief.
+_R15_PROPS = (standard_r15.joint_proportions() if standard_r15 else {})
+R15_SHOULDER_BELOW_TORSO_TOP = 2.0 * float(
+    _R15_PROPS.get("shoulder_below_torso_top_frac", 0.0286))
 
-#: Meshes des **Standard-Avatars** (R15-Block-Koerper). Roblox baut den
-#: Standard-Koerper in der Engine aus genau diesen FileMesh-Assets; sie haben
-#: keine Katalog-/Bundle-ID, sind aber als Mesh-Assets (AssetTypeId 4) ladbar.
-#: Fehlt ein Koerperteil im Inventar, wird es damit ersetzt - nicht durch
-#: scharfe Quader und nicht durch Teile des getragenen Pakets.
+#: Mesh-Assets der **R15-Block-Teile von 2016** (der damalige Standard-Koerper;
+#: Referenz: R15Port/CreateR15Model-Spezifikation, die genau diese IDs
+#: verwendet). WICHTIG: Roblox hat den Standard-Rig im Mai 2018 geaendert
+#: ("default R15 rig was changed with shorter limbs for compatibility with
+#: the then-upcoming Rthro proportions"). Der **aktuelle** Standard-Avatar
+#: ist der Blocky-Koerper aus Roblox' offizieller Referenz
+#: ``BlockyCharacter.fbx`` (siehe ``tools/standard_r15.py`` /
+#: ``reference/standard_r15_rig.json``) - die Render-Pipeline benutzt exakt
+#: diese Daten. Diese Tabelle bleibt fuer ``tools/fetch_reference.py``
+#: (Referenz-Downloads) erhalten.
 STANDARD_BODY_MESH_IDS: Dict[str, int] = {
     "LowerTorso": 387941715,
     "UpperTorso": 387941468,
@@ -193,8 +207,9 @@ class BodyMetrics:
         if name == "head_center":
             return (0.0, self.head_center_y, 0.0)
         if name == "face_front":
-            # Augenhoehe (offizielle BlockyCharacter.fbx): Brillen sassen
-            # bisher auf Kopfmitte, also zu weit oben.
+            # FaceFront_Att der offiziellen Referenz (BlockyCharacter.fbx):
+            # Kopf-Mitte an der Vorderflaeche. Brillen & Co. bringen ihr
+            # eigenes Attachment-Offset mit und sitzen damit wie im Spiel.
             return (0.0, self.head_center_y
                     + R15_HEAD_FACE_FRONT_Y_RADIUS * self.head_radius,
                     -(self.head_radius))
@@ -949,36 +964,37 @@ def _standard_head_face_attachments(
     head_center: Tuple[float, float, float],
     head_r: float,
 ) -> Dict[str, Tuple[Tuple[float, float, float], Matrix3]]:
-    """Gesichtsanker des R15-Standard-Kopfes (Augenhoehe).
+    """Exakte Anker des R15-Standard-Kopfes (Hut, Haare, Gesicht, Hals).
 
-    FaceFrontAttachment (Brillen, Masken ...) liegt auf Augenhoehe,
-    FaceCenterAttachment in der Gesichtsmitte - beide *unter* der Kopfmitte,
-    genau wie in der offiziellen BlockyCharacter.fbx (FaceFront_Att/
-    FaceCenter_Att). Bisher wurden beide auf Kopfmitte gesetzt, wodurch
-    Brillen zu weit über den Augen sassen.
+    Quelle: ``reference/standard_r15_rig.json`` (aus Roblox'
+    ``BlockyCharacter.fbx``): ``FaceFrontAttachment`` liegt auf der
+    Kopf-Mitte an der Vorderflaeche (Brillen sitzen damit exakt wie im
+    Spiel), ``HatAttachment``/``HairAttachment`` auf der Oberkante,
+    ``NeckAttachment`` unter dem Kinn. Skaliert auf den tatsaechlichen
+    Kopfradius; ohne Spezifikationsdatei greifen die dokumentierten
+    Notfallwerte aus ``standard_r15.FALLBACK_HEAD_ATTACHMENTS``.
     """
+    atts = standard_r15.head_attachments(
+        (float(head_center[0]), float(head_center[1]), float(head_center[2])),
+        float(head_r))
     return {
-        "FaceCenterAttachment": (
-            (head_center[0],
-             head_center[1] + R15_HEAD_FACE_CENTER_Y_RADIUS * head_r,
-             head_center[2]),
-            IDENTITY_MAT3),
-        "FaceFrontAttachment": (
-            (head_center[0],
-             head_center[1] + R15_HEAD_FACE_FRONT_Y_RADIUS * head_r,
-             head_center[2] - head_r),
-            IDENTITY_MAT3),
+        name: (pos, rot if rot is not None else IDENTITY_MAT3)
+        for name, (pos, rot) in atts.items()
     }
 
 
 def _standard_segment_mesh(raw: Optional[MeshData], width: float, height: float,
                            depth: float, slice_name: str) -> Optional[MeshData]:
-    """Skaliert ein Standard-Avatar-Mesh auf die R15-Masse eines Segments.
+    """Letztes Sicherheitsnetz: Referenz-Mesh auf Platzhalter-Masse gezogen.
 
-    Die R15-Blockteile sind Einheitskoerper (SpecialMesh-Standard), ihre
-    Proportionen ergeben sich erst aus der Teil-Groesse. Deshalb wird das Mesh
-    auf genau die Maße gezogen, die das Segment im R15-Standard hat, und
-    bekommt die Kleidungs-UVs seines Abschnitts (Shirt/Hose).
+    Der normale Weg ist ``standard_segments`` (``reference/standard_r15_rig.json``):
+    die echten Blockteile werden in ihrer **natuerlichen Groesse** an den
+    exakten RigAttachments montiert (Roblox skaliert beim Avatar-Aufbau
+    nichts). Nur wenn ein Segment weder ausgeruestet noch in der
+    Spezifikation enthalten ist, entsteht ein Quader - und falls fuer diesen
+    Platzhalter doch eine Referenz-Geometrie vorliegt, wird sie hier auf die
+    Platzhalter-Masse gezogen und mit den Kleidungs-UVs des Abschnitts
+    versehen (Shirt/Hose).
     """
     if raw is None or raw.is_empty:
         return None
@@ -991,6 +1007,68 @@ def _standard_segment_mesh(raw: Optional[MeshData], width: float, height: float,
     return apply_limb_uvs_projected(scaled, slice_name)
 
 
+def _standard_segment_entries(
+    standard_segments: Optional[Dict[str, Dict[str, Any]]],
+    standard_meshes: Optional[Dict[str, MeshData]],
+) -> Dict[str, Dict[str, Any]]:
+    """RBXM-artige Segment-Eintraege fuer nicht ausgeruestete Koerperteile.
+
+    ``standard_segments`` (``standard_r15.standard_segments()``) tragen die
+    **exakten** ``*RigAttachment``- und Accessoire-Anker des R15-Standard-
+    Avatars (BlockyCharacter.fbx) - sie werden montiert wie ausgeruestete
+    Teile (Motor6D-Semantik, Gelenke exakt auf den Attachments).
+    ``standard_meshes`` (nur Geometrie) ist der historische Ruckfall; ohne
+    Attachments leitet die Montage die Gelenke aus der Geometrie ab.
+
+    Die Kleidungs-UVs werden wie bei ausgeruesteten Teilen auf die
+    Roblox-Vorlagen projiziert (Shirt/Hose landen korrekt auf den
+    Blockteilen); der Kopf bekommt das klassische Gesichts-UV-Layout.
+    """
+    slices = {
+        "UpperTorso": ("torso", "upper"), "LowerTorso": ("torso", "lower"),
+        "LeftUpperArm": ("limb", "upper"), "RightUpperArm": ("limb", "upper"),
+        "LeftLowerArm": ("limb", "lower"), "RightLowerArm": ("limb", "lower"),
+        "LeftHand": ("limb", "end"), "RightHand": ("limb", "end"),
+        "LeftUpperLeg": ("limb", "upper"), "RightUpperLeg": ("limb", "upper"),
+        "LeftLowerLeg": ("limb", "lower"), "RightLowerLeg": ("limb", "lower"),
+        "LeftFoot": ("limb", "end"), "RightFoot": ("limb", "end"),
+        "Head": ("head", "full"),
+    }
+
+    def _clothing_uvs(name: str, mesh: MeshData) -> MeshData:
+        kind, slice_name = slices.get(name, ("limb", "full"))
+        if mesh is None or mesh.is_empty:
+            return mesh
+        if kind == "torso":
+            return apply_torso_uvs_projected(mesh, slice_name)
+        if kind == "head":
+            return apply_head_uvs_projected(mesh)
+        return apply_limb_uvs_projected(mesh, slice_name)
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for name, entry in (standard_segments or {}).items():
+        out[name] = {
+            "label": name,
+            "mesh": _clothing_uvs(name, entry.get("mesh")),
+            "attachments": dict(entry.get("attachments") or {}),
+            "rbxm_class": "MeshPart",
+            "rbxm_size": None,
+            "transparency": 0.0,
+        }
+    for name, mesh in (standard_meshes or {}).items():
+        if name in out:
+            continue
+        out[name] = {
+            "label": name,
+            "mesh": _clothing_uvs(name, mesh),
+            "attachments": {},
+            "rbxm_class": "MeshPart",
+            "rbxm_size": None,
+            "transparency": 0.0,
+        }
+    return out
+
+
 def assemble_r15_rig(
     segments_by_part: Dict[str, List[Dict[str, Any]]],
     head_mp: Optional[Dict[str, Any]],
@@ -998,19 +1076,22 @@ def assemble_r15_rig(
     scales: Dict[str, Any],
     headless: bool = False,
     standard_meshes: Optional[Dict[str, MeshData]] = None,
+    standard_segments: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> RiggedAvatar:
     """Setzt einen kompletten R15-Avatar ueber exakte `*RigAttachment`-Gelenke zusammen.
 
-    ``standard_meshes`` (Segmentname -> MeshData) enthaelt die echten
-    R15-Block-Meshes des Standard-Avatars. Sie ersetzen bei nicht
-    ausgeruesteten Koerperteilen die Quader-Notloesung: gleiche R15-Masse und
-    Gelenk-Kette, aber die gerundete Silhouette des Standard-Koerpers.
+    Nicht ausgeruestete Koerperteile ersetzt Roblox durch den
+    **Standard-Avatar** - exakt genommen den R15-Standard-Blocky-Koerper aus
+    Roblox' offizieller Referenz ``BlockyCharacter.fbx`` (``standard_segments``
+    aus ``reference/standard_r15_rig.json``: Geometrie, Gelenke UND
+    Accessoire-Anker). Diese Teile werden genauso montiert wie ausgeruestete:
+    ``Kind = Eltern * C0 * C1^-1``, Gelenke exakt auf den Attachments -
+    Posen drehen damit um die echten Roblox-Pivots, Accessoires verschweissen
+    exakt an Hat/FaceFront/Neck & Co.
 
-    ``standard_meshes`` enthaelt die *echten* R15-Blockteile des
-    Standard-Avatars (``reference/standard_r15.json``, gebaut aus Roblox'
-    ``BlockyCharacter.fbx``). Sie ersetzen nicht ausgeruestete Koerperteile -
-    die Teile des Avatars selbst bleiben unangetastet und haengen an ihren
-    eigenen RigAttachments.
+    ``standard_meshes`` (nur Geometrie) ist der historische Ruckfall ohne
+    Attachments. Gibt es ueberhaupt keine Referenz, entstehen R15-Quader mit
+    den kanonischen Laengenanteilen (letztes Sicherheitsnetz).
     """
     standard_meshes = standard_meshes or {}
     sw = _clamp(scales.get("width"), 0.55, 1.60)
@@ -1058,6 +1139,37 @@ def assemble_r15_rig(
     joint_spans: Dict[str, float] = {}
     notes: List[str] = []
     segment_info: Dict[str, Dict[str, Any]] = {}
+
+    # Nicht ausgeruestete Koerperteile: exakte Standard-Teile (R15-Blocky)
+    # einhaengen - sie tragen ihre echten *RigAttachments bei sich und werden
+    # spaeter genauso montiert wie ausgeruestete Teile. Ausgeruestete Teile
+    # haben IMMER Vorrang: Roblox ersetzt nur *fehlende* Koerperteile. Wird
+    # ein Koerperteil (Arm/Bein/Torso) auch nur teilweise vom Bundle geliefert,
+    # bleiben ausschliesslich dessen eigene Segmente - es werden keine
+    # Standard-Teile dazwischen geschoben.
+    std_entries = _standard_segment_entries(standard_segments, standard_meshes)
+    slot_chains = (
+        ("LowerTorso", "UpperTorso"),
+        ("LeftUpperArm", "LeftLowerArm", "LeftHand"),
+        ("RightUpperArm", "RightLowerArm", "RightHand"),
+        ("LeftUpperLeg", "LeftLowerLeg", "LeftFoot"),
+        ("RightUpperLeg", "RightLowerLeg", "RightFoot"),
+    )
+    for _chain in slot_chains:
+        _equipped = [n for n in _chain if n in seg_lookup]
+        if _equipped and not (
+                len(_equipped) < len(_chain) and _chain[0] == "LowerTorso"):
+            continue  # Koerperteil kommt (auch nur teilweise) aus dem Bundle
+        for _lname in _chain:
+            _entry = std_entries.get(_lname)
+            if _lname in seg_lookup or not _entry or _entry.get("mesh") is None:
+                continue
+            seg_lookup[_lname] = _scale_part_local(
+                _entry, s_head if _lname == "Head" else s_body)
+            raw_parts[_lname] = _entry
+            notes.append(
+                f"Segment '{_lname}': nicht ausgeruestet - R15-Standard-Avatar "
+                "(Blocky, exakte RigAttachments aus BlockyCharacter.fbx) eingesetzt.")
 
     for _seg_name, _entry in seg_lookup.items():
         _raw = raw_parts.get(_seg_name, {})
@@ -1400,13 +1512,14 @@ def assemble_r15_rig(
                                       "factor": factor}
             return delta, top_vorher
         # --- Kein einziges Segment vorhanden --------------------------------
-        # Nicht getragene Koerperteile ersetzt Roblox durch den Standard-
-        # Avatar. Dafuer werden hier die *echten* R15-Blockteile aus Roblox'
-        # ``BlockyCharacter.fbx`` eingesetzt (``reference/standard_r15.json``):
-        # Ober-/Unterglied plus Hand bzw. Fuss, quadratischer Querschnitt von
-        # einer halben Torso-Breite (R15: 1x1 Studs bei 2 Studs Torso-Breite)
-        # und die kanonischen R15-Laengenanteile. Der Querschnitt bleibt
-        # quadratisch, damit die Blockteile nicht verzerrt werden.
+        # Letztes Sicherheitsnetz: weder ausgeruestet noch in der
+        # Standard-Spezifikation (``reference/standard_r15_rig.json``)
+        # enthalten. Dann entstehen R15-Quader mit den kanonischen
+        # Laengenanteilen - quadratischer Querschnitt von einer halben
+        # Torso-Breite (R15: 1x1 Studs bei 2 Studs Torso-Breite). Im normalen
+        # Betrieb haengt dieser Zweig nie an: die Standard-Teile sind oben
+        # mit ihren exakten RigAttachments eingehaengt und werden wie
+        # ausgeruestete montiert.
         root = root_att[0]
         total = max(0.30, placeholder_len)
         fracs = R15_LEG_FRACTIONS if kind == "leg" else R15_ARM_FRACTIONS
@@ -1558,6 +1671,13 @@ def assemble_r15_rig(
 
     head_world: Optional[MeshData] = None
     head_r = 0.60 * shead
+    if head_mp is None and not headless and "Head" in std_entries:
+        # Kein Kopf ausgeruestet: Roblox ersetzt ihn durch den Standard-Kopf
+        # (Blocky) - mit seinen exakten Hat/Hair/FaceFront/Neck-Ankern.
+        head_mp = std_entries["Head"]
+        notes.append(
+            "Kopf: nicht ausgeruestet - R15-Standard-Avatar (Blocky) "
+            "eingesetzt (exakte Accessoire-Anker aus BlockyCharacter.fbx).")
     if head_mp is not None:
         hm_loc, ha_loc, _htr = _scale_part_local(head_mp, s_head)
         head_att = ha_loc.get("NeckRigAttachment")
@@ -1581,30 +1701,24 @@ def assemble_r15_rig(
             # echter Kopfhoehe ueber dem offenen Kragen wie im Spiel.
             head_center = h_orig
             head_r = 0.60 * shead
-        # Fehlen die echten Kopf-Attachments im RBXM, greifen Standardwerte
-        # an der Kopfmitte - Hut/Brille sitzen dann nur noch ungefaehr.
-        # Sichtbar machen statt still zu raten (Brille sass so zu hoch).
+        # Fehlen die echten Kopf-Attachments im RBXM, greifen die exakten
+        # Anker des R15-Standard-Kopfes (BlockyCharacter.fbx) - Hut, Haare,
+        # Brille & Co. sitzen damit wie im Spiel, nicht auf geratenen Punkten.
         for _att_name in ("HatAttachment", "HairAttachment",
                           "FaceCenterAttachment", "FaceFrontAttachment"):
             if _att_name not in world_atts:
                 notes.append(
                     f"Kopf: Attachment '{_att_name}' fehlt im Kopf-Teil - "
-                    "Standardwert an der Kopfmitte verwendet.")
-        world_atts.setdefault("HatAttachment", ((head_center[0], head_center[1] + 0.6 * shead, head_center[2]), IDENTITY_MAT3))
-        world_atts.setdefault("HairAttachment", world_atts["HatAttachment"])
+                    "exakter Standard-Anker (BlockyCharacter.fbx) verwendet.")
         for _akk, _av in _standard_head_face_attachments(head_center, head_r).items():
             world_atts.setdefault(_akk, _av)
     elif not headless:
         head_r = 0.60 * shead
         head_center = (neck_att[0][0], neck_att[0][1] + 0.5 * shead, neck_att[0][2])
         head_world = make_sphere(head_r, 32, 22, head_center)
-        world_atts["HatAttachment"] = ((head_center[0], head_center[1] + 0.6 * shead, head_center[2]), IDENTITY_MAT3)
-        world_atts["HairAttachment"] = world_atts["HatAttachment"]
         world_atts.update(_standard_head_face_attachments(head_center, head_r))
     else:
         head_center = (neck_att[0][0], neck_att[0][1] + 0.5 * shead, neck_att[0][2])
-        world_atts["HatAttachment"] = ((head_center[0], head_center[1] + 0.6 * shead, head_center[2]), IDENTITY_MAT3)
-        world_atts["HairAttachment"] = world_atts["HatAttachment"]
         world_atts.update(_standard_head_face_attachments(head_center, head_r))
 
     # Echte R15-UpperTorsos enthalten bereits den modellierten Hals und Headless-

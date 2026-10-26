@@ -121,19 +121,24 @@ und Gelenke sitzen dort, wo Roblox sie setzt:
   Ersatzteile ließ Ober-/Unterarm und Hand im Emote auseinanderfliegen –
   beides ist entfernt.
 * **Fehlende Körperteile = R15-Standard-Avatar.** Trägt der Avatar ein Teil
-  gar nicht (z. B. keine Beine), setzt Roblox den **R15-Blockkörper** ein.
-  Die Pipeline nutzt dafür die echten Blockteile aus Roblox' offizieller
-  `BlockyCharacter.fbx` (`reference/standard_r15.json`): Ober-/Unterglied
-  plus Hand bzw. Fuß mit quadratischem Querschnitt (1×1 Studs bei 2 Studs
-  Torso-Breite), ergänzt um die von Roblox heruntergeladenen R15-Block-Meshes
-  desselben Körpers. Kein einzelner Klotz, keine Classic-Teile.
+  gar nicht (z. B. keine Beine), setzt Roblox den **R15-Standard-Blocky** ein.
+  Die Pipeline nutzt dafür exakt Roblox' offizielle Referenz
+  `BlockyCharacter.fbx` (Doku: „Standard R15 rigs → Blocky", das Template mit
+  „a standard R15 rig and attachments"): Geometrie, **Gelenke** und
+  **Accessoire-Anker** (`reference/standard_r15_rig.json`, gebaut von
+  `tools/standard_r15.py`). Die Ersatzteile werden genauso montiert wie
+  ausgerüstete – `Kind = Eltern · C0 · C1⁻¹` –, die Pose dreht damit um die
+  echten Roblox-Pivots, und Brillen/Hüte verschweissen exakt an
+  `FaceFrontAttachment`/`HatAttachment` & Co. Keine geschaetzten
+  Gelenkfraktionen, keine Schulterlinien-Konstante, kein einzelner Klotz.
 * **Referenzdateien.** `tools/probe_reference.py` lädt Roblox' offizielle
   FBX-Dateien nach `reference/official/`, `tools/build_mannequin.py` macht
-  daraus zwei kompakte JSONs, die `tools/mannequin.py` zur Renderzeit liest:
-  `standard_r15.json` (R15-Blockkörper, der Standard-Avatar) und
-  `classic_body.json` (klassischer Körper, nur noch als Maß-Abgleich – der
-  Körper dieses Avatars ist klassisch, seine Teile stimmen mit
-  `ClassicMannequin.fbx` überein).
+  daraus kompakte JSONs, die zur Renderzeit ohne FBX-Parser geladen werden:
+  `standard_r15_rig.json` (Rig-Spezifikation des Standard-Avatars: Meshes,
+  `*RigAttachment`-Gelenke, `*_Att`-Accessoire-Anker),
+  `standard_r15.json` (Geometrie/Maße) und `classic_body.json` (klassischer
+  Körper, nur noch als Maß-Abgleich – der Körper dieses Avatars ist klassisch,
+  seine Teile stimmen mit `ClassicMannequin.fbx` überein).
 * **Beine** behalten die Länge ihres Bundles (Roblox normiert nicht). Nur wenn
   linkes und rechtes Bein voneinander abweichen, wird das kürzere gleichmäßig
   angeglichen, damit beide Füße auf dem Boden stehen.
