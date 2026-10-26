@@ -92,6 +92,17 @@ BODY_PART_TYPES = {
     30: "links_bein",   # LeftLeg
     31: "rechts_bein",  # RightLeg
 }
+
+# Das offizielle klassische Roblox-Woman-Rig. hearthands nutzt absichtlich
+# Torso + beide Arm-Pakete daraus: in den Arm-RBXMs stecken Oberarm,
+# Unterarm UND Hand als zueinander passende R15-Segmente.
+WOMAN_BODY_ASSETS = {
+    27: (86499666, "Woman Torso"),
+    28: (86499698, "Woman Right Arm"),
+    29: (86499716, "Woman Left Arm"),
+}
+HEARTHANDS_POSE_NAME = "hearthands"
+
 HEAD_ASSET_TYPE = 17
 DYNAMIC_HEAD_TYPE = 79
 # Ein DynamicHead mit weniger Faces ist praktisch unsichtbar ("Headless")
@@ -270,6 +281,40 @@ def asset_type_id(asset: Dict[str, Any], details: Dict[str, Any]) -> int:
     if details.get("assetTypeId"):
         return int(details["assetTypeId"])
     return 0
+
+
+def woman_body_overrides(pose_name: Any,
+                         assets: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[int, int]]:
+    """Ergaenzt fuer ``hearthands`` genau die noch fehlenden Woman-Teile.
+
+    Bereits getragene Woman-Koerperteile bleiben unangetastet; alle anderen
+    bzw. fehlenden Torso-/Arm-Slots bekommen das offizielle Woman-Asset.
+    Rueckgabe: (nachzuladende Asset-Eintraege, AssetTypeId -> erzwungene ID).
+    """
+    if str(pose_name or "").strip().casefold() != HEARTHANDS_POSE_NAME:
+        return [], {}
+
+    additions: List[Dict[str, Any]] = []
+    forced: Dict[int, int] = {}
+    for type_id, (asset_id, label) in WOMAN_BODY_ASSETS.items():
+        current = [a for a in assets or []
+                   if isinstance(a, dict) and asset_type_id(a, {}) == type_id]
+        is_woman = any(
+            int(a.get("id") or 0) == asset_id
+            or "woman" in str(a.get("name") or "").casefold()
+            for a in current
+        )
+        if is_woman:
+            continue
+        type_name = api.ASSET_TYPE_NAMES.get(type_id, "Koerperteil")
+        additions.append({
+            "id": asset_id,
+            "name": label,
+            "assetType": {"id": type_id, "name": type_name},
+            "_hearthands_override": True,
+        })
+        forced[type_id] = asset_id
+    return additions, forced
 
 
 def texture_filename(asset_id: int, data: bytes) -> str:
@@ -577,12 +622,17 @@ def setup_pose(config: Dict[str, Any],
         return None, info
 
     settings = entry.get("einstellungen") or dict(avatar_pose.POSE_SETTING_DEFAULTS)
+    hand_form = entry.get("hand_form")
     context = avatar_pose.PoseContext(
         entry["teile"], joints, settings=settings,
-        rig=rig_avatar if use_r15_rig else None)
+        rig=rig_avatar if use_r15_rig else None,
+        hand_form=hand_form)
     info["aktiv"] = context.active
     info["einstellungen"] = settings
+    info["hand_form"] = hand_form
     info["details"] = avatar_pose.pose_summary(context.pose, settings)
+    if hand_form == "heart":
+        info["details"] += "; Woman-Haende weich zum Herz verformt"
     log(f"      Pose '{pose_name}': {info['details']}")
     return context, info
 
@@ -632,6 +682,9 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     # Protokoll der Katalog-Abfragen fuer fehlende Koerperteile (Diagnose).
     koerperteile_log: List[str] = []  # fehlende Koerperteile (Standard-Avatar)
     avatar_raw: Dict[str, Any] = {}
+    # AssetTypeId -> Woman-Asset-ID, wenn hearthands einen Nicht-Woman-Slot
+    # fuer diese Pose absichtlich ersetzt.
+    forced_woman_asset_ids: Dict[int, int] = {}
     mesh_parts: List[Dict[str, Any]] = []
     # Echte R15-Block-Meshes des Standard-Avatars fuer nicht ausgeruestete
     # Koerperteile (Segmentname -> MeshData).
@@ -678,6 +731,11 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             "assets": [],
         }
         log("[1/4] Dry-Run: keine Netzwerk-Anfragen, Koerper mit Standardfarben")
+        if str(render_cfg.get("pose") or "").strip().casefold() == HEARTHANDS_POSE_NAME:
+            warnings.append(
+                "Dry-Run: Das Woman-Rig fuer hearthands wird ohne Netzwerk "
+                "nicht nachgeladen; im echten Render werden Torso und Arme "
+                "bei Bedarf durch Woman-Assets ersetzt.")
     else:
         username = api.normalize_username(username_raw)
         client = api.HttpClient(verbose=verbose)
@@ -871,7 +929,27 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                                 "reason": "RBXM: keine verwertbare Geometrie gefunden"})
 
         # ---- Assets ---------------------------------------------------------
-        assets = list(avatar_raw.get("assets") or [])
+        avatar_assets = list(avatar_raw.get("assets") or [])
+        woman_override_assets, forced_woman_asset_ids = woman_body_overrides(
+            render_cfg.get("pose"), avatar_assets)
+        # Die Overrides bleiben im Asset-Queue, werden aber nicht in die
+        # Avatar-API-Rohdaten hineingeschrieben. So ist im Manifest klar, was
+        # der Account wirklich traegt und was hearthands gezielt nachlaedt.
+        assets = avatar_assets + woman_override_assets
+        assets_to_process = avatar_assets[:max_assets]
+        queued_ids = {int(a.get("id") or 0) for a in assets_to_process
+                      if isinstance(a, dict)}
+        assets_to_process.extend(
+            asset for asset in woman_override_assets
+            if int(asset.get("id") or 0) not in queued_ids
+        )
+        if woman_override_assets:
+            names = ", ".join(asset["name"] for asset in woman_override_assets)
+            log(f"      . hearthands: Woman-Rig wird fuer {names} erzwungen")
+            warnings.append(
+                "Pose 'hearthands': Nicht-Woman-Koerperteile werden durch das "
+                "passende Roblox-Woman-Rig ersetzt (Torso und beide Arm-Pakete "
+                "inkl. Oberarm, Unterarm und Haenden).")
         # Nicht ausgeruestete Koerperteile: Roblox ersetzt sie durch den
         # Standard-Avatar - den R15-Standard-Blocky-Koerper aus Roblox'
         # offizieller Referenz ``BlockyCharacter.fbx``. Dessen exakte
@@ -898,7 +976,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 "Gelenke und Accessoire-Anker).")
         log(f"[3/4] {len(assets)} Assets verarbeiten ...")
 
-        for index, asset in enumerate(assets[:max_assets]):
+        for index, asset in enumerate(assets_to_process):
             try:
                 aid = int(asset.get("id") or 0)
             except (TypeError, ValueError):
@@ -940,8 +1018,11 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 log(f"      - {aid} {type_name}: übersprungen (Ausrüstung)")
                 continue
 
-            asset_log.append({"id": aid, "type": type_name,
-                              "type_id": type_id, "name": label})
+            asset_entry = {"id": aid, "type": type_name,
+                           "type_id": type_id, "name": label}
+            if asset.get("_hearthands_override"):
+                asset_entry["pose_override"] = "hearthands:woman_rig"
+            asset_log.append(asset_entry)
             dl = api.download_asset(client, aid)
             if dl.data is None:
                 skipped.append({
@@ -1059,9 +1140,25 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 clothing_kind_by_file[rel_comp] = "composited"
 
     # Echte Koerperteil-Meshes (Typ 27-31) den Rig-Teilen zuordnen
+    # Wenn hearthands einen Slot erzwungen hat, duerfen alte Fremd-Meshes
+    # dieses Slots nicht mit den Woman-Segmenten vermischt werden.
+    for type_id, woman_asset_id in forced_woman_asset_ids.items():
+        if not any(int(mp.get("type_id") or 0) == type_id
+                   and int(mp.get("asset_id") or 0) == woman_asset_id
+                   for mp in mesh_parts):
+            label = WOMAN_BODY_ASSETS[type_id][1]
+            warnings.append(
+                f"hearthands: {label} (Asset {woman_asset_id}) konnte nicht "
+                "als Mesh geladen werden; der bisherige Avatar-Koerper wird "
+                "nicht uebernommen, der Slot faellt auf den R15-Standard zurueck.")
+
     body_groups: Dict[str, list] = {}
     for mesh_part in mesh_parts:
-        rig_name = BODY_PART_TYPES.get(int(mesh_part["type_id"]))
+        type_id = int(mesh_part["type_id"])
+        forced_id = forced_woman_asset_ids.get(type_id)
+        if forced_id is not None and int(mesh_part.get("asset_id") or 0) != forced_id:
+            continue
+        rig_name = BODY_PART_TYPES.get(type_id)
         if rig_name is not None:
             body_groups.setdefault(rig_name, []).append(mesh_part)
 
@@ -1209,7 +1306,9 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
     # ueberhaupt keine Koerperteile ausgeruestet sind (dann kommt der komplette
     # Koerper aus dem exakten R15-Standard, ohne geschaetzte Quader).
     use_r15_rig = (avatar_rig.has_rig_attachments(r15_segments_by_part, head_mesh)
-                   or not body_replacements)
+                   or not body_replacements
+                   or str(render_cfg.get("pose") or "").strip().casefold()
+                   == HEARTHANDS_POSE_NAME)
     rig_avatar = avatar_rig.assemble_r15_rig(
         r15_segments_by_part,
         head_mesh,
@@ -1674,6 +1773,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             "pose": pose_info["name"],
             "pose_aktiv": bool(pose_info["aktiv"]),
             "pose_details": pose_info["details"],
+            "pose_hand_form": pose_info.get("hand_form"),
             # Bei Emote-Posen: welche Asset-ID, welcher Frame, welche Regeln.
             "pose_emote": pose_info.get("emote"),
             # Oberkante des Kopfes (ohne Accessoires) - Bezug fuer den

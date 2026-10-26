@@ -168,7 +168,8 @@ def test_repo_posen_laden_und_haben_beispiele():
     assert {"Winken", "Helden_Pose", "Siegerfaust", "Kampfstellung",
             "Superhelden_Landung", "Sprung_Action", "Arme_Verschraenkt",
             "Denker", "Peace_Pose", "Tanz_Freeze", "Flieger",
-            "Laessig_Entspannt"} <= set(poses)
+            "Laessig_Entspannt", "hearthands"} <= set(poses)
+    assert poses["hearthands"]["hand_form"] == "heart"
     assert "T_Pose" not in poses and "Laufen" not in poses
     for name, entry in poses.items():
         assert isinstance(entry["beschreibung"], str)
@@ -198,6 +199,13 @@ def test_zu_grosse_verschiebung_wird_gemeldet(tmp_path):
         '[Kaputt.kopf]\n'
         'hoch_studs = 99\n', encoding="utf-8")
     with pytest.raises(avatar_pose.PoseError, match="hoch_studs"):
+        avatar_pose.load_poses(str(path))
+
+
+def test_unbekannte_handform_wird_abgelehnt(tmp_path):
+    path = tmp_path / "Posen.toml"
+    path.write_text('[Kaputt]\nhand_form = "clap"\n', encoding="utf-8")
+    with pytest.raises(avatar_pose.PoseError, match="hand_form"):
         avatar_pose.load_poses(str(path))
 
 
