@@ -632,3 +632,54 @@ vom_koerper_weg_grad = 10
 
 [Flieger.linker_unterarm]
 ellbogen_beugen_grad = 10
+
+
+# -----------------------------------------------------------------------------
+#  hearthands – beide Hände vor der Brust formen gemeinsam ein Herz
+#  Für eine saubere Silhouette wird nur der Oberkörper eng gerahmt. Die
+#  Pipeline lädt bei dieser Pose nötigenfalls das offizielle Woman-Rig für
+#  Torso und Arme nach; die hand_form-Deformation biegt Daumen/Finger weich.
+# -----------------------------------------------------------------------------
+[hearthands]
+beschreibung = "Beide Hände vor der Brust formen ein Herz, Ellbogen nach außen"
+sichtbar_oben_prozent = 8
+sichtbar_unten_prozent = -10
+kamera_abstand_studs = -0.5
+avatar_hoch_studs = 0
+hand_form = "heart"
+
+[hearthands.oberer_torso]
+nach_vorne_beugen_grad = -2
+
+[hearthands.kopf]
+nicken_grad = 4
+
+[hearthands.linker_oberarm]
+vor_hoch_schwingen_grad = 60
+vom_koerper_weg_grad = 15
+laengs_drehung_grad = -30
+
+[hearthands.linker_unterarm]
+ellbogen_beugen_grad = 60
+laengs_drehung_grad = -60
+seitlich_nach_aussen_studs = -0.18
+
+[hearthands.linke_hand]
+handgelenk_vor_beugen_grad = 12
+handgelenk_nach_aussen_grad = -12
+laengs_drehung_grad = 14
+
+[hearthands.rechter_oberarm]
+vor_hoch_schwingen_grad = 60
+vom_koerper_weg_grad = 15
+laengs_drehung_grad = 30
+
+[hearthands.rechter_unterarm]
+ellbogen_beugen_grad = 60
+laengs_drehung_grad = 60
+seitlich_nach_aussen_studs = -0.18
+
+[hearthands.rechte_hand]
+handgelenk_vor_beugen_grad = 12
+handgelenk_nach_aussen_grad = -12
+laengs_drehung_grad = -14

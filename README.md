@@ -162,7 +162,16 @@ geloggt – der Render bricht nie ab. Accessoires folgen automatisch – **Ausna
 Asset-Typ 19) wird gar nicht erst geladen.** Enthalten sind viele GFX-Posen,
 z. B. `Helden_Pose`, `Siegerfaust`, `Kampfstellung`, `Superhelden_Landung`,
 `Sprung_Action`, `Arme_Verschraenkt`, `Denker`, `Peace_Pose`, `Tanz_Freeze`,
-`Flieger` und `Winken`.
+`Flieger`, `Winken` und `hearthands`.
+
+**`hearthands`** formt die Hände vor der Brust zu einem Herz. Falls Torso oder
+Arme nicht bereits aus dem Roblox-„Woman“-Rig stammen, lädt die Pose gezielt
+`Woman Torso`, `Woman Right Arm` und `Woman Left Arm` nach (die Arm-Assets
+enthalten Oberarm, Unterarm und Hand); fremde Segmente dieser Slots werden
+nicht mit dem Woman-Rig vermischt. Da R15-Hände keine einzelnen Finger-Bones
+haben, verformt eine glatte Mesh-Cage die Finger-/Daumenkanten nach der
+Wrist-Rotation zum Herz. Die Posen-Definition steht in `Posen.toml` und wird
+mit `pose = "hearthands"` aktiviert.
 
 ## Änderungen landen ohne Pull Request in `main`
 

@@ -542,7 +542,8 @@ def normalize_pose(pose: Any, name: str = "Pose") -> Dict[str, Dict[str, Any]]:
         raise PoseError(f"Pose '{name}' muss eine Tabelle sein.")
     normalized: Dict[str, Dict[str, Any]] = {}
     for part, spec in pose.items():
-        if part in ("beschreibung", "description") or part in POSE_SETTING_DEFAULTS:
+        if (part in ("beschreibung", "description", "hand_form")
+                or part in POSE_SETTING_DEFAULTS):
             continue
         if isinstance(spec, dict) and "felder" in spec:
             # Bereits normalisiert (z. B. aus load_poses) - unveraendert durchreichen.
@@ -582,6 +583,22 @@ def normalize_settings(table: Dict[str, Any], name: str = "Pose") -> Dict[str, f
     return settings
 
 
+def _normalize_hand_form(value: Any, name: str) -> Optional[str]:
+    """Validiert die optionale, pose-spezifische Hand-Deformation."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise PoseError(f"Pose '{name}'.hand_form muss Text sein.")
+    form = value.strip().lower()
+    if form in ("", "none"):
+        return None
+    if form != "heart":
+        raise PoseError(
+            f"Pose '{name}'.hand_form: unbekannte Form {value!r}; "
+            "erlaubt ist aktuell nur 'heart'.")
+    return form
+
+
 def load_poses(path: str) -> Dict[str, Dict[str, Any]]:
     """Laedt alle Posen aus ``Posen.toml`` (Name -> {beschreibung, teile})."""
     if not os.path.isfile(path):
@@ -612,6 +629,7 @@ def load_poses(path: str) -> Dict[str, Dict[str, Any]]:
             "beschreibung": description,
             "teile": normalize_pose(table, name),
             "einstellungen": normalize_settings(table, name),
+            "hand_form": _normalize_hand_form(table.get("hand_form"), name),
         }
     return poses
 
@@ -824,6 +842,80 @@ def _motor_is_active(motor: Any) -> bool:
     return False
 
 
+def deform_hand_to_heart(vertices: Sequence[Point], wrist: Point,
+                         side: str) -> List[Point]:
+    """Biegt den Handruecken/Fingerbereich in eine halbe Herzform.
+
+    R15-Haende haben keine einzelnen Finger-Bones. Die Woman-Haende werden
+    deshalb nach der normalen Wrist-Rotation mit einer sanften Cage-
+    Deformation geformt: die fingerseitige Innenkante zieht zur Mitte, die
+    Fingerkante bekommt eine obere Rundung und die Daumenkante klappt zur
+    unteren Herzspitze. Der Handwurzelbereich bleibt nahezu unveraendert.
+
+    ``vertices`` und ``wrist`` liegen bereits im finalen Welt-Raum. Das macht
+    die Deformation unabhaengig von der konkreten Woman-Mesh-Skalierung und
+    erhaelt die vorhandenen Meshes/UVs statt sie durch eine Icon-Geometrie zu
+    ersetzen.
+    """
+    if not vertices:
+        return []
+    side_name = str(side).lower()
+    inward = (1.0, 0.0, 0.0) if side_name.startswith("left") else (-1.0, 0.0, 0.0)
+
+    def dot(a: Sequence[float], b: Sequence[float]) -> float:
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+    center = tuple(sum(p[i] for p in vertices) / len(vertices) for i in range(3))
+    forward = _normalize(_sub(center, wrist), (0.0, 0.0, -1.0))
+    # Die Innenachse muss in der Handebene liegen, sonst schiebt ein nach
+    # vorn gerichteter Finger seine Vertices nur um die eigene Laengsachse.
+    inward = _normalize(_sub(inward, _mul(forward, dot(inward, forward))), inward)
+    longitudinal = [dot(_sub(p, wrist), forward) for p in vertices]
+    hand_length = max(longitudinal, default=0.0)
+    if hand_length < 1e-4:
+        return list(vertices)
+    lateral = [dot(_sub(p, wrist), inward) for p in vertices]
+    half_width = max(0.08, max((abs(v) for v in lateral), default=0.0))
+
+    shaped: List[Point] = []
+    for p, along, across in zip(vertices, longitudinal, lateral):
+        t = max(0.0, min(1.0, along / hand_length))
+        progress = _smoothstep((t - 0.24) / 0.68)
+        if progress <= 1e-9:
+            shaped.append(p)
+            continue
+        across_norm = across / half_width
+        # Die dem Koerperzentrum zugewandte Kante ist der Daumen; die andere
+        # Fingerkante wird leicht nach oben gerundet (Herz-Lobus).
+        thumb = _smoothstep((across_norm - 0.18) / 0.62)
+        finger_edge = 1.0 - _smoothstep((across_norm - 0.10) / 0.60)
+        inward_pull = progress * (0.035 + 0.12 * t) * (0.70 + 0.30 * thumb)
+        arch = 0.035 * math.sin(math.pi * t) * finger_edge * progress
+        up_down = progress * (0.11 * finger_edge - 0.15 * thumb) + arch
+        shaped.append((p[0] + inward[0] * inward_pull,
+                       p[1] + up_down,
+                       p[2] - 0.045 * progress))
+    return shaped
+
+
+def _mesh_normals(positions: Sequence[Point],
+                  faces: Sequence[Tuple[int, int, int]]) -> List[Point]:
+    """Berechnet geglaettete Vertex-Normalen nach einer nichtlinearen Deformation."""
+    accumulated = [[0.0, 0.0, 0.0] for _ in positions]
+    for a, b, c in faces:
+        if min(a, b, c) < 0 or max(a, b, c) >= len(positions):
+            continue
+        ab = _sub(positions[b], positions[a])
+        ac = _sub(positions[c], positions[a])
+        normal = (ab[1] * ac[2] - ab[2] * ac[1],
+                  ab[2] * ac[0] - ab[0] * ac[2],
+                  ab[0] * ac[1] - ab[1] * ac[0])
+        for index in (a, b, c):
+            for axis in range(3):
+                accumulated[index][axis] += normal[axis]
+    return [_normalize(n, (0.0, 1.0, 0.0)) for n in accumulated]
+
+
 class PoseContext:
     """Wendet eine (bereits validierte) Pose auf Welt-Meshes an.
 
@@ -837,12 +929,17 @@ class PoseContext:
     def __init__(self, pose: Dict[str, Dict[str, Any]],
                  joints: Dict[str, Point],
                  settings: Optional[Dict[str, float]] = None,
-                 rig: Any = None):
+                 rig: Any = None,
+                 hand_form: Optional[str] = None):
         # ``pose`` darf roh (sprechende Felder), normalisiert oder mit
         # ``motor``-CFrames (Emotes) sein.
         self.rig = rig
         self.pose = normalize_pose(pose) if pose else {}
         self.settings = {**POSE_SETTING_DEFAULTS, **(settings or {})}
+        form = str(hand_form or "").strip().lower()
+        if form not in ("", "none", "heart"):
+            raise PoseError(f"Unbekannte Handform {hand_form!r}; erwartet 'heart'.")
+        self.hand_form = None if form in ("", "none") else form
         self.joints = self._resolve_joints(joints)
         self.avatar_offset: Vec3 = (0.0, float(self.settings["avatar_hoch_studs"]), 0.0)
         self.active = (
@@ -1044,6 +1141,7 @@ class PoseContext:
         positions: List[Vec3] = list(mesh.positions)
         has_normals = len(mesh.normals) == len(mesh.positions)
         normals: List[Vec3] = list(mesh.normals) if has_normals else []
+        deformed_hands = False
         for seg_name, start, end in spans:
             if end <= start:
                 continue
@@ -1057,6 +1155,16 @@ class PoseContext:
                 if has_normals:
                     n = normals[i]
                     normals[i] = _normalize(_mat3_vec(rotation, n), n)
+
+            if self.hand_form == "heart" and seg_name in ("LeftHand", "RightHand"):
+                wrist = _mat4_point(transform, self.joints[BONE_JOINT[bone]])
+                side = "Left" if seg_name == "LeftHand" else "Right"
+                positions[start:end] = deform_hand_to_heart(
+                    positions[start:end], wrist, side)
+                deformed_hands = True
+
+        if deformed_hands and has_normals:
+            normals = _mesh_normals(positions, mesh.faces)
         return MeshData(
             positions=positions,
             normals=normals if has_normals else [],
