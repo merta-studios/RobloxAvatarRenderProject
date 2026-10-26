@@ -105,7 +105,7 @@ drehung_grad = 1
 #     die individuell gewählte Thumbnail-Pose/Kamera – die ausgerüstete Pose
 #     lässt sich aber für jeden Account aus den getragenen Assets ableiten,
 #     weil sie dort als echte Assets gelistet sind.
-pose = "emote:87757463565936"
+pose = "emote:idle"
 
 
 # -----------------------------------------------------------------------------
@@ -154,7 +154,7 @@ emote_datei = ""
 #  automatisch wieder auf false. So rendert es nicht bei jeder kleinen
 #  Änderung erneut – einfach auf true stellen, wenn ein neues Bild gewünscht
 #  ist.
-render_bei_aenderung = false
+render_bei_aenderung = true
 
 # -----------------------------------------------------------------------------
 #  6) Hintergrundbild
