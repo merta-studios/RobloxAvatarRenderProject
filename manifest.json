@@ -1,0 +1,1791 @@
+{
+  "generated_at": "2026-10-26T14:42:28+00:00",
+  "username": "SunsetSiya",
+  "user_id": 9767435332,
+  "avatar_type": "R15",
+  "avatar_source": "https://avatar.roblox.com/v1/users/9767435332/avatar",
+  "dry_run": false,
+  "scales": {
+    "height": 0.9,
+    "width": 0.7,
+    "head": 0.95,
+    "depth": 0.85,
+    "proportion": 0.5,
+    "bodyType": 0.0
+  },
+  "render": {
+    "drehung_grad": 0.0,
+    "pose": "hearthands",
+    "pose_aktiv": true,
+    "pose_details": "oberer_torso: nach_vorne_beugen_grad=-2; linker_oberarm: vor_hoch_schwingen_grad=20, vom_koerper_weg_grad=14, laengs_drehung_grad=-47; linker_unterarm: ellbogen_beugen_grad=90, laengs_drehung_grad=-26; linke_hand: handgelenk_vor_beugen_grad=-75, handgelenk_nach_aussen_grad=-12, laengs_drehung_grad=3; rechter_oberarm: vor_hoch_schwingen_grad=20, vom_koerper_weg_grad=14, laengs_drehung_grad=47; rechter_unterarm: ellbogen_beugen_grad=90, laengs_drehung_grad=26; rechte_hand: handgelenk_vor_beugen_grad=-75, handgelenk_nach_aussen_grad=-12, laengs_drehung_grad=-3; kopf: nicken_grad=4; Kamera/Ausschnitt: sichtbar_oben_prozent=12, sichtbar_unten_prozent=-35, kamera_abstand_studs=-0.75, avatar_hoch_studs=0; dichte Halbherz-Meshes, glatte Armgelenk-Manschetten, geweldete Smooth-Normalen und Subdivision-Shading",
+    "pose_hand_form": "heart",
+    "pose_emote": null,
+    "kopf_oberkante": 4.464,
+    "sichtbar_oben_prozent": 12.0,
+    "sichtbar_unten_prozent": -35.0,
+    "kamera_abstand_studs": -0.75,
+    "avatar_hoch_studs": 0.0,
+    "render_bei_aenderung": true,
+    "hintergrund": {
+      "url": "transparent",
+      "datei": "",
+      "transparent": true,
+      "glossy": false
+    }
+  },
+  "body_colors": {
+    "headColorId": 352,
+    "torsoColorId": 352,
+    "rightArmColorId": 352,
+    "leftArmColorId": 352,
+    "rightLegColorId": 352,
+    "leftLegColorId": 352
+  },
+  "metrics": {
+    "height": 4.458,
+    "height_de": "4,46",
+    "torso_width": 0.928,
+    "head_radius": 0.578,
+    "head_center_y": 3.885,
+    "headless": false,
+    "parts": {
+      "rechts_bein": [
+        0.7,
+        1.969,
+        0.85
+      ],
+      "links_bein": [
+        0.7,
+        1.969,
+        0.85
+      ],
+      "torso": [
+        0.928,
+        1.663,
+        0.716
+      ],
+      "rechts_arm": [
+        0.895,
+        1.702,
+        0.734
+      ],
+      "links_arm": [
+        0.895,
+        1.702,
+        0.734
+      ],
+      "kopf": [
+        1.14,
+        1.146,
+        1.156
+      ]
+    },
+    "posed_parts": {
+      "rechts_bein": {
+        "min": [
+          -0.092,
+          0.0,
+          -0.404
+        ],
+        "max": [
+          0.608,
+          1.969,
+          0.446
+        ]
+      },
+      "links_bein": {
+        "min": [
+          -0.608,
+          0.0,
+          -0.404
+        ],
+        "max": [
+          0.092,
+          1.969,
+          0.446
+        ]
+      },
+      "torso": {
+        "min": [
+          -0.464,
+          1.839,
+          -0.43
+        ],
+        "max": [
+          0.464,
+          3.508,
+          0.305
+        ]
+      },
+      "rechts_arm": {
+        "min": [
+          -0.035,
+          2.38,
+          -0.834
+        ],
+        "max": [
+          0.812,
+          3.16,
+          0.179
+        ]
+      },
+      "links_arm": {
+        "min": [
+          -0.812,
+          2.38,
+          -0.835
+        ],
+        "max": [
+          0.038,
+          3.16,
+          0.179
+        ]
+      },
+      "kopf": {
+        "min": [
+          -0.57,
+          3.304,
+          -0.594
+        ],
+        "max": [
+          0.57,
+          4.468,
+          0.572
+        ]
+      }
+    },
+    "posed_joints": {
+      "unterer_torso": [
+        -0.0,
+        1.608,
+        0.021
+      ],
+      "oberer_torso": [
+        -0.0,
+        2.114,
+        -0.046
+      ],
+      "kopf": [
+        -0.0,
+        3.41,
+        -0.025
+      ],
+      "linker_oberarm": [
+        -0.429,
+        3.04,
+        -0.012
+      ],
+      "linker_unterarm": [
+        -0.649,
+        2.582,
+        -0.28
+      ],
+      "linke_hand": [
+        -0.061,
+        2.901,
+        -0.651
+      ],
+      "rechter_oberarm": [
+        0.429,
+        3.04,
+        -0.012
+      ],
+      "rechter_unterarm": [
+        0.649,
+        2.582,
+        -0.281
+      ],
+      "rechte_hand": [
+        0.064,
+        2.903,
+        -0.663
+      ],
+      "linkes_oberbein": [
+        -0.244,
+        1.835,
+        0.021
+      ],
+      "linkes_unterbein": [
+        -0.244,
+        1.074,
+        0.021
+      ],
+      "linker_fuss": [
+        -0.244,
+        0.217,
+        0.021
+      ],
+      "rechtes_oberbein": [
+        0.244,
+        1.835,
+        0.021
+      ],
+      "rechtes_unterbein": [
+        0.244,
+        1.074,
+        0.021
+      ],
+      "rechter_fuss": [
+        0.244,
+        0.217,
+        0.021
+      ]
+    }
+  },
+  "bbox": {
+    "min": [
+      -1.252,
+      0.0,
+      -0.9
+    ],
+    "max": [
+      1.252,
+      5.154,
+      0.965
+    ]
+  },
+  "parts": [
+    {
+      "name": "rechts_bein",
+      "obj": "parts/rechts_bein.obj",
+      "color": "#c7ac78",
+      "kind": "body",
+      "mesh_source": "generated-box",
+      "smooth": false,
+      "heart_hands": false,
+      "texture": "textures/_comp_rechts_bein.png",
+      "texture_kind": "composited"
+    },
+    {
+      "name": "links_bein",
+      "obj": "parts/links_bein.obj",
+      "color": "#c7ac78",
+      "kind": "body",
+      "mesh_source": "generated-box",
+      "smooth": false,
+      "heart_hands": false,
+      "texture": "textures/_comp_links_bein.png",
+      "texture_kind": "composited"
+    },
+    {
+      "name": "torso",
+      "obj": "parts/torso.obj",
+      "color": "#c7ac78",
+      "kind": "body",
+      "mesh_source": "mesh-asset",
+      "smooth": true,
+      "heart_hands": false,
+      "texture": "textures/_comp_torso.png",
+      "texture_kind": "composited",
+      "asset_id": 86499666,
+      "note": "Echtes Mesh aus RBXM (Mesh-Asset 8997174058), 2 R15-Segmente senkrecht gestapelt (Stand-Pose statt Bind-Pose: UpperTorso, LowerTorso)"
+    },
+    {
+      "name": "rechts_arm",
+      "obj": "parts/rechts_arm.obj",
+      "color": "#c7ac78",
+      "kind": "body",
+      "mesh_source": "mesh-asset",
+      "smooth": true,
+      "heart_hands": true,
+      "texture": "textures/_comp_rechts_arm.png",
+      "texture_kind": "composited",
+      "asset_id": 86499698,
+      "note": "Echtes Mesh aus RBXM (Mesh-Asset 8997173999), 3 R15-Segmente senkrecht gestapelt (Stand-Pose statt Bind-Pose: RightUpperArm, RightLowerArm, RightHand)"
+    },
+    {
+      "name": "links_arm",
+      "obj": "parts/links_arm.obj",
+      "color": "#c7ac78",
+      "kind": "body",
+      "mesh_source": "mesh-asset",
+      "smooth": true,
+      "heart_hands": true,
+      "texture": "textures/_comp_links_arm.png",
+      "texture_kind": "composited",
+      "asset_id": 86499716,
+      "note": "Echtes Mesh aus RBXM (Mesh-Asset 8997174089), 3 R15-Segmente senkrecht gestapelt (Stand-Pose statt Bind-Pose: LeftUpperArm, LeftLowerArm, LeftHand)"
+    },
+    {
+      "name": "kopf_mesh",
+      "obj": "parts/kopf_mesh.obj",
+      "color": "#c7ac78",
+      "kind": "body",
+      "mesh_source": "mesh-asset",
+      "smooth": true,
+      "texture": "textures/_comp_head.png",
+      "texture_kind": "composited",
+      "asset_id": 118322809032056,
+      "note": "Echtes Kopf-Mesh des Avatars (2620 Faces, Mesh-BBox 1,200x1,206x1,217, Zentrum 0,00/0,00/0,00, RBXM-Groesse 1,000x1,000x1,000 Studs)"
+    },
+    {
+      "name": "Handle (11913660)",
+      "obj": "parts/accessoire_11711210_Handle.obj",
+      "color": "#dff4ff",
+      "kind": "accessory",
+      "mesh_source": "mesh-asset",
+      "smooth": true,
+      "asset_id": 11913660,
+      "asset_type": "HairAccessory",
+      "note": "Haare: exakt per 'HairAttachment' verschweisst (2,48x1,22x1,24 Studs)",
+      "mode": "weld",
+      "ancestry": "SpecialMesh/Part/Accessory",
+      "rbxm_class": "SpecialMesh",
+      "mesh_scale": [
+        1.05,
+        0.95,
+        1.05
+      ],
+      "handle_atts": {
+        "HairAttachment": [
+          0.0,
+          0.4,
+          -0.1
+        ]
+      },
+      "raw_size": [
+        2.477,
+        1.217,
+        1.244
+      ],
+      "rbxm_size": [
+        2.1,
+        0.95,
+        1.05
+      ],
+      "texture": "textures/11913597.png",
+      "texture_kind": "mesh_surface"
+    },
+    {
+      "name": "Handle (301820310)",
+      "obj": "parts/accessoire_304115907_Handle.obj",
+      "color": "#dff4ff",
+      "kind": "accessory",
+      "mesh_source": "mesh-asset",
+      "smooth": true,
+      "asset_id": 301820310,
+      "asset_type": "FaceAccessory",
+      "note": "Gesichts-Accessoire: exakt per 'FaceFrontAttachment' verschweisst (1,24x0,37x0,90 Studs)",
+      "mode": "weld",
+      "ancestry": "SpecialMesh/Part/Accessory",
+      "rbxm_class": "SpecialMesh",
+      "mesh_scale": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "handle_atts": {
+        "FaceFrontAttachment": [
+          0.0,
+          -0.2,
+          -0.4
+        ]
+      },
+      "raw_size": [
+        1.237,
+        0.368,
+        0.896
+      ],
+      "rbxm_size": [
+        0.665,
+        0.5,
+        0.85
+      ],
+      "texture": "textures/304115997.png",
+      "texture_kind": "mesh_surface"
+    },
+    {
+      "name": "Handle (12382955238)",
+      "obj": "parts/accessoire_12382506215_Handle.obj",
+      "color": "#dff4ff",
+      "kind": "accessory",
+      "mesh_source": "mesh-asset",
+      "smooth": true,
+      "asset_id": 12382955238,
+      "asset_type": "BackAccessory",
+      "note": "Ruecken-Accessoire: exakt per 'BodyBackAttachment' verschweisst (2,50x0,96x0,90 Studs)",
+      "mode": "weld",
+      "ancestry": "SpecialMesh/Part/Accessory",
+      "rbxm_class": "SpecialMesh",
+      "mesh_scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "handle_atts": {
+        "BodyBackAttachment": [
+          0.0,
+          -0.454,
+          0.317
+        ]
+      },
+      "raw_size": [
+        2.505,
+        0.958,
+        0.901
+      ],
+      "rbxm_size": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "texture": "textures/_comp_acc_12382506215.png",
+      "texture_kind": "mesh_surface"
+    },
+    {
+      "name": "Handle (129817057443385)",
+      "obj": "parts/accessoire_97606209564286_Handle.obj",
+      "color": "#dff4ff",
+      "kind": "accessory",
+      "mesh_source": "mesh-asset",
+      "smooth": true,
+      "asset_id": 129817057443385,
+      "asset_type": "Hat",
+      "note": "Hut: exakt per 'HatAttachment' verschweisst (1,68x2,06x1,58 Studs)",
+      "mode": "weld",
+      "ancestry": "SpecialMesh/Part/Accessory",
+      "rbxm_class": "SpecialMesh",
+      "mesh_scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "handle_atts": {
+        "HatAttachment": [
+          -0.206,
+          0.349,
+          0.116
+        ]
+      },
+      "raw_size": [
+        1.679,
+        2.06,
+        1.583
+      ],
+      "rbxm_size": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "texture": "textures/114024617093120.png",
+      "texture_kind": "mesh_surface"
+    },
+    {
+      "name": "Handle (138631202472360)",
+      "obj": "parts/accessoire_140189534311609_Handle.obj",
+      "color": "#dff4ff",
+      "kind": "accessory",
+      "mesh_source": "mesh-asset",
+      "smooth": true,
+      "asset_id": 138631202472360,
+      "asset_type": "ShoulderAccessory",
+      "note": "Schulter-Accessoire: exakt per 'LeftShoulderAttachment' verschweisst (0,57x0,89x0,49 Studs)",
+      "mode": "weld",
+      "ancestry": "SpecialMesh/Part/Accessory",
+      "rbxm_class": "SpecialMesh",
+      "mesh_scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "handle_atts": {
+        "LeftShoulderAttachment": [
+          0.263,
+          0.28,
+          -0.002
+        ]
+      },
+      "raw_size": [
+        0.566,
+        0.89,
+        0.49
+      ],
+      "rbxm_size": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "texture": "textures/134687289646208.png",
+      "texture_kind": "mesh_surface"
+    }
+  ],
+  "textures": [
+    {
+      "asset_id": 11913597,
+      "name": "Handle",
+      "asset_type": "HairAccessory",
+      "file": "textures/11913597.png",
+      "type_id": 41
+    },
+    {
+      "asset_id": 304115997,
+      "name": "Handle",
+      "asset_type": "FaceAccessory",
+      "file": "textures/304115997.png",
+      "type_id": 42
+    },
+    {
+      "asset_id": 12352852567,
+      "name": "Handle",
+      "asset_type": "BackAccessory",
+      "file": "textures/12352852567.png",
+      "type_id": 46
+    },
+    {
+      "asset_id": 75721828848066,
+      "name": "Pants",
+      "asset_type": "Pants",
+      "file": "textures/75721828848066.png",
+      "type_id": 12
+    },
+    {
+      "asset_id": 140063750269184,
+      "name": "Handle",
+      "asset_type": "TShirtAccessory",
+      "file": "textures/140063750269184.png",
+      "type_id": 64
+    },
+    {
+      "asset_id": 71296147753643,
+      "name": "Shirt Graphic",
+      "asset_type": "TShirt",
+      "file": "textures/71296147753643.png",
+      "type_id": 2
+    },
+    {
+      "asset_id": 82749037104872,
+      "name": "Mesh",
+      "asset_type": "DynamicHead",
+      "file": "textures/82749037104872.png",
+      "type_id": 79
+    },
+    {
+      "asset_id": 114024617093120,
+      "name": "Handle",
+      "asset_type": "Hat",
+      "file": "textures/114024617093120.png",
+      "type_id": 8
+    },
+    {
+      "asset_id": 77075509713935,
+      "name": "Shirt",
+      "asset_type": "Shirt",
+      "file": "textures/77075509713935.png",
+      "type_id": 11
+    },
+    {
+      "asset_id": 134687289646208,
+      "name": "Handle",
+      "asset_type": "ShoulderAccessory",
+      "file": "textures/134687289646208.png",
+      "type_id": 44
+    }
+  ],
+  "skipped": [],
+  "ignored": [
+    {
+      "asset_id": 2510235063,
+      "name": "Rthro Idle",
+      "asset_type": "IdleAnimation"
+    },
+    {
+      "asset_id": 14618207727,
+      "name": "Default Mood",
+      "asset_type": "MoodAnimation"
+    },
+    {
+      "asset_id": 18538153691,
+      "name": "adidas Sports - Jump",
+      "asset_type": "JumpAnimation"
+    },
+    {
+      "asset_id": 18538164337,
+      "name": "adidas Sports - Fall",
+      "asset_type": "FallAnimation"
+    },
+    {
+      "asset_id": 75183215343859,
+      "name": "adidas aura - walk",
+      "asset_type": "WalkAnimation"
+    },
+    {
+      "asset_id": 119007025452432,
+      "name": "adidas aura - swim",
+      "asset_type": "SwimAnimation"
+    },
+    {
+      "asset_id": 123695349157584,
+      "name": "adidas Community Animation Pack",
+      "asset_type": "ClimbAnimation"
+    },
+    {
+      "asset_id": 123973978164540,
+      "name": "adidas aura - run",
+      "asset_type": "RunAnimation"
+    }
+  ],
+  "assets": [
+    {
+      "id": 11913660,
+      "type": "HairAccessory",
+      "type_id": 41,
+      "name": "Black Pigtails"
+    },
+    {
+      "id": 86499666,
+      "type": "Torso",
+      "type_id": 27,
+      "name": "Woman Torso"
+    },
+    {
+      "id": 86499698,
+      "type": "RightArm",
+      "type_id": 28,
+      "name": "Woman Right Arm"
+    },
+    {
+      "id": 86499716,
+      "type": "LeftArm",
+      "type_id": 29,
+      "name": "Woman Left Arm"
+    },
+    {
+      "id": 301820310,
+      "type": "FaceAccessory",
+      "type_id": 42,
+      "name": "Lin's Glasses"
+    },
+    {
+      "id": 12382955238,
+      "type": "BackAccessory",
+      "type_id": 46,
+      "name": "White Angel Wings"
+    },
+    {
+      "id": 88099036417192,
+      "type": "Pants",
+      "type_id": 12,
+      "name": "White Sakura ♡"
+    },
+    {
+      "id": 100723873225220,
+      "type": "TShirtAccessory",
+      "type_id": 64,
+      "name": "Holdable Money Stack [L]"
+    },
+    {
+      "id": 103667915827560,
+      "type": "TShirt",
+      "type_id": 2,
+      "name": "belly"
+    },
+    {
+      "id": 118322809032056,
+      "type": "DynamicHead",
+      "type_id": 79,
+      "name": "Silly Face - Dynamischer Kopf"
+    },
+    {
+      "id": 129817057443385,
+      "type": "Hat",
+      "type_id": 8,
+      "name": "propeller hat w/ rainbow lollipop"
+    },
+    {
+      "id": 137902478383071,
+      "type": "Shirt",
+      "type_id": 11,
+      "name": "Cute Cat Alien Kawaii Shirt👽🐈‍⬛✨️"
+    },
+    {
+      "id": 138631202472360,
+      "type": "ShoulderAccessory",
+      "type_id": 44,
+      "name": "Cute Sleeping Cat Kitten - White [3.0]"
+    }
+  ],
+  "fehlende_koerperteile": [
+    "LeftLeg",
+    "RightLeg"
+  ],
+  "layered_ausgelassen": [
+    {
+      "asset_id": 100723873225220,
+      "name": "Handle",
+      "asset_type": "TShirtAccessory",
+      "reason": "Layered Clothing (WrapLayer) folgt der Pose nicht und wird ausgelassen (layered_clothing = 'auslassen')"
+    }
+  ],
+  "warnings": [
+    "Nicht ausgeruestete Koerperteile (LeftLeg, RightLeg): Roblox setzt dafuer den Standard-Avatar ein - uebernommen wurde der exakte R15-Standard-Blocky (BlockyCharacter.fbx: Geometrie, Gelenke und Accessoire-Anker).",
+    "Rig-Audit: Segment 'LeftUpperLeg': nicht ausgeruestet - R15-Standard-Avatar (Blocky, exakte RigAttachments aus BlockyCharacter.fbx) eingesetzt.",
+    "Rig-Audit: Segment 'LeftLowerLeg': nicht ausgeruestet - R15-Standard-Avatar (Blocky, exakte RigAttachments aus BlockyCharacter.fbx) eingesetzt.",
+    "Rig-Audit: Segment 'LeftFoot': nicht ausgeruestet - R15-Standard-Avatar (Blocky, exakte RigAttachments aus BlockyCharacter.fbx) eingesetzt.",
+    "Rig-Audit: Segment 'RightUpperLeg': nicht ausgeruestet - R15-Standard-Avatar (Blocky, exakte RigAttachments aus BlockyCharacter.fbx) eingesetzt.",
+    "Rig-Audit: Segment 'RightLowerLeg': nicht ausgeruestet - R15-Standard-Avatar (Blocky, exakte RigAttachments aus BlockyCharacter.fbx) eingesetzt.",
+    "Rig-Audit: Segment 'RightFoot': nicht ausgeruestet - R15-Standard-Avatar (Blocky, exakte RigAttachments aus BlockyCharacter.fbx) eingesetzt.",
+    "Rig aus den echten Mesh-Groessen neu aufgebaut (Kopf 1,16 Studs, Torso 0,93 breit) - keine achsweise Streckung der Koerperteile mehr.",
+    "Kopf wurde durch das echte Head-Mesh des Avatars ersetzt.",
+    "1 Layered-Clothing-Accessoires nicht gerendert (layered_clothing = 'auslassen'): Handle"
+  ],
+  "segment_spans": {
+    "torso": [
+      [
+        "UpperTorso",
+        0,
+        402
+      ],
+      [
+        "LowerTorso",
+        402,
+        584
+      ]
+    ],
+    "rechts_arm": [
+      [
+        "RightUpperArm",
+        0,
+        271
+      ],
+      [
+        "RightLowerArm",
+        271,
+        543
+      ],
+      [
+        "RightHand",
+        543,
+        993
+      ]
+    ],
+    "links_arm": [
+      [
+        "LeftUpperArm",
+        0,
+        270
+      ],
+      [
+        "LeftLowerArm",
+        270,
+        541
+      ],
+      [
+        "LeftHand",
+        541,
+        991
+      ]
+    ],
+    "rechts_bein": [
+      [
+        "RightUpperLeg",
+        0,
+        1032
+      ],
+      [
+        "RightLowerLeg",
+        1032,
+        2028
+      ],
+      [
+        "RightFoot",
+        2028,
+        2364
+      ]
+    ],
+    "links_bein": [
+      [
+        "LeftUpperLeg",
+        0,
+        1032
+      ],
+      [
+        "LeftLowerLeg",
+        1032,
+        2028
+      ],
+      [
+        "LeftFoot",
+        2028,
+        2364
+      ]
+    ]
+  },
+  "rig_audit": {
+    "joint_spans": {
+      "RightElbowRigAttachment": 0.575,
+      "RightWristRigAttachment": 0.7688,
+      "LeftElbowRigAttachment": 0.5749,
+      "LeftWristRigAttachment": 0.7645,
+      "RightKneeRigAttachment": 0.7603,
+      "RightAnkleRigAttachment": 0.8576,
+      "LeftKneeRigAttachment": 0.7603,
+      "LeftAnkleRigAttachment": 0.8576
+    },
+    "hinweise": [
+      "Segment 'LeftUpperLeg': nicht ausgeruestet - R15-Standard-Avatar (Blocky, exakte RigAttachments aus BlockyCharacter.fbx) eingesetzt.",
+      "Segment 'LeftLowerLeg': nicht ausgeruestet - R15-Standard-Avatar (Blocky, exakte RigAttachments aus BlockyCharacter.fbx) eingesetzt.",
+      "Segment 'LeftFoot': nicht ausgeruestet - R15-Standard-Avatar (Blocky, exakte RigAttachments aus BlockyCharacter.fbx) eingesetzt.",
+      "Segment 'RightUpperLeg': nicht ausgeruestet - R15-Standard-Avatar (Blocky, exakte RigAttachments aus BlockyCharacter.fbx) eingesetzt.",
+      "Segment 'RightLowerLeg': nicht ausgeruestet - R15-Standard-Avatar (Blocky, exakte RigAttachments aus BlockyCharacter.fbx) eingesetzt.",
+      "Segment 'RightFoot': nicht ausgeruestet - R15-Standard-Avatar (Blocky, exakte RigAttachments aus BlockyCharacter.fbx) eingesetzt."
+    ],
+    "gelenke": {
+      "LowerTorso": [
+        -0.0,
+        1.608,
+        0.021
+      ],
+      "UpperTorso": [
+        -0.0,
+        2.114,
+        -0.046
+      ],
+      "RightUpperArm": [
+        0.429,
+        3.038,
+        0.021
+      ],
+      "RightLowerArm": [
+        0.709,
+        2.539,
+        0.077
+      ],
+      "RightHand": [
+        0.975,
+        1.856,
+        -0.153
+      ],
+      "LeftUpperArm": [
+        -0.429,
+        3.038,
+        0.021
+      ],
+      "LeftLowerArm": [
+        -0.709,
+        2.539,
+        0.077
+      ],
+      "LeftHand": [
+        -0.962,
+        1.856,
+        -0.153
+      ],
+      "RightUpperLeg": [
+        0.244,
+        1.835,
+        0.021
+      ],
+      "RightLowerLeg": [
+        0.244,
+        1.074,
+        0.021
+      ],
+      "RightFoot": [
+        0.244,
+        0.217,
+        0.021
+      ],
+      "LeftUpperLeg": [
+        -0.244,
+        1.835,
+        0.021
+      ],
+      "LeftLowerLeg": [
+        -0.244,
+        1.074,
+        0.021
+      ],
+      "LeftFoot": [
+        -0.244,
+        0.217,
+        0.021
+      ],
+      "Head": [
+        -0.0,
+        3.408,
+        0.021
+      ]
+    },
+    "segment_rohdaten": {
+      "UpperTorso": {
+        "class": "MeshPart",
+        "raw_mesh_size": [
+          1.3034,
+          1.6987,
+          0.842
+        ],
+        "rbxm_size": [
+          1.3034,
+          1.6987,
+          0.842
+        ],
+        "mesh_size": [
+          0.9124,
+          1.5288,
+          0.7157
+        ],
+        "attachments": {
+          "WaistRigAttachment": [
+            0.0,
+            -0.6225,
+            -0.0025
+          ],
+          "NeckRigAttachment": [
+            0.0,
+            0.6711,
+            0.064
+          ],
+          "RightShoulderRigAttachment": [
+            0.4293,
+            0.3015,
+            0.064
+          ],
+          "LeftShoulderRigAttachment": [
+            -0.4293,
+            0.3015,
+            0.064
+          ],
+          "RightCollarAttachment": [
+            0.4293,
+            0.5184,
+            0.064
+          ],
+          "LeftCollarAttachment": [
+            -0.4293,
+            0.5184,
+            0.064
+          ],
+          "BodyFrontAttachment": [
+            0.0,
+            -0.2289,
+            -0.2799
+          ],
+          "BodyBackAttachment": [
+            0.0,
+            -0.2289,
+            0.3144
+          ],
+          "NeckAttachment": [
+            0.0,
+            0.6711,
+            0.064
+          ]
+        }
+      },
+      "LowerTorso": {
+        "class": "MeshPart",
+        "raw_mesh_size": [
+          1.3261,
+          0.4075,
+          0.7185
+        ],
+        "rbxm_size": [
+          1.3261,
+          0.4075,
+          0.7185
+        ],
+        "mesh_size": [
+          0.9283,
+          0.3668,
+          0.6107
+        ],
+        "attachments": {
+          "RootRigAttachment": [
+            -0.0,
+            -0.4139,
+            0.0206
+          ],
+          "LeftHipRigAttachment": [
+            -0.2445,
+            -0.1872,
+            0.0206
+          ],
+          "WaistRigAttachment": [
+            -0.0,
+            0.0925,
+            -0.0459
+          ],
+          "RightHipRigAttachment": [
+            0.2445,
+            -0.1872,
+            0.0206
+          ],
+          "WaistFrontAttachment": [
+            -0.0,
+            -0.1894,
+            -0.3007
+          ],
+          "WaistCenterAttachment": [
+            -0.0,
+            -0.1398,
+            -0.0115
+          ],
+          "WaistBackAttachment": [
+            -0.0,
+            -0.1037,
+            0.2986
+          ]
+        }
+      },
+      "RightUpperArm": {
+        "class": "MeshPart",
+        "raw_mesh_size": [
+          0.7489,
+          0.8883,
+          0.5844
+        ],
+        "rbxm_size": [
+          0.7489,
+          0.8883,
+          0.5844
+        ],
+        "mesh_size": [
+          0.5243,
+          0.7995,
+          0.4968
+        ],
+        "attachments": {
+          "RightShoulderRigAttachment": [
+            -0.1673,
+            0.2961,
+            0.0011
+          ],
+          "RightElbowRigAttachment": [
+            0.1121,
+            -0.2032,
+            0.0575
+          ],
+          "RightShoulderAttachment": [
+            0.0159,
+            0.3444,
+            0.0011
+          ]
+        }
+      },
+      "RightLowerArm": {
+        "class": "MeshPart",
+        "raw_mesh_size": [
+          0.6623,
+          0.9025,
+          0.589
+        ],
+        "rbxm_size": [
+          0.6623,
+          0.9025,
+          0.589
+        ],
+        "mesh_size": [
+          0.4636,
+          0.8122,
+          0.5006
+        ],
+        "attachments": {
+          "RightElbowRigAttachment": [
+            -0.1312,
+            0.3228,
+            0.0617
+          ],
+          "RightWristRigAttachment": [
+            0.135,
+            -0.3608,
+            -0.1683
+          ]
+        }
+      },
+      "RightHand": {
+        "class": "MeshPart",
+        "raw_mesh_size": [
+          0.546,
+          0.5901,
+          0.534
+        ],
+        "rbxm_size": [
+          0.546,
+          0.5901,
+          0.534
+        ],
+        "mesh_size": [
+          0.3822,
+          0.5311,
+          0.4539
+        ],
+        "attachments": {
+          "RightWristRigAttachment": [
+            -0.0631,
+            0.1501,
+            0.086
+          ],
+          "RightGripAttachment": [
+            0.0121,
+            -0.0974,
+            0.2595
+          ]
+        }
+      },
+      "LeftUpperArm": {
+        "class": "MeshPart",
+        "raw_mesh_size": [
+          0.7489,
+          0.8883,
+          0.5844
+        ],
+        "rbxm_size": [
+          0.7489,
+          0.8883,
+          0.5844
+        ],
+        "mesh_size": [
+          0.5243,
+          0.7995,
+          0.4968
+        ],
+        "attachments": {
+          "LeftShoulderRigAttachment": [
+            0.1673,
+            0.2961,
+            0.0011
+          ],
+          "LeftElbowRigAttachment": [
+            -0.1121,
+            -0.2031,
+            0.0575
+          ],
+          "LeftShoulderAttachment": [
+            -0.0159,
+            0.3444,
+            0.0011
+          ]
+        }
+      },
+      "LeftLowerArm": {
+        "class": "MeshPart",
+        "raw_mesh_size": [
+          0.6623,
+          0.9025,
+          0.589
+        ],
+        "rbxm_size": [
+          0.6623,
+          0.9025,
+          0.589
+        ],
+        "mesh_size": [
+          0.4636,
+          0.8122,
+          0.5006
+        ],
+        "attachments": {
+          "LeftElbowRigAttachment": [
+            0.1312,
+            0.3229,
+            0.0617
+          ],
+          "LeftWristRigAttachment": [
+            -0.1221,
+            -0.3608,
+            -0.1683
+          ]
+        }
+      },
+      "LeftHand": {
+        "class": "MeshPart",
+        "raw_mesh_size": [
+          0.546,
+          0.5901,
+          0.534
+        ],
+        "rbxm_size": [
+          0.546,
+          0.5901,
+          0.534
+        ],
+        "mesh_size": [
+          0.3822,
+          0.5311,
+          0.4539
+        ],
+        "attachments": {
+          "LeftWristRigAttachment": [
+            0.076,
+            0.1501,
+            0.086
+          ],
+          "LeftGripAttachment": [
+            -0.0121,
+            -0.0974,
+            0.2595
+          ]
+        }
+      },
+      "LeftUpperLeg": {
+        "class": "MeshPart",
+        "raw_mesh_size": [
+          1.0,
+          1.2166,
+          0.9999
+        ],
+        "rbxm_size": null,
+        "mesh_size": [
+          0.7,
+          1.0949,
+          0.8499
+        ],
+        "attachments": {
+          "LeftHipRigAttachment": [
+            0.0134,
+            0.4134,
+            -0.0002
+          ],
+          "LeftKneeRigAttachment": [
+            0.0134,
+            -0.3469,
+            -0.0002
+          ]
+        }
+      },
+      "LeftLowerLeg": {
+        "class": "MeshPart",
+        "raw_mesh_size": [
+          1.0,
+          1.1931,
+          1.0
+        ],
+        "rbxm_size": null,
+        "mesh_size": [
+          0.7,
+          1.0738,
+          0.85
+        ],
+        "attachments": {
+          "LeftKneeRigAttachment": [
+            0.0134,
+            0.3553,
+            -0.0002
+          ],
+          "LeftAnkleRigAttachment": [
+            0.0134,
+            -0.5023,
+            -0.0002
+          ]
+        }
+      },
+      "LeftFoot": {
+        "class": "MeshPart",
+        "raw_mesh_size": [
+          1.0,
+          0.3,
+          1.0
+        ],
+        "rbxm_size": null,
+        "mesh_size": [
+          0.7,
+          0.27,
+          0.85
+        ],
+        "attachments": {
+          "LeftAnkleRigAttachment": [
+            0.0134,
+            0.0818,
+            -0.0002
+          ],
+          "LeftFootAttachment": [
+            0.0128,
+            -0.1381,
+            -0.0427
+          ]
+        }
+      },
+      "RightUpperLeg": {
+        "class": "MeshPart",
+        "raw_mesh_size": [
+          1.0,
+          1.2166,
+          0.9999
+        ],
+        "rbxm_size": null,
+        "mesh_size": [
+          0.7,
+          1.0949,
+          0.8499
+        ],
+        "attachments": {
+          "RightHipRigAttachment": [
+            -0.0134,
+            0.4134,
+            -0.0002
+          ],
+          "RightKneeRigAttachment": [
+            -0.0134,
+            -0.3469,
+            -0.0002
+          ]
+        }
+      },
+      "RightLowerLeg": {
+        "class": "MeshPart",
+        "raw_mesh_size": [
+          1.0,
+          1.1931,
+          1.0
+        ],
+        "rbxm_size": null,
+        "mesh_size": [
+          0.7,
+          1.0738,
+          0.85
+        ],
+        "attachments": {
+          "RightKneeRigAttachment": [
+            -0.0134,
+            0.3553,
+            -0.0002
+          ],
+          "RightAnkleRigAttachment": [
+            -0.0134,
+            -0.5023,
+            -0.0002
+          ]
+        }
+      },
+      "RightFoot": {
+        "class": "MeshPart",
+        "raw_mesh_size": [
+          1.0,
+          0.3,
+          1.0
+        ],
+        "rbxm_size": null,
+        "mesh_size": [
+          0.7,
+          0.27,
+          0.85
+        ],
+        "attachments": {
+          "RightAnkleRigAttachment": [
+            -0.0134,
+            0.0818,
+            -0.0002
+          ],
+          "RightFootAttachment": [
+            -0.0128,
+            -0.1381,
+            -0.0427
+          ]
+        }
+      }
+    },
+    "kopf": {
+      "lokale_attachments": {
+        "FaceCenterAttachment": [
+          0.0,
+          -0.002,
+          0.009
+        ],
+        "FaceFrontAttachment": [
+          0.0,
+          -0.002,
+          -0.591
+        ],
+        "HairAttachment": [
+          0.0,
+          0.598,
+          0.009
+        ],
+        "HatAttachment": [
+          0.0,
+          0.598,
+          0.009
+        ],
+        "NeckRigAttachment": [
+          -0.0,
+          -0.502,
+          0.009
+        ]
+      },
+      "textur": {
+        "src": "textures/82749037104872.png",
+        "src_size": [
+          1024,
+          1024
+        ]
+      },
+      "uv_min": [
+        0.006,
+        0.034
+      ],
+      "uv_max": [
+        0.994,
+        0.966
+      ],
+      "front_uv": {
+        "min": [
+          0.006,
+          0.034
+        ],
+        "max": [
+          0.994,
+          0.954
+        ]
+      },
+      "bbox_min": [
+        -0.57,
+        3.312,
+        -0.566
+      ],
+      "bbox_max": [
+        0.57,
+        4.458,
+        0.591
+      ],
+      "attachments": {
+        "FaceCenterAttachment": [
+          -0.0,
+          3.883,
+          0.021
+        ],
+        "FaceFrontAttachment": [
+          -0.0,
+          3.883,
+          -0.549
+        ],
+        "HairAttachment": [
+          -0.0,
+          4.453,
+          0.021
+        ],
+        "HatAttachment": [
+          -0.0,
+          4.453,
+          0.021
+        ]
+      }
+    },
+    "accessoires": [
+      {
+        "label": "Handle",
+        "type": "HairAccessory",
+        "wrap": false,
+        "anchor": "head_top",
+        "mode": "weld",
+        "note": "Haare: exakt per 'HairAttachment' verschweisst (2,48x1,22x1,24 Studs)",
+        "ancestry": "SpecialMesh/Part/Accessory",
+        "raw_size": [
+          2.476707594579503,
+          1.2168903707635903,
+          1.2438824407675
+        ],
+        "bbox_welt": {
+          "min": [
+            -1.236,
+            3.43,
+            -0.57
+          ],
+          "max": [
+            1.241,
+            4.67,
+            0.662
+          ]
+        }
+      },
+      {
+        "label": "Handle",
+        "type": "FaceAccessory",
+        "wrap": false,
+        "anchor": "face_front",
+        "mode": "weld",
+        "note": "Gesichts-Accessoire: exakt per 'FaceFrontAttachment' verschweisst (1,24x0,37x0,90 Studs)",
+        "ancestry": "SpecialMesh/Part/Accessory",
+        "raw_size": [
+          1.2369095005528772,
+          0.36825111298874935,
+          0.8957739999999998
+        ],
+        "bbox_welt": {
+          "min": [
+            -0.618,
+            3.909,
+            -0.638
+          ],
+          "max": [
+            0.618,
+            4.277,
+            0.26
+          ]
+        }
+      },
+      {
+        "label": "Handle",
+        "type": "BackAccessory",
+        "wrap": false,
+        "anchor": "back",
+        "mode": "weld",
+        "note": "Ruecken-Accessoire: exakt per 'BodyBackAttachment' verschweisst (2,50x0,96x0,90 Studs)",
+        "ancestry": "SpecialMesh/Part/Accessory",
+        "raw_size": [
+          2.5047935485543613,
+          0.9583109557628631,
+          0.9010278801408367
+        ],
+        "bbox_welt": {
+          "min": [
+            -1.252,
+            2.457,
+            0.088
+          ],
+          "max": [
+            1.252,
+            3.43,
+            0.965
+          ]
+        }
+      },
+      {
+        "label": "Handle",
+        "type": "Hat",
+        "wrap": false,
+        "anchor": "head_top",
+        "mode": "weld",
+        "note": "Hut: exakt per 'HatAttachment' verschweisst (1,68x2,06x1,58 Studs)",
+        "ancestry": "SpecialMesh/Part/Accessory",
+        "raw_size": [
+          1.6791106603783867,
+          2.0597938638859694,
+          1.583434426784514
+        ],
+        "bbox_welt": {
+          "min": [
+            -0.644,
+            3.117,
+            -0.9
+          ],
+          "max": [
+            1.035,
+            5.154,
+            0.683
+          ]
+        }
+      },
+      {
+        "label": "Handle",
+        "type": "ShoulderAccessory",
+        "wrap": false,
+        "anchor": "shoulders",
+        "mode": "weld",
+        "note": "Schulter-Accessoire: exakt per 'LeftShoulderAttachment' verschweisst (0,57x0,89x0,49 Studs)",
+        "ancestry": "SpecialMesh/Part/Accessory",
+        "raw_size": [
+          0.565528531822872,
+          0.8899964867680761,
+          0.48978719465484305
+        ],
+        "bbox_welt": {
+          "min": [
+            -1.132,
+            2.387,
+            -0.247
+          ],
+          "max": [
+            -0.566,
+            3.284,
+            0.251
+          ]
+        }
+      }
+    ],
+    "segmente": {
+      "LowerTorso": {
+        "bbox_min": [
+          -0.464,
+          1.839,
+          -0.305
+        ],
+        "bbox_max": [
+          0.464,
+          2.205,
+          0.305
+        ]
+      },
+      "UpperTorso": {
+        "bbox_min": [
+          -0.456,
+          1.973,
+          -0.401
+        ],
+        "bbox_max": [
+          0.456,
+          3.501,
+          0.314
+        ]
+      },
+      "RightUpperArm": {
+        "bbox_min": [
+          0.334,
+          2.343,
+          -0.229
+        ],
+        "bbox_max": [
+          0.859,
+          3.142,
+          0.268
+        ]
+      },
+      "RightLowerArm": {
+        "bbox_min": [
+          0.608,
+          1.81,
+          -0.235
+        ],
+        "bbox_max": [
+          1.072,
+          2.622,
+          0.266
+        ]
+      },
+      "RightHand": {
+        "bbox_min": [
+          0.847,
+          1.44,
+          -0.466
+        ],
+        "bbox_max": [
+          1.229,
+          1.971,
+          -0.012
+        ]
+      },
+      "LeftUpperArm": {
+        "bbox_min": [
+          -0.859,
+          2.343,
+          -0.229
+        ],
+        "bbox_max": [
+          -0.334,
+          3.142,
+          0.268
+        ]
+      },
+      "LeftLowerArm": {
+        "bbox_min": [
+          -1.072,
+          1.81,
+          -0.235
+        ],
+        "bbox_max": [
+          -0.608,
+          2.622,
+          0.266
+        ]
+      },
+      "LeftHand": {
+        "bbox_min": [
+          -1.229,
+          1.44,
+          -0.466
+        ],
+        "bbox_max": [
+          -0.847,
+          1.971,
+          -0.012
+        ]
+      },
+      "RightUpperLeg": {
+        "bbox_min": [
+          -0.092,
+          0.874,
+          -0.404
+        ],
+        "bbox_max": [
+          0.608,
+          1.969,
+          0.446
+        ]
+      },
+      "RightLowerLeg": {
+        "bbox_min": [
+          -0.092,
+          0.182,
+          -0.404
+        ],
+        "bbox_max": [
+          0.608,
+          1.256,
+          0.446
+        ]
+      },
+      "RightFoot": {
+        "bbox_min": [
+          -0.092,
+          0.0,
+          -0.404
+        ],
+        "bbox_max": [
+          0.608,
+          0.27,
+          0.446
+        ]
+      },
+      "LeftUpperLeg": {
+        "bbox_min": [
+          -0.608,
+          0.874,
+          -0.404
+        ],
+        "bbox_max": [
+          0.092,
+          1.969,
+          0.446
+        ]
+      },
+      "LeftLowerLeg": {
+        "bbox_min": [
+          -0.608,
+          0.182,
+          -0.404
+        ],
+        "bbox_max": [
+          0.092,
+          1.256,
+          0.446
+        ]
+      },
+      "LeftFoot": {
+        "bbox_min": [
+          -0.608,
+          0.0,
+          -0.404
+        ],
+        "bbox_max": [
+          0.092,
+          0.27,
+          0.446
+        ]
+      },
+      "Head": {
+        "bbox_min": [
+          -0.57,
+          3.312,
+          -0.566
+        ],
+        "bbox_max": [
+          0.57,
+          4.458,
+          0.591
+        ]
+      }
+    }
+  },
+  "stats": {
+    "parts": 11,
+    "body_parts": 6,
+    "body_parts_from_mesh": 3,
+    "accessories": 5,
+    "textures": 10,
+    "skipped": 0,
+    "failed": 0,
+    "ignored_animations": 8,
+    "layered_ausgelassen": 1,
+    "ausruestung_uebersprungen": 0,
+    "assets_seen": 21
+  }
+}
