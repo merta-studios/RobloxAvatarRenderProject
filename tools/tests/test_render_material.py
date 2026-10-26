@@ -676,3 +676,6 @@ def test_shade_smooth_entfernt_importierte_split_normalen():
     assert "customdata_custom_splitnormals_clear" in text
     assert "normals_split_custom_set" in text
     assert "poly.use_smooth = True" in text
+    assert "CATMULL_CLARK" in text
+    assert "Heart Hands Weld" in text
+    assert "part.get(\"heart_hands\")" in text

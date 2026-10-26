@@ -561,6 +561,30 @@ def shade_smooth(obj) -> None:
         pass
 
 
+def add_heart_smoothing(obj) -> None:
+    """Rundet die low-poly Arme der Herzpose geometrisch ab.
+
+    Smooth-Normalen allein koennen die grobe Silhouette der importierten
+    Roblox-Segmente nicht glätten. Ein Weld-Modifier verbindet zuerst die
+    positionsgleichen UV-Vertices, danach erzeugt Catmull-Clark eine glatte
+    Oberfläche. Nur bei ``heart_hands``-Parts, damit andere Posen unveraendert
+    bleiben.
+    """
+    try:
+        weld = obj.modifiers.new(name="Heart Hands Weld", type='WELD')
+        weld.merge_threshold = 0.0001
+    except Exception:  #pragma: no cover - alte Blender-Version
+        weld = None
+    try:
+        subsurf = obj.modifiers.new(name="Heart Hands Smooth", type='SUBSURF')
+        subsurf.subdivision_type = 'CATMULL_CLARK'
+        subsurf.levels = 1
+        subsurf.render_levels = 2
+        subsurf.show_only_control_edges = True
+    except Exception:  #pragma: no cover - alte Blender-Version
+        pass
+
+
 def add_bevel(obj, width: float, segments: int = 2) -> None:
     if width <= 0:
         return
@@ -1760,6 +1784,8 @@ def main() -> int:
         else:
             for poly in obj.data.polygons:
                 poly.use_smooth = False
+        if part.get("heart_hands"):
+            add_heart_smoothing(obj)
         bevel_width = 0.045 * (height_hint / 5.5) if is_generated_box else 0.0
         add_bevel(obj, width=bevel_width, segments=2)
         imported.append(obj)

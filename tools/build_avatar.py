@@ -633,8 +633,8 @@ def setup_pose(config: Dict[str, Any],
     info["details"] = avatar_pose.pose_summary(context.pose, settings)
     if hand_form == "heart":
         info["details"] += (
-            "; beide Woman-Haende als Halbherz geformt, Armgelenke mit "
-            "glatten Manschetten verbunden und Arme smooth schattiert")
+            "; dichte Halbherz-Meshes, glatte Armgelenk-Manschetten, "
+            "geweldete Smooth-Normalen und Subdivision-Shading")
     log(f"      Pose '{pose_name}': {info['details']}")
     return context, info
 
@@ -1507,6 +1507,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                 "kind": "body",
                 "mesh_source": "mesh-asset",
                 "smooth": True,
+                "heart_hands": smooth_heart_arm,
                 "texture": body_texture,
                 "texture_kind": clothing_kind_by_file.get(body_texture or ""),
                 "asset_id": replacement["asset_id"],
@@ -1529,6 +1530,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             "kind": "body",
             "mesh_source": "generated-sphere" if part.name == "kopf" else "generated-box",
             "smooth": part.name in SMOOTH_BODY_PARTS or smooth_heart_arm,
+            "heart_hands": smooth_heart_arm,
             "texture": texture_for_part.get(part.name),
             "texture_kind": clothing_kind_by_file.get(
                 texture_for_part.get(part.name) or ""),

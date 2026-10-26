@@ -169,11 +169,12 @@ Arme nicht bereits aus dem Roblox-„Woman“-Rig stammen, lädt die Pose geziel
 `Woman Torso`, `Woman Right Arm` und `Woman Left Arm` nach (die Arm-Assets
 enthalten Oberarm, Unterarm und Hand); fremde Segmente dieser Slots werden
 nicht mit dem Woman-Rig vermischt. Da R15-Hände keine einzelnen Finger-Bones
-haben, bildet ein gemeinsamer Cage beide Hand-Meshes auf je eine Halbherz-
-Silhouette ab – mit runden Loben, Kerbe oben und gemeinsamer Spitze unten.
-Weiche Gelenk-Manschetten schließen die Zwischenräume zwischen Oberarm,
-Unterarm und Hand; die Arme erhalten geweldete Smooth-Normalen. Der dichte
-Bildausschnitt zeigt nur noch einen kleinen Teil der Beine. Die Posen-
+haben, ersetzt ein dichtes parametrisches Raster die groben Hand-Polygone
+durch je eine Halbherz-Geometrie – mit runden Loben, Kerbe oben und
+gemeinsamer Spitze unten. Weiche Gelenk-Manschetten schließen die
+Zwischenräume zwischen Oberarm, Unterarm und Hand; geweldete Smooth-Normalen
+und ein Subdivision-Modifier glätten die Arme zusätzlich geometrisch. Der
+dichte Bildausschnitt zeigt nur noch einen kleinen Teil der Beine. Die Posen-
 Definition steht in `Posen.toml` und wird mit `pose = "hearthands"` aktiviert.
 
 ## Änderungen landen ohne Pull Request in `main`
