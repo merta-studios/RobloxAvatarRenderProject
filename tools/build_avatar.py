@@ -632,7 +632,9 @@ def setup_pose(config: Dict[str, Any],
     info["hand_form"] = hand_form
     info["details"] = avatar_pose.pose_summary(context.pose, settings)
     if hand_form == "heart":
-        info["details"] += "; Woman-Haende weich zum Herz verformt"
+        info["details"] += (
+            "; beide Woman-Haende als Halbherz geformt, Armgelenke mit "
+            "glatten Manschetten verbunden und Arme smooth schattiert")
     log(f"      Pose '{pose_name}': {info['details']}")
     return context, info
 
@@ -1426,7 +1428,19 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             "max": [round(float(v), 3) for v in hi],
         }
 
+    heart_hands = str((pose_info or {}).get("hand_form") or "").lower() == "heart"
+
+    def _finish_body_mesh(name: str, mesh: roblox_mesh.MeshData) -> roblox_mesh.MeshData:
+        if heart_hands and name in ("rechts_arm", "links_arm"):
+            return roblox_mesh.smooth_normals_by_position(mesh)
+        return mesh
+
     for part in body_parts:
+        # Bei der Herzpose sollen auch die Arme weich schattiert werden. Die
+        # Normalen werden ueber positionsgleiche UV-Vertices geweldet, sonst
+        # bleiben importierte Roblox-Meshes trotz shade_smooth facettiert.
+        smooth_heart_arm = (heart_hands
+                            and part.name in ("rechts_arm", "links_arm"))
         if part.name == "kopf":
             if headless["active"]:
                 continue
@@ -1479,7 +1493,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
                                                      uniform=False)
                 placed = sanity_check(placed, max(hi[i] - lo[i] for i in range(3)),
                                       part.name, warnings)
-            placed = apply_body_pose(pose_ctx, part.name, placed)
+            placed = _finish_body_mesh(
+                part.name, apply_body_pose(pose_ctx, part.name, placed))
             _record_pose_bbox(part.name, placed)
             fname = f"{part.name}.obj"
             placed.write_obj(os.path.join(parts_dir, fname))
@@ -1502,7 +1517,8 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             body_parts_from_mesh += 1
             continue
 
-        placed = apply_body_pose(pose_ctx, part.name, part.mesh)
+        placed = _finish_body_mesh(
+            part.name, apply_body_pose(pose_ctx, part.name, part.mesh))
         _record_pose_bbox(part.name, placed)
         fname = f"{part.name}.obj"
         placed.write_obj(os.path.join(parts_dir, fname))
@@ -1512,7 +1528,7 @@ def build(username_raw: str, out_dir: str, dry_run: bool = False,
             "color": part.color,
             "kind": "body",
             "mesh_source": "generated-sphere" if part.name == "kopf" else "generated-box",
-            "smooth": part.name in SMOOTH_BODY_PARTS,
+            "smooth": part.name in SMOOTH_BODY_PARTS or smooth_heart_arm,
             "texture": texture_for_part.get(part.name),
             "texture_kind": clothing_kind_by_file.get(
                 texture_for_part.get(part.name) or ""),

@@ -27,7 +27,7 @@ import math
 import re
 import struct
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 Vec3 = Tuple[float, float, float]
 
@@ -789,6 +789,55 @@ def _smooth_normals(positions, faces):
         else:
             normals.append((x / length, y / length, z / length))
     return normals
+
+
+def smooth_normals_by_position(mesh: MeshData,
+                               tolerance: float = 1e-5) -> MeshData:
+    """Berechnet geglaettete Normalen ueber positionsgleiche Vertices hinweg.
+
+    Roblox-Meshes duplizieren Vertices haeufig an UV- und Materialnahten.
+    Werden nur die Normalen pro Index gemittelt, bleiben diese Kanten trotz
+    ``shade_smooth`` sichtbar facettiert. Hier werden Face-Normalen daher
+    zunaechst fuer alle Vertices an derselben Position aufsummiert (gewichtet
+    mit der Dreiecksflaeche) und anschliessend auf jeden Duplikat-Vertex
+    zurueckgeschrieben. UVs, Faces und Farben bleiben unveraendert.
+    """
+    if mesh.is_empty:
+        return mesh
+    quant = max(1e-9, float(tolerance))
+    keys = [tuple(round(float(value) / quant) for value in point)
+            for point in mesh.positions]
+    accumulated: Dict[Tuple[int, int, int], List[float]] = {}
+
+    for a, b, c in mesh.faces:
+        if min(a, b, c) < 0 or max(a, b, c) >= len(mesh.positions):
+            continue
+        pa, pb, pc = mesh.positions[a], mesh.positions[b], mesh.positions[c]
+        ab = (pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2])
+        ac = (pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2])
+        face_normal = (ab[1] * ac[2] - ab[2] * ac[1],
+                       ab[2] * ac[0] - ab[0] * ac[2],
+                       ab[0] * ac[1] - ab[1] * ac[0])
+        for index in (a, b, c):
+            target = accumulated.setdefault(keys[index], [0.0, 0.0, 0.0])
+            for axis in range(3):
+                target[axis] += face_normal[axis]
+
+    normals: List[Vec3] = []
+    for key in keys:
+        nx, ny, nz = accumulated.get(key, (0.0, 1.0, 0.0))
+        length = math.sqrt(nx * nx + ny * ny + nz * nz)
+        normals.append((nx / length, ny / length, nz / length)
+                       if length > 1e-12 else (0.0, 1.0, 0.0))
+    return MeshData(
+        positions=list(mesh.positions),
+        normals=normals,
+        uvs=list(mesh.uvs),
+        faces=list(mesh.faces),
+        colors=list(mesh.colors) if mesh.colors else None,
+        source_version=mesh.source_version,
+        skinning=mesh.skinning,
+    )
 
 
 def stack_segments(items, source_version: str = "stacked",
