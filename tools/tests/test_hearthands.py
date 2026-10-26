@@ -150,6 +150,25 @@ def test_heart_hand_cage_formt_lobus_kerbe_und_spitze():
     assert max(p[0] for p in right[6:9]) > max(p[0] for p in right[0:3]) + 0.10
 
 
+def test_make_heart_hand_mesh_erzeugt_dichtes_geschlossenes_raster():
+    """Die echten 450-Hand-Vertices werden zu einem feinen Herz-Raster."""
+    original = [(-0.2 + (i % 15) / 14 * 0.4,
+                 (i // 15) / 29 * 0.8, 0.0)
+                for i in range(450)]
+    positions, faces, uvs = avatar_pose.make_heart_hand_mesh(
+        original, (0.0, 0.0, 0.0), "Right", center_x=0.0)
+    assert len(positions) == 450
+    assert len(uvs) == 450
+    assert len(faces) > 700
+    assert all(0 <= index < 450 for face in faces for index in face)
+    # Die Silhouette besitzt eine schmale Spitze, breite Mitte und eine Kerbe.
+    xs_bottom = [p[0] for p in positions if abs(p[1] - min(q[1] for q in positions)) < 1e-6]
+    assert max(abs(x) for x in xs_bottom) < 0.15
+    assert max(p[0] for p in positions) > 0.15
+    top_y = max(p[1] for p in positions)
+    assert any(abs(p[1] - top_y) < 1e-6 and p[0] > 0.1 for p in positions)
+
+
 def test_hearthands_kamera_ist_dicht_und_schneidet_beine_ab():
     pose = avatar_pose.load_poses(os.path.join(ROOT, "Posen.toml"))["hearthands"]
     settings = pose["einstellungen"]
@@ -353,6 +372,8 @@ def test_hearthands_build_laedt_und_verwendet_frauenteile(monkeypatch, tmp_path)
     # Die Herzpose rendert beide Arme mit echtem Smooth-Shading.
     assert body_parts["rechts_arm"]["smooth"] is True
     assert body_parts["links_arm"]["smooth"] is True
+    assert body_parts["rechts_arm"]["heart_hands"] is True
+    assert body_parts["links_arm"]["heart_hands"] is True
     def load_vertices(part_name):
         part_obj = tmp_path / body_parts[part_name]["obj"]
         return [tuple(float(value) for value in line.split()[1:4])

@@ -946,6 +946,99 @@ def deform_hand_to_heart(vertices: Sequence[Point], wrist: Point,
     return shaped
 
 
+def make_heart_hand_mesh(vertices: Sequence[Point], wrist: Point,
+                         side: str, center_x: Optional[float] = None
+                         ) -> Tuple[List[Point], List[Tuple[int, int, int]],
+                                    List[Tuple[float, float]]]:
+    """Erzeugt eine dichte, geschlossene Halbherz-Geometrie im Hand-Span.
+
+    Die echten R15-Hand-Meshes bestehen aus groben, getrennten Polygonen und
+    bleiben trotz Cage-Deformation sichtbar eckig. Diese Funktion verteilt die
+    vorhandenen Vertices deshalb auf ein feines Vorder-/Rueckseiten-Raster und
+    verbindet die Raender zu einem glatten Halbherz. Die Anzahl der Vertices
+    bleibt exakt erhalten, damit ``segment_spans`` weiterhin gueltig sind.
+    """
+    count = len(vertices)
+    if count < 8:
+        return list(vertices), [], [(0.0, 0.0)] * count
+    xs = [float(p[0]) for p in vertices]
+    ys = [float(p[1]) for p in vertices]
+    zs = [float(p[2]) for p in vertices]
+    x_min, x_max = min(xs), max(xs)
+    y_min, y_max = min(ys), max(ys)
+    z_center = (min(zs) + max(zs)) / 2.0
+    center = float(wrist[0]) if center_x is None else float(center_x)
+    sign = -1.0 if str(side).lower().startswith("left") else 1.0
+    height = max(0.08, y_max - y_min)
+    measured_width = max(abs(x_min - center), abs(x_max - center))
+    half_width = min(max(0.08, measured_width), max(0.35, 0.90 * height))
+    notch = 0.24 * height
+    overlap = 0.12 * half_width
+    depth = 0.16 * height
+
+    # 15x15 Vorder- und Rueckseite = 450 Vertices (genau die echten
+    # Woman-Hand-Spans). Kleinere Test-Meshes bekommen ein passendes Raster.
+    grid = max(2, int(math.sqrt(count / 2.0)))
+    while 2 * grid * grid > count:
+        grid -= 1
+    rows = cols = max(2, grid)
+    side_count = rows * cols
+
+    positions: List[Point] = []
+    uvs: List[Tuple[float, float]] = []
+    for layer in (0, 1):  # 0 = Vorderseite (-Z), 1 = Rueckseite (+Z)
+        layer_sign = -1.0 if layer == 0 else 1.0
+        for row in range(rows):
+            v = row / (rows - 1)
+            width = _heart_half_width(v)
+            for col in range(cols):
+                u = col / (cols - 1)
+                x = center + sign * (half_width * width * u
+                                     - overlap * (1.0 - u))
+                y = (y_min + height * v
+                     + 0.07 * height * u * math.sin(math.pi * v)
+                     - notch * (1.0 - u) * _smoothstep((v - 0.68) / 0.32))
+                z = (z_center + layer_sign * depth
+                     * (0.55 + 0.45 * width))
+                positions.append((x, y, z))
+                uvs.append((u, v))
+    while len(positions) < count:
+        positions.append((center, y_min + height / 2.0, z_center))
+        uvs.append((0.5, 0.5))
+
+    def index(layer: int, row: int, col: int) -> int:
+        return layer * side_count + row * cols + col
+
+    faces: List[Tuple[int, int, int]] = []
+    for layer in (0, 1):
+        for row in range(rows - 1):
+            for col in range(cols - 1):
+                a = index(layer, row, col)
+                b = index(layer, row, col + 1)
+                c = index(layer, row + 1, col + 1)
+                d = index(layer, row + 1, col)
+                if layer == 0:
+                    faces.append((a, c, b))
+                    faces.append((a, d, c))
+                else:
+                    faces.append((a, b, c))
+                    faces.append((a, c, d))
+    # Seitenwaende: aeussere/innere Kante sowie Ober-/Unterkante.
+    for row in range(rows - 1):
+        for col in (0, cols - 1):
+            f0, f1 = index(0, row, col), index(0, row + 1, col)
+            b0, b1 = index(1, row, col), index(1, row + 1, col)
+            faces.append((f0, f1, b1))
+            faces.append((f0, b1, b0))
+    for col in range(cols - 1):
+        for row in (0, rows - 1):
+            f0, f1 = index(0, row, col), index(0, row, col + 1)
+            b0, b1 = index(1, row, col), index(1, row, col + 1)
+            faces.append((f0, b1, f1))
+            faces.append((f0, b0, b1))
+    return positions, faces, uvs
+
+
 def _closest_point_pair(points_a: Sequence[Point],
                         points_b: Sequence[Point]) -> Tuple[Point, Point, float]:
     """Findet das naechste Punktepaar zweier Segment-Vertices."""
@@ -1350,10 +1443,15 @@ class PoseContext:
         positions: List[Vec3] = list(mesh.positions)
         has_normals = len(mesh.normals) == len(mesh.positions)
         normals: List[Vec3] = list(mesh.normals) if has_normals else []
+        uvs: List[Tuple[float, float]] = list(mesh.uvs)
+        faces: List[Tuple[int, int, int]] = list(mesh.faces)
+        while len(uvs) < len(positions):
+            uvs.append((0.0, 0.0))
         heart_arms = (self.hand_form == "heart"
                       and part_name in ("links_arm", "rechts_arm"))
         center_x = self._heart_center_x() if heart_arms else 0.0
         deformed_hands = False
+        rebuilt_hands = False
         for seg_name, start, end in spans:
             if end <= start:
                 continue
@@ -1371,19 +1469,35 @@ class PoseContext:
             if self.hand_form == "heart" and seg_name in ("LeftHand", "RightHand"):
                 wrist = _mat4_point(transform, self.joints[BONE_JOINT[bone]])
                 side = "Left" if seg_name == "LeftHand" else "Right"
-                positions[start:end] = deform_hand_to_heart(
-                    positions[start:end], wrist, side, center_x=center_x)
+                if heart_arms and end - start >= 8:
+                    new_positions, new_faces, new_uvs = make_heart_hand_mesh(
+                        positions[start:end], wrist, side, center_x=center_x)
+                    positions[start:end] = new_positions
+                    uvs[start:end] = new_uvs
+                    # Die alten groben Hand-Faces werden durch das feine
+                    # Herz-Raster ersetzt; alle anderen Faces bleiben.
+                    faces = [face for face in faces
+                             if not all(start <= index < end for index in face)]
+                    faces.extend(tuple(index + start for index in face)
+                                 for face in new_faces)
+                    rebuilt_hands = True
+                else:
+                    positions[start:end] = deform_hand_to_heart(
+                        positions[start:end], wrist, side, center_x=center_x)
                 deformed_hands = True
 
         if deformed_hands and has_normals:
-            normals = _mesh_normals(positions, mesh.faces)
+            normals = _mesh_normals(positions, faces)
+        version = mesh.source_version
+        if rebuilt_hands:
+            version = f"{version}+heart-mesh"
         result = MeshData(
             positions=positions,
             normals=normals if has_normals else [],
-            uvs=list(mesh.uvs),
-            faces=list(mesh.faces),
+            uvs=uvs,
+            faces=faces,
             colors=list(mesh.colors) if mesh.colors else None,
-            source_version=mesh.source_version,
+            source_version=version,
         )
         if heart_arms:
             result = self._append_heart_arm_sleeves(result, spans)
