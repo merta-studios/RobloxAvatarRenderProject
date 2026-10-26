@@ -155,6 +155,8 @@ def parse_file(path: str) -> Node:
 # ---------------------------------------------------------------------------
 
 Matrix4 = List[List[float]]
+Matrix3 = Tuple[Tuple[float, float, float], Tuple[float, float, float],
+                Tuple[float, float, float]]
 
 
 def _identity() -> Matrix4:
@@ -201,22 +203,54 @@ def _euler(order: int, x: float, y: float, z: float) -> Matrix4:
     return _matmul(rz, _matmul(ry, rx))  # ZYX
 
 
+def _property(model: Node, name: str) -> Optional[List[Any]]:
+    """Wert einer ``Properties70/P``-Eigenschaft eines Model-Knotens.
+
+    FBX speichert ``Lcl Translation`` & Co. NICHT als direkte Kindknoten,
+    sondern unter ``Properties70`` als ``P``-Knoten mit der Werteliste
+    ``[Name, Label, Typ, Flags, Werte...]``. Ohne diese Lesart blieben alle
+    Model-Transformationen Identity (Marker scheinbar alle auf dem Ursprung).
+    """
+    props70 = model.find("Properties70")
+    if props70 is None:
+        return None
+    for p in props70.all("P"):
+        if p.props and p.props[0] == name:
+            return list(p.props)
+    return None
+
+
+def _prop_vec(model: Node, name: str, default: Sequence[float]) -> List[float]:
+    raw = _property(model, name)
+    if raw is None or len(raw) < 7:
+        return list(default)
+    try:
+        return [float(raw[4]), float(raw[5]), float(raw[6])]
+    except (TypeError, ValueError):
+        return list(default)
+
+
+def _prop_scalar(model: Node, name: str, default: float) -> float:
+    raw = _property(model, name)
+    if raw is None or len(raw) < 5:
+        return default
+    try:
+        return float(raw[4])
+    except (TypeError, ValueError):
+        return default
+
+
 def _local_matrix(model: Node) -> Matrix4:
-    def _vec(name: str, default: Sequence[float]) -> List[float]:
-        node = model.find(name)
-        if node is None or len(node.props) < 3:
-            return list(default)
-        return [float(node.props[0]), float(node.props[1]), float(node.props[2])]
+    t = _prop_vec(model, "Lcl Translation", (0.0, 0.0, 0.0))
+    r = _prop_vec(model, "Lcl Rotation", (0.0, 0.0, 0.0))
+    s = _prop_vec(model, "Lcl Scaling", (1.0, 1.0, 1.0))
+    pre = _prop_vec(model, "PreRotation", (0.0, 0.0, 0.0))
+    order = int(_prop_scalar(model, "RotationOrder", 0.0))
 
-    t = _vec("Lcl Translation", (0, 0, 0))
-    r = _vec("Lcl Rotation", (0, 0, 0))
-    s = _vec("Lcl Scaling", (1, 1, 1))
-    pre = _vec("PreRotation", (0, 0, 0))
-    order_node = model.find("RotationOrder")
-    order = int(order_node.props[0]) if order_node and order_node.props else 0
-
-    m = _matmul(_euler(order, r[0], r[1], r[2]),
-                _euler(0, pre[0], pre[1], pre[2]))
+    # FBX-SDK-Formel (Ausschnitt):  Local = T * Rp * R * S  mit
+    # R = Euler(Lcl Rotation), Rp = PreRotation (z. B. Maya-JointOrient).
+    m = _matmul(_euler(0, pre[0], pre[1], pre[2]),
+                _euler(order, r[0], r[1], r[2]))
     for i in range(3):
         for j in range(3):
             m[i][j] *= s[j]
@@ -236,8 +270,9 @@ class Part:
     positions: List[Tuple[float, float, float]] = field(default_factory=list)
     faces: List[Tuple[int, int, int]] = field(default_factory=list)
     uvs: List[Tuple[float, float]] = field(default_factory=list)
-    #: Positionen der ``*_Att``-Marker (Name -> Weltposition).
-    attachments: Dict[str, Tuple[float, float, float]] = field(default_factory=dict)
+    #: Positionen der ``*_Att``-Marker (Name -> (Teil-lokale Position, Rotation)).
+    attachments: Dict[str, Tuple[Tuple[float, float, float], "Matrix3"]] = \
+        field(default_factory=dict)
 
     def bbox(self) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
         if not self.positions:
@@ -257,6 +292,9 @@ class Document:
     parts: List[Part] = field(default_factory=list)
     #: Alle Model-Knoten (auch leere Marker/Attachments) mit Weltposition.
     markers: Dict[str, Tuple[float, float, float]] = field(default_factory=dict)
+    #: Marker mit Welt-Orientierung ((Position, 3x3-Rotation)).
+    marker_frames: Dict[str, Tuple[Tuple[float, float, float], Matrix3]] = \
+        field(default_factory=dict)
 
     def part(self, name: str) -> Optional[Part]:
         for p in self.parts:
@@ -328,11 +366,20 @@ def read_document(path: str) -> Document:
             geometries[oid] = node
 
     connections = root.find("Connections")
+    geometry_of: Dict[int, int] = {}
     if connections is not None:
         for conn in connections.children:
             if len(conn.props) >= 3 and conn.props[0] == "OO":
                 child, parent = int(conn.props[1]), int(conn.props[2])
-                parents[child] = parent
+                # Wichtig: OO-Connections verbinden auch Skin-Cluster
+                # (Deformer) und Geometrien mit Modellen. Fuer die
+                # Szenenhierarchie zaehlen nur Model -> Model (oder Root 0) -
+                # sonst haengen Gelenke an Deformer-Ketten und alle
+                # Welttransformationen stimmen nicht.
+                if child in models and (parent == 0 or parent in models):
+                    parents[child] = parent
+                elif child in geometries and parent in models:
+                    geometry_of[parent] = child
 
     def world_matrix(oid: int) -> Matrix4:
         chain: List[int] = []
@@ -354,18 +401,41 @@ def read_document(path: str) -> Document:
                 m[1][0] * p[0] + m[1][1] * p[1] + m[1][2] * p[2] + m[1][3],
                 m[2][0] * p[0] + m[2][1] * p[1] + m[2][2] * p[2] + m[2][3])
 
-    # Geometrien ihren Modellen zuordnen
-    geometry_of: Dict[int, int] = {}
-    for child, parent in parents.items():
-        if child in geometries and parent in models:
-            geometry_of[parent] = child
+    # Geometrien wurden oben ihren Modellen zugeordnet.
+
+    matrices: Dict[int, Matrix4] = {}
+    part_by_model: Dict[int, Part] = {}
+
+    def _rot3(m: Matrix4) -> Matrix3:
+        return ((m[0][0], m[0][1], m[0][2]),
+                (m[1][0], m[1][1], m[1][2]),
+                (m[2][0], m[2][1], m[2][2]))
+
+    def _mat3_mul(a: Matrix3, b: Matrix3) -> Matrix3:
+        return tuple(
+            tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3))
+            for i in range(3))  # type: ignore[return-value]
+
+    def _mat3_t(m: Matrix3) -> Matrix3:
+        return ((m[0][0], m[1][0], m[2][0]),
+                (m[0][1], m[1][1], m[2][1]),
+                (m[0][2], m[1][2], m[2][2]))
+
+    def _mat3_vec(m: Matrix3, v: Tuple[float, float, float]) -> Tuple[float, float, float]:
+        return (m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+                m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+                m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2])
 
     for oid, node in models.items():
         name = _clean(str(node.props[1])) if len(node.props) > 1 else f"Model{oid}"
         matrix = world_matrix(oid)
+        matrices[oid] = matrix
+        # Welt-Frame fuer ALLE Modelle - auch Marker-Diamanten haben
+        # Geometrie und waeren sonst nicht als Marker erkennbar.
+        doc.marker_frames[name] = (apply(matrix, (0.0, 0.0, 0.0)), _rot3(matrix))
         geo_id = geometry_of.get(oid)
         if geo_id is None:
-            doc.markers[name] = apply(matrix, (0.0, 0.0, 0.0))
+            doc.markers[name] = doc.marker_frames[name][0]
             continue
         geo = geometries[geo_id]
         verts_node = geo.find("Vertices")
@@ -387,6 +457,32 @@ def read_document(path: str) -> Document:
                                      list(uv_values_node.props[0]), len(positions))
         part = Part(name=name, positions=positions, faces=faces, uvs=uvs)
         doc.parts.append(part)
+        part_by_model[oid] = part
         doc.markers[name] = apply(matrix, (0.0, 0.0, 0.0))
+
+    # Marker (`*_Att`) dem naechsten geometrischen Vorfahren zuordnen und in
+    # Teil-Koordinaten speichern (Position + Orientierung) - so liegen die
+    # Attachments exakt dort, wo Roblox sie im zugehoerigen Body-Part annimmt.
+    for oid, node in models.items():
+        if oid in part_by_model:
+            continue
+        name = _clean(str(node.props[1])) if len(node.props) > 1 else f"Model{oid}"
+        cursor = parents.get(oid, 0)
+        seen = set()
+        while cursor and cursor not in part_by_model and cursor not in seen:
+            seen.add(cursor)
+            cursor = parents.get(cursor, 0)
+        part = part_by_model.get(cursor)
+        if part is None:
+            continue
+        m_part = matrices[cursor]
+        m_mark = matrices[oid]
+        rp, rm = _rot3(m_part), _rot3(m_mark)
+        local_rot = _mat3_mul(_mat3_t(rp), rm)
+        delta = (m_mark[0][3] - m_part[0][3],
+                 m_mark[1][3] - m_part[1][3],
+                 m_mark[2][3] - m_part[2][3])
+        local_pos = _mat3_vec(_mat3_t(rp), delta)
+        part.attachments[name] = (local_pos, local_rot)
 
     return doc

@@ -6,13 +6,18 @@ Die Referenzdatei kommt aus der offiziellen Doku (Project Files):
     https://prod.docsiteassets.roblox.com/avatar/ClassicMannequin.fbx
 
 ``tools/probe_reference.py`` laedt beide nach ``reference/official/``. Dieses
-Skript liest sie (``tools/fbx.py``) und schreibt zwei kompakte JSON-Dateien,
+Skript liest sie (``tools/fbx.py``) und schreibt kompakte JSON-Dateien,
 die die Pipeline zur Renderzeit ohne FBX-Parser laedt:
 
-* ``reference/standard_r15.json`` - R15-Blockkoerper (Standard-Avatar),
+* ``reference/standard_r15.json`` - R15-Blockkoerper (Geometrie/Masse),
+* ``reference/standard_r15_rig.json`` - **Rig-Spezifikation** des
+  Standard-Avatars: Meshes, Gelenke (``*RigAttachment``) und
+  Accessoire-Anker (``HatAttachment``, ``FaceFrontAttachment``, ...) aus
+  den ``*_Att``-Markern der FBX (siehe ``tools/standard_r15.py``),
 * ``reference/classic_body.json`` - klassischer Koerper (Abgleich der Maße).
 
     python tools/build_mannequin.py                     # Standardpfade
+    python tools/standard_r15.py                        # nur Rig-Spezifikation
 
 Enthalten sind je Datei alle 15 Teile (Mesh in Teil-Koordinaten und Maße);
 der klassische Koerper traegt zusaetzlich die abgeleiteten Verhaeltnisse
@@ -29,6 +34,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import mannequin  # noqa: E402
+import standard_r15  # noqa: E402
 
 
 OFFICIAL = os.path.join(mannequin.ROOT, "reference", "official")
@@ -49,6 +55,11 @@ def _build(fbx: str, out: str, standard: bool) -> int:
               file=sys.stderr)
         return 1
     mannequin.dump_json(body, out)
+    if standard:
+        # Zusaeztlich die Rig-Spezifikation (Gelenke + Accessoire-Anker aus
+        # den *_Att-Markern) - die eigentliche Quelle fuer exakte Pivots.
+        spec = standard_r15.build_spec(fbx)
+        standard_r15.dump(spec)
     return 0
 
 

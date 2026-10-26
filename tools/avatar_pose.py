@@ -620,15 +620,33 @@ def load_poses(path: str) -> Dict[str, Dict[str, Any]]:
 # Gelenkpunkte
 # ---------------------------------------------------------------------------
 
-#: Kanonische R15-Proportionen (Roblox ``UnificationScale``), gemessen am
-#: echten Rig - als Anteil der jeweiligen Gliedlaenge. Damit sitzen die
-#: ersatzweise geschaetzten Drehpunkte dort, wo Roblox sie hat, statt grob
-#: in der Teilmitte ("Unterarm dreht um den falschen Punkt").
-SHOULDER_BELOW_TORSO_TOP = 0.237      # Studs bei 2 Studs hohem Torso
-ELBOW_FRACTION_OF_ARM = 0.419         # Schulter -> Ellbogen / (Schulter -> Armende)
-WRIST_FRACTION_OF_ARM = 0.856         # Schulter -> Handgelenk / (Schulter -> Armende)
-KNEE_FRACTION_OF_LEG = 0.411          # Huefte -> Knie / (Huefte -> Beinende)
-ANKLE_FRACTION_OF_LEG = 0.874         # Huefte -> Fussgelenk / (Huefte -> Beinende)
+#: Kanonische R15-Proportionen - **exakt** aus Roblox' offizieller Referenz
+#: ``BlockyCharacter.fbx`` abgeleitet (``reference/standard_r15_rig.json``,
+#: siehe ``tools/standard_r15.py``). Sie dienen ausschliesslich als *Rueckfall*,
+#: wenn ein Rig keine ``*RigAttachment``-Daten mitbringt: dann liegen die
+#: geschaetzten Drehpunkte trotzdem dort, wo Roblox sie im Standard-Rig hat.
+#: Mit echten Attachments ueberschreibt ``build_avatar`` diese Werte mit den
+#: exakten Gelenkpositionen aus ``avatar_rig.assemble_r15_rig``.
+try:
+    import standard_r15 as _standard_r15
+except ImportError:  # pragma: no cover - Werkzeug ohne Standard-Modul
+    _standard_r15 = None
+
+_PROPS: Dict[str, float] = (
+    _standard_r15.joint_proportions() if _standard_r15 is not None else {}
+) or {}
+
+#: Schulterhoehe unter der Torso-Oberkante, als Anteil der Torso-Hoehe
+#: (exakt 0,0286 beim Standard-Rig: 0,0457 Studs bei 1,6 Studs Torso).
+SHOULDER_BELOW_TORSO_TOP_FRAC = float(
+    _PROPS.get("shoulder_below_torso_top_frac", 0.0286))
+ELBOW_FRACTION_OF_ARM = float(_PROPS.get("elbow_fraction_of_arm", 0.4708))
+WRIST_FRACTION_OF_ARM = float(_PROPS.get("wrist_fraction_of_arm", 0.8604))
+KNEE_FRACTION_OF_LEG = float(_PROPS.get("knee_fraction_of_leg", 0.4144))
+ANKLE_FRACTION_OF_LEG = float(_PROPS.get("ankle_fraction_of_leg", 0.8818))
+
+#: Historische Namen (in alten Tests/Notizen); identisch mit den Anteilen.
+SHOULDER_BELOW_TORSO_TOP = SHOULDER_BELOW_TORSO_TOP_FRAC
 
 
 def joints_from_parts(part_meshes: Dict[str, Any], metrics: Any) -> Dict[str, Point]:
@@ -674,7 +692,7 @@ def joints_from_parts(part_meshes: Dict[str, Any], metrics: Any) -> Dict[str, Po
 
     # Torso-Referenz: Oberkante (Schulterlinie) und Unterkante (Hueftlinie).
     torso_height = max(1e-3, torso_hi_y - torso_lo_y)
-    shoulder_y = torso_hi_y - SHOULDER_BELOW_TORSO_TOP * (torso_height / 2.0)
+    shoulder_y = torso_hi_y - SHOULDER_BELOW_TORSO_TOP_FRAC * torso_height
 
     for part_name, side in (("links_arm", "Left"), ("rechts_arm", "Right")):
         box = bbox(part_name)
@@ -683,11 +701,12 @@ def joints_from_parts(part_meshes: Dict[str, Any], metrics: Any) -> Dict[str, Po
         lo, hi = box
         length = max(1e-3, hi[1] - lo[1])
         # Schultergelenk liegt an der *inneren* Oberkante des Arms (Roblox:
-        # ShoulderRigAttachment am Torso-Rand), nicht in der Armmitte -
-        # sonst bleibt beim Heben des Arms eine Luecke zum Torso. Die Hoehe
-        # kommt aus der Torso-Schulterlinie (kanonisch 0,237 Studs unter der
-        # Oberkante), nicht aus der Army-Oberkante: Schulterplatten/Klauen
-        # verschieben die Mesh-BBox sonst weit nach oben.
+        # ShoulderRigAttachment am Torso-Rand), nicht in der Armmitte - sonst
+        # bleibt beim Heben des Arms eine Luecke zum Torso. Die Hoehe kommt
+        # aus der Torso-Schulterlinie (exakt 2,86 % der Torso-Hoehe unter der
+        # Oberkante, aus BlockyCharacter.fbx gemessen), nicht aus der
+        # Army-Oberkante: Schulterplatten/Klauen verschieben die Mesh-BBox
+        # sonst weit nach oben.
         inner_x = hi[0] if side == "Left" else lo[0]
         center_x = (lo[0] + hi[0]) / 2.0
         cz = (lo[2] + hi[2]) / 2.0

@@ -33,6 +33,7 @@ import avatar_pose  # noqa: E402
 import avatar_rig  # noqa: E402
 import roblox_api  # noqa: E402
 import roblox_mesh  # noqa: E402
+import standard_r15  # noqa: E402
 
 I3 = avatar_rig.IDENTITY_MAT3
 
@@ -249,9 +250,16 @@ def test_schaetzung_setzt_schulter_an_die_torso_oberkante():
     joints, meshes, metrics = _fallback_joints()
     torso_lo, torso_hi = meshes["torso"].bbox()
     shoulder = joints["LeftUpperArm"]
-    # Schulterlinie: kanonisch 0,237 Studs unter der Torso-Oberkante.
-    assert shoulder[1] == pytest.approx(torso_hi[1] - 0.237, abs=0.02)
-    # Innenkante des Arms, nicht dessen Mitte.
+    # Schulterlinie: exakt aus dem R15-Standard (BlockyCharacter.fbx):
+    # 2,86 % der Torso-Hoehe unter der Oberkante - keine geratene Konstante.
+    torso_h = torso_hi[1] - torso_lo[1]
+    props = standard_r15.joint_proportions()
+    assert avatar_pose.SHOULDER_BELOW_TORSO_TOP_FRAC == pytest.approx(
+        props["shoulder_below_torso_top_frac"], abs=1e-6)
+    assert shoulder[1] == pytest.approx(
+        torso_hi[1] - avatar_pose.SHOULDER_BELOW_TORSO_TOP_FRAC * torso_h,
+        abs=1e-6)
+    # Innenkante des Arms, nicht dessen Mitte (wie im Standard-Rig).
     assert shoulder[0] == pytest.approx(meshes["links_arm"].bbox()[1][0], abs=1e-6)
 
 
@@ -262,11 +270,18 @@ def test_schaetzung_setzt_ellbogen_nicht_in_die_armmitte():
     wrist = joints["LeftHand"]
     arm_lo = meshes["links_arm"].bbox()[0][1]
     arm_len = shoulder[1] - arm_lo
-    # Kanonische R15-Anteile (Ellbogen ~42 %, Handgelenk ~86 % der Armlaenge).
-    assert (shoulder[1] - elbow[1]) / arm_len == pytest.approx(0.419, abs=0.02)
-    assert (shoulder[1] - wrist[1]) / arm_len == pytest.approx(0.856, abs=0.02)
-    # Der alte Wert (58 % / 86 % ab Arm-Oberkante) lag deutlich tiefer.
-    assert elbow[1] > shoulder[1] - 0.52 * arm_len
+    # Anteile exakt aus dem R15-Standard (BlockyCharacter.fbx), nicht geraten.
+    props = standard_r15.joint_proportions()
+    assert avatar_pose.ELBOW_FRACTION_OF_ARM == pytest.approx(
+        props["elbow_fraction_of_arm"], abs=1e-6)
+    assert avatar_pose.WRIST_FRACTION_OF_ARM == pytest.approx(
+        props["wrist_fraction_of_arm"], abs=1e-6)
+    assert (shoulder[1] - elbow[1]) / arm_len == pytest.approx(
+        avatar_pose.ELBOW_FRACTION_OF_ARM, abs=1e-6)
+    assert (shoulder[1] - wrist[1]) / arm_len == pytest.approx(
+        avatar_pose.WRIST_FRACTION_OF_ARM, abs=1e-6)
+    # Der Ellbogen sitzt nicht in der Armmitte, aber auch nicht am unteren Rand.
+    assert elbow[1] > shoulder[1] - 0.55 * arm_len
 
 
 def test_schaetzung_setzt_huefte_an_die_torso_unterkante():
@@ -689,9 +704,10 @@ def test_oberarm_im_schulterband_bleibt_unveraendert():
 def test_fehlende_beine_nutzen_die_standard_avatar_meshes():
     """Bug: "die Teile die nicht im Inventar vorhanden sind werden wieder
     Quader und nicht der Standard Avatar". Roblox ersetzt fehlende Teile durch
-    den Standard-Avatar - dessen R15-Block-Meshes werden geladen und auf die
-    R15-Maße gezogen. Erkennbar an der Topologie: die Block-Meshes haben
-    abgerundete Kanten, also weit mehr als die 24 Vertices eines Quaders."""
+    den Standard-Avatar - dessen Meshes werden uebernommen und (wie bei
+    ausgeruesteten Teilen) in ihrer **natuerlichen Groesse** an den Gelenken
+    montiert: keine Streckung auf geratene Fraktionen. Erkennbar an der
+    Topologie: echte Meshes haben weit mehr als die 24 Vertices eines Quaders."""
     standard = {
         name: roblox_mesh.make_sphere(0.5, segments=12, rings=8)
         for name in ("LeftUpperLeg", "LeftLowerLeg", "LeftFoot")
@@ -704,18 +720,13 @@ def test_fehlende_beine_nutzen_die_standard_avatar_meshes():
     # Kein Quader-Fallback (der haette 48 Vertices fuer drei Segmente).
     assert len(bein.positions) > 100
     spans = {name: (a, b) for name, a, b in rig.segment_spans["links_bein"]}
-    t_lo, t_hi = rig.body_meshes["torso"].bbox()
-    torso_h = t_hi[1] - t_lo[1]
     lo, hi = bein.bbox()
-    # Standard-Avatar-Segmente ueberlappen ihre Nachbarn (abgerundete Enden),
-    # die Beinlaenge bleibt deshalb rund eine Torso-Hoehe.
-    assert hi[1] - lo[1] == pytest.approx(torso_h, rel=0.10)
+    # Natuerliche Groesse: jeder Segment-Kugel bleibt 1 Stud hoch, die Kette
+    # wird nicht auf eine Normlaenge gestreckt (3 x 1,0 = 3,0 Studs).
+    assert hi[1] - lo[1] == pytest.approx(3.0, rel=0.03)
     start, ende = spans["LeftUpperLeg"]
     ys = [bein.positions[i][1] for i in range(start, ende)]
-    # Exakter R15-Anteil (kanonisches Gelenk-Fraktionen-Set) - die
-    # Segmente werden nicht mehr verlaengert.
-    erwartet = avatar_rig.R15_LEG_FRACTIONS[0] * torso_h
-    assert (max(ys) - min(ys)) == pytest.approx(erwartet, rel=0.06)
+    assert (max(ys) - min(ys)) == pytest.approx(1.0, rel=0.06)
     assert all(0.0 <= u <= 1.0 and 0.0 <= v <= 1.0 for u, v in bein.uvs)
 
 
