@@ -754,3 +754,37 @@ def test_platzhalter_beine_sind_kein_einzelner_klotz():
     assert min(z_foot) == pytest.approx(min(z_upper), abs=0.02)
     assert max(z_foot) == pytest.approx(max(z_upper), abs=0.02)
     assert any("Standard-Avatar" in n for n in rig.notes)
+
+
+def test_fehlende_arme_nutzen_standard_meshes_am_torso_rand():
+    """Fehlende Arme werden durch den R15-Standard-Avatar ersetzt. Die
+    Gelenke muessen am Schulter-Attachment (Torso-Kante) liegen - nicht in
+    der Segmentmitte. Sonst rotiert der Arm um seine eigene Mitte und die
+    Pose verrutscht (Bug: "Unterarm mit sehr falschem Drehpunkt")."""
+    standard = {
+        name: roblox_mesh.make_sphere(0.5, segments=12, rings=8)
+        for name in ("LeftUpperArm", "LeftLowerArm", "LeftHand")
+    }
+    rig = avatar_rig.assemble_r15_rig(
+        {"torso": _torso()}, None, roblox_api.DEFAULT_BODY_COLORS,
+        dict(roblox_api.DEFAULT_SCALES), headless=True,
+        standard_meshes=standard)
+    arm = rig.body_meshes["links_arm"]
+    lo, hi = arm.bbox()
+    t_lo, t_hi = rig.body_meshes["torso"].bbox()
+    spans = {name: (a, b) for name, a, b in rig.segment_spans["links_arm"]}
+    assert list(spans) == ["LeftUpperArm", "LeftLowerArm", "LeftHand"]
+    # Der Arm haengt *neben* dem Torso: Innenkante exakt an der Torso-Kante.
+    assert hi[0] == pytest.approx(t_lo[0], abs=1e-6)
+    # Gelenk = Attachment (Torso-Kante), nicht Segmentmitte.
+    shoulder_att = rig.world_attachments["LeftShoulderRigAttachment"][0]
+    assert rig.joint_positions["LeftUpperArm"][0] == pytest.approx(shoulder_att[0], abs=1e-9)
+    assert rig.joint_positions["LeftUpperArm"][0] == pytest.approx(t_lo[0], abs=1e-9)
+    # Das Segment schwebt daneben (Mittelpunkt liegt aussen, nicht am Gelenk).
+    center_x = (lo[0] + hi[0]) / 2.0
+    assert center_x < rig.joint_positions["LeftUpperArm"][0] - 0.2
+    # Gelenke von proximal nach distal absteigend, an den Segmentgrenzen.
+    shoulder = rig.joint_positions["LeftUpperArm"]
+    elbow = rig.joint_positions["LeftLowerArm"]
+    wrist = rig.joint_positions["LeftHand"]
+    assert shoulder[1] > elbow[1] > wrist[1]
