@@ -666,3 +666,13 @@ def test_kamera_solver_setzt_matrix_world_statt_depsgraph_update():
     text = open(SCRIPT, encoding="utf-8").read()
     assert "Matrix.LocRotScale" in text
     assert "view_layer.update()" in text  # nur noch als Fallback vorhanden
+
+
+def test_shade_smooth_entfernt_importierte_split_normalen():
+    # Regression: OBJ-Importe behalten ihre facettierten Custom Split
+    # Normals, obwohl alle Polygone auf use_smooth gesetzt werden. Der
+    # Renderer muss diese Daten vor dem Smooth-Shading entfernen.
+    text = open(SCRIPT, encoding="utf-8").read()
+    assert "customdata_custom_splitnormals_clear" in text
+    assert "normals_split_custom_set" in text
+    assert "poly.use_smooth = True" in text

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 
@@ -108,23 +109,106 @@ def test_woman_body_is_added_only_for_non_woman_hearthands_slots():
     assert build_avatar.woman_body_overrides("hearthands", already_woman) == ([], {})
 
 
-def test_heart_hand_cage_bends_thumb_down_and_finger_edge_up():
-    wrist = (0.0, 0.0, 0.0)
-    vertices = [
-        (0.0, 0.0, 0.0),
-        (-0.2, 0.2, 0.0), (0.2, 0.2, 0.0),
-        (-0.2, 0.8, 0.0), (0.2, 0.8, 0.0), (0.0, 0.8, 0.0),
-    ]
-    shaped = avatar_pose.deform_hand_to_heart(vertices, wrist, "Right")
+def test_smooth_normals_by_position_vereinheitlicht_uv_duplikate():
+    mesh = roblox_mesh.MeshData(
+        positions=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
+                   (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
+        normals=[(0.0, 0.0, 1.0)] * 6,
+        uvs=[(0.0, 0.0)] * 6,
+        faces=[(0, 1, 2), (3, 4, 5)],
+    )
+    smoothed = roblox_mesh.smooth_normals_by_position(mesh)
+    for index in range(3):
+        assert smoothed.normals[index] == smoothed.normals[index + 3]
+    assert len(smoothed.positions) == len(smoothed.normals)
+    assert smoothed.faces == mesh.faces
 
-    # Beim rechten Arm liegt der Daumen auf der zur Körpermitte gerichteten
-    # Seite (x negativ); seine Spitze klappt nach unten. Die andere Fingerkante
-    # rundet sich nach oben. Beide ziehen leicht zur Mitte und nach vorn.
-    assert shaped[3][0] < vertices[3][0]
-    assert shaped[3][1] < vertices[3][1]
-    assert shaped[4][0] < vertices[4][0]
-    assert shaped[4][1] > vertices[4][1]
-    assert shaped[3][2] < vertices[3][2]
+
+def test_heart_hand_cage_formt_lobus_kerbe_und_spitze():
+    """Der neue Cage bildet eine echte Halbherz-Silhouette statt einer Spitze."""
+    wrist = (0.0, 0.0, 0.0)
+    grid = [(x, y, 0.0) for y in (0.0, 0.2, 0.4, 0.6, 0.8)
+            for x in (-0.2, 0.0, 0.2)]
+    mirrored_grid = [(-x, y, z) for x, y, z in grid]
+    right = avatar_pose.deform_hand_to_heart(grid, wrist, "Right", center_x=0.0)
+    left = avatar_pose.deform_hand_to_heart(mirrored_grid, wrist, "Left",
+                                            center_x=0.0)
+
+    # Die linke Haelfte ist exakt gespiegelt.
+    for r, l in zip(right, left):
+        assert abs(r[0] + l[0]) < 1e-6
+        assert abs(r[1] - l[1]) < 1e-6
+
+    # Oben liegt die Innenkante deutlich tiefer als der aeussere Lobus:
+    # dadurch entsteht in der Mitte die V-Kerbe des Herzens.
+    assert right[14][1] > right[12][1] + 0.10
+    # Unten treffen sich beide Haelfte in einer schmalen Spitze.
+    bottom_y = min(p[1] for p in right)
+    bottom_x = [p[0] for p in right if abs(p[1] - bottom_y) < 1e-6]
+    assert max(abs(x) for x in bottom_x) < 0.03
+    # Die Herzmitte ist deutlich breiter als die Spitze.
+    assert max(p[0] for p in right[6:9]) > max(p[0] for p in right[0:3]) + 0.10
+
+
+def test_hearthands_kamera_ist_dicht_und_schneidet_beine_ab():
+    pose = avatar_pose.load_poses(os.path.join(ROOT, "Posen.toml"))["hearthands"]
+    settings = pose["einstellungen"]
+    assert settings["sichtbar_unten_prozent"] <= -30
+    assert settings["kamera_abstand_studs"] <= -0.5
+    assert settings["sichtbar_oben_prozent"] >= 10
+
+
+def test_herzpose_fuegt_gelenkmanschetten_zwischen_armsegmenten_ein():
+    """Starre R15-Segmente bekommen bei der Herzpose eine weiche Bruecke."""
+    class Rig:
+        joint_frames = {}
+        segment_spans = {
+            "rechts_arm": [("RightUpperArm", 0, 8),
+                           ("RightLowerArm", 8, 16)],
+        }
+
+    joints = {
+        "LowerTorso": (0.0, 0.0, 0.0), "UpperTorso": (0.0, 2.0, 0.0),
+        "Head": (0.0, 4.0, 0.0), "RightUpperArm": (1.0, 4.0, 0.0),
+        "RightLowerArm": (1.0, 2.6, 0.0), "RightHand": (1.0, 1.6, 0.0),
+        "LeftUpperArm": (-1.0, 4.0, 0.0), "LeftLowerArm": (-1.0, 2.6, 0.0),
+        "LeftHand": (-1.0, 1.6, 0.0), "RightUpperLeg": (0.5, 2.0, 0.0),
+        "RightLowerLeg": (0.5, 1.0, 0.0), "RightFoot": (0.5, 0.2, 0.0),
+        "LeftUpperLeg": (-0.5, 2.0, 0.0), "LeftLowerLeg": (-0.5, 1.0, 0.0),
+        "LeftFoot": (-0.5, 0.2, 0.0),
+    }
+    upper = [(1.0 + x, 3.5 + y, z)
+             for x in (-0.2, 0.2) for y in (-0.2, 0.2) for z in (-0.2, 0.2)]
+    lower = [(1.0 + x, 2.8 + y, z)
+             for x in (-0.2, 0.2) for y in (-0.2, 0.2) for z in (-0.2, 0.2)]
+    positions = upper + lower
+    mesh = roblox_mesh.MeshData(
+        positions=positions,
+        normals=[(0.0, 1.0, 0.0)] * len(positions),
+        uvs=[(0.0, 0.0)] * len(positions),
+        faces=[(0, 1, 2), (8, 9, 10), (0, 8, 9)],
+    )
+    context = avatar_pose.PoseContext(
+        {"rechter_oberarm": {"vor_hoch_schwingen_grad": 1}},
+        joints, rig=Rig(), hand_form="heart")
+    posed = context.apply_body("rechts_arm", mesh)
+
+    assert len(posed.positions) > len(mesh.positions)
+    assert len(posed.faces) > len(mesh.faces)
+    assert len(posed.normals) == len(posed.positions)
+    assert all(math.isfinite(value) for p in posed.positions for value in p)
+
+    connectors = posed.positions[len(mesh.positions):]
+    posed_upper = posed.positions[:8]
+    posed_lower = posed.positions[8:16]
+
+    def nearest(point, candidates):
+        return min(math.dist(point, other) for other in candidates)
+
+    # Mindestens ein Manschetten-Vertice liegt gleichzeitig in der Naehe
+    # beider Segmente - die Luecke ist damit geometrisch ueberbrueckt.
+    assert any(nearest(c, posed_upper) < 0.35 and nearest(c, posed_lower) < 0.35
+               for c in connectors)
 
 
 def test_pose_context_wendet_herzform_nur_auf_handsegmente_an():
@@ -266,6 +350,9 @@ def test_hearthands_build_laedt_und_verwendet_frauenteile(monkeypatch, tmp_path)
     assert body_parts["torso"]["asset_id"] == WOMAN_IDS[27]
     assert body_parts["rechts_arm"]["asset_id"] == WOMAN_IDS[28]
     assert body_parts["links_arm"]["asset_id"] == WOMAN_IDS[29]
+    # Die Herzpose rendert beide Arme mit echtem Smooth-Shading.
+    assert body_parts["rechts_arm"]["smooth"] is True
+    assert body_parts["links_arm"]["smooth"] is True
     def load_vertices(part_name):
         part_obj = tmp_path / body_parts[part_name]["obj"]
         return [tuple(float(value) for value in line.split()[1:4])

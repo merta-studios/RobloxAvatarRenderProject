@@ -521,8 +521,44 @@ def recalc_normals(obj) -> None:
 
 
 def shade_smooth(obj) -> None:
-    for poly in obj.data.polygons:
+    """Echtes Smooth-Shading auch bei OBJ-Meshes mit importierten Normalen.
+
+    Blender erzeugt beim OBJ-Import aus ``vn``-Zeilen Custom Split Normals.
+    ``poly.use_smooth = True`` allein aendert diese Daten nicht - das Mesh
+    bleibt dann trotz Smooth-Flag facettiert. Deshalb werden die importierten
+    Split-Normalen zuerst entfernt bzw. auf automatische Normalen
+    zurueckgesetzt und erst danach alle Polygone glatt geschaltet.
+    """
+    mesh = obj.data
+    cleared = False
+    try:
+        has_custom = bool(getattr(mesh, "has_custom_normals", False))
+        clear_op = getattr(getattr(getattr(bpy, "ops", None), "mesh", None),
+                           "customdata_custom_splitnormals_clear", None)
+        temp_override = getattr(getattr(bpy, "context", None),
+                                "temp_override", None)
+        if has_custom and clear_op is not None and temp_override is not None:
+            with temp_override(object=obj, active_object=obj,
+                               selected_objects=[obj],
+                               selected_editable_objects=[obj]):
+                clear_op()
+            cleared = True
+    except Exception:  #pragma: no cover - API je nach Blender-Version anders
+        cleared = False
+    if not cleared:
+        # Fallback: Nullvektoren bedeuten in der Mesh-API "Auto-Normale".
+        try:
+            if hasattr(mesh, "normals_split_custom_set"):
+                mesh.normals_split_custom_set(
+                    [(0.0, 0.0, 0.0)] * len(mesh.loops))
+        except Exception:  #pragma: no cover - alte Blender-Version
+            pass
+    for poly in mesh.polygons:
         poly.use_smooth = True
+    try:
+        mesh.update()
+    except Exception:  #pragma: no cover - sehr alte Blender-Version
+        pass
 
 
 def add_bevel(obj, width: float, segments: int = 2) -> None:

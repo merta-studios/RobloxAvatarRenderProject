@@ -636,9 +636,15 @@ ellbogen_beugen_grad = 10
 
 # -----------------------------------------------------------------------------
 #  hearthands – beide Hände vor der Brust formen gemeinsam ein Herz
-#  Für eine saubere Silhouette wird nur der Oberkörper eng gerahmt. Die
-#  Pipeline lädt bei dieser Pose nötigenfalls das offizielle Woman-Rig für
-#  Torso und Arme nach; die hand_form-Deformation biegt Daumen/Finger weich.
+#  Für eine saubere Silhouette wird dicht bis knapp unter die Hüfte gerahmt:
+#  nur ein kleiner Teil der Beine bleibt unten im Bild. Die Kamera steht
+#  dafür näher am Avatar als bei der ursprünglichen Oberkörper-Einstellung.
+#  Die Pipeline lädt bei dieser Pose nötigenfalls das offizielle Woman-Rig für
+#  Torso und Arme nach; `hand_form = "heart"` formt beide Hand-Meshes über
+#  einen gemeinsamen Halbherz-Cage (runde Loben, Kerbe oben, Spitze unten).
+#  Zusätzlich werden weiche Gelenk-Manschetten zwischen Ober-/Unterarm und
+#  Hand eingefügt, damit die R15-Segmente auch bei 90°-Ellbogen geschlossen
+#  wirken. Die Arme werden mit geweldeten Smooth-Normalen gerendert.
 #
 #  Die Winkel sind per FK-Rechnung auf die Proportionen des Woman-Rigs
 #  abgestimmt (schmale Schultern ±0,61, kurzer Oberarm, in der Bind-Pose
@@ -655,9 +661,9 @@ ellbogen_beugen_grad = 10
 # -----------------------------------------------------------------------------
 [hearthands]
 beschreibung = "Beide Hände vor der Brust formen ein Herz, Ellbogen nach außen"
-sichtbar_oben_prozent = 8
-sichtbar_unten_prozent = -10
-kamera_abstand_studs = -0.5
+sichtbar_oben_prozent = 12
+sichtbar_unten_prozent = -35
+kamera_abstand_studs = -0.75
 avatar_hoch_studs = 0
 hand_form = "heart"
 

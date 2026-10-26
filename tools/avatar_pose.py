@@ -148,6 +148,22 @@ MAX_ROTATION_DEG = 180.0
 MAX_OFFSET_STUDS = 2.0
 BLEND_FRACTION = 0.22
 
+# Halbbreite einer Herzhaelfte in Abhaengigkeit von der Hoehe (0 = Spitze,
+# 1 = oberer Lobus). Die Stuetzstellen erzeugen die typische Herzsilhouette:
+# schmale Spitze, breite Mitte, oben wieder leicht eingezogene Rundung.
+HEART_HALF_WIDTH_PROFILE: Tuple[Tuple[float, float], ...] = (
+    (0.00, 0.02),
+    (0.18, 0.72),
+    (0.45, 1.00),
+    (0.70, 0.95),
+    (0.86, 0.88),
+    (1.00, 0.80),
+)
+
+# Aufloesung der glatten Manschette, die eine Gelenkluecke ueberbrueckt.
+HEART_SLEEVE_SEGMENTS = 12
+HEART_SLEEVE_RINGS = 8
+
 # ---------------------------------------------------------------------------
 # Sprechende Pose-Felder je Koerperteil (Delta-Werte zur Stand-Pose)
 # ---------------------------------------------------------------------------
@@ -842,60 +858,194 @@ def _motor_is_active(motor: Any) -> bool:
     return False
 
 
+def _heart_half_width(height_fraction: float) -> float:
+    """Glatte Interpolation der Halbherz-Breite (0 = Spitze, 1 = oben)."""
+    t = max(0.0, min(1.0, float(height_fraction)))
+    points = HEART_HALF_WIDTH_PROFILE
+    if t <= points[0][0]:
+        return points[0][1]
+    for (t0, w0), (t1, w1) in zip(points, points[1:]):
+        if t <= t1:
+            local = _smoothstep((t - t0) / max(1e-9, t1 - t0))
+            return w0 + (w1 - w0) * local
+    return points[-1][1]
+
+
 def deform_hand_to_heart(vertices: Sequence[Point], wrist: Point,
-                         side: str) -> List[Point]:
-    """Biegt den Handruecken/Fingerbereich in eine halbe Herzform.
+                         side: str, center_x: Optional[float] = None) -> List[Point]:
+    """Formt ein komplettes Handsegment zu einer Herzhaelfte um.
 
-    R15-Haende haben keine einzelnen Finger-Bones. Die Woman-Haende werden
-    deshalb nach der normalen Wrist-Rotation mit einer sanften Cage-
-    Deformation geformt: die fingerseitige Innenkante zieht zur Mitte, die
-    Fingerkante bekommt eine obere Rundung und die Daumenkante klappt zur
-    unteren Herzspitze. Der Handwurzelbereich bleibt nahezu unveraendert.
+    R15-Haende besitzen keine einzelnen Fingerknochen. Statt nur Daumen und
+    Fingerkante leicht zu biegen, wird hier der ganze Hand-Cage auf eine
+    parametrische Halbherz-Flaeche abgebildet:
 
-    ``vertices`` und ``wrist`` liegen bereits im finalen Welt-Raum. Das macht
-    die Deformation unabhaengig von der konkreten Woman-Mesh-Skalierung und
-    erhaelt die vorhandenen Meshes/UVs statt sie durch eine Icon-Geometrie zu
-    ersetzen.
+    * ``u`` laeuft von der inneren Mittellinie zur aeusseren Handkante,
+    * ``v`` laeuft von der unteren Herzspitze zum oberen Lobus,
+    * die urspruengliche Tiefe bleibt als sanft verjuengte Dicke erhalten.
+
+    Beide Seiten zusammen ergeben dadurch die typische Silhouette mit zwei
+    runden Loben, einer V-Kerbe oben und einer gemeinsamen Spitze unten.
+    Faces und UVs bleiben unveraendert; die Normalen werden anschliessend neu
+    berechnet. ``vertices`` und ``wrist`` liegen bereits im finalen Welt-Raum.
+    ``center_x`` ist die gemeinsame Herzmitte; ohne Angabe wird das Handgelenk
+    als lokale Mitte verwendet (z. B. fuer Unit-Tests mit versetztem Rig).
     """
     if not vertices:
         return []
-    side_name = str(side).lower()
-    inward = (1.0, 0.0, 0.0) if side_name.startswith("left") else (-1.0, 0.0, 0.0)
+    xs = [float(p[0]) for p in vertices]
+    ys = [float(p[1]) for p in vertices]
+    zs = [float(p[2]) for p in vertices]
+    x_min, x_max = min(xs), max(xs)
+    y_min, y_max = min(ys), max(ys)
+    z_center = (min(zs) + max(zs)) / 2.0
+    z_half = max(1e-4, (max(zs) - min(zs)) / 2.0)
+    center = float(wrist[0]) if center_x is None else float(center_x)
+    sign = -1.0 if str(side).lower().startswith("left") else 1.0
 
-    def dot(a: Sequence[float], b: Sequence[float]) -> float:
-        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-
-    center = tuple(sum(p[i] for p in vertices) / len(vertices) for i in range(3))
-    forward = _normalize(_sub(center, wrist), (0.0, 0.0, -1.0))
-    # Die Innenachse muss in der Handebene liegen, sonst schiebt ein nach
-    # vorn gerichteter Finger seine Vertices nur um die eigene Laengsachse.
-    inward = _normalize(_sub(inward, _mul(forward, dot(inward, forward))), inward)
-    longitudinal = [dot(_sub(p, wrist), forward) for p in vertices]
-    hand_length = max(longitudinal, default=0.0)
-    if hand_length < 1e-4:
-        return list(vertices)
-    lateral = [dot(_sub(p, wrist), inward) for p in vertices]
-    half_width = max(0.08, max((abs(v) for v in lateral), default=0.0))
+    # Innen- und Aussenkante in der urspruenglichen Hand-BBox. Die innere
+    # Kante bekommt weiter unten die V-Kerbe, die aeussere den runden Lobus.
+    # Die beiden Innenkanten werden bewusst exakt auf ``center`` abgebildet,
+    # damit zwischen den Herzhaelften kein Spalt entsteht.
+    if sign > 0.0:
+        inner_x, outer_x = x_min, x_max
+    else:
+        outer_x, inner_x = x_min, x_max
+    # Bei der linken Hand ist ``outer_x < inner_x``; ohne Betrag wuerde die
+    # Spanne auf 1e-4 kollabieren und alle Vertices am Aussenrand landen.
+    span_x = max(1e-4, abs(outer_x - inner_x))
+    height = max(0.08, y_max - y_min)
+    # Auf einem breiten Standard-Rig wuerden die Haende sonst ein uebergrosses
+    # Herz bilden. Die Breite folgt daher der Handhoehe und wird begrenzt.
+    measured_width = max(abs(x_min - center), abs(x_max - center))
+    half_width = min(max(0.08, measured_width), max(0.35, 0.90 * height))
+    notch = 0.24 * height
 
     shaped: List[Point] = []
-    for p, along, across in zip(vertices, longitudinal, lateral):
-        t = max(0.0, min(1.0, along / hand_length))
-        progress = _smoothstep((t - 0.24) / 0.68)
-        if progress <= 1e-9:
-            shaped.append(p)
-            continue
-        across_norm = across / half_width
-        # Die dem Koerperzentrum zugewandte Kante ist der Daumen; die andere
-        # Fingerkante wird leicht nach oben gerundet (Herz-Lobus).
-        thumb = _smoothstep((across_norm - 0.18) / 0.62)
-        finger_edge = 1.0 - _smoothstep((across_norm - 0.10) / 0.60)
-        inward_pull = progress * (0.035 + 0.12 * t) * (0.70 + 0.30 * thumb)
-        arch = 0.035 * math.sin(math.pi * t) * finger_edge * progress
-        up_down = progress * (0.11 * finger_edge - 0.15 * thumb) + arch
-        shaped.append((p[0] + inward[0] * inward_pull,
-                       p[1] + up_down,
-                       p[2] - 0.045 * progress))
+    for p in vertices:
+        if sign > 0.0:
+            u = (float(p[0]) - inner_x) / span_x
+        else:
+            u = (inner_x - float(p[0])) / span_x
+        u = max(0.0, min(1.0, u))
+        v = max(0.0, min(1.0, (float(p[1]) - y_min) / height))
+        depth = max(-1.0, min(1.0, (float(p[2]) - z_center) / z_half))
+        width = _heart_half_width(v)
+
+        # Die Innenkanten duerfen sich minimal ueberlappen, damit zwischen
+        # den beiden Mesh-Haelften kein haarfeiner Spalt sichtbar bleibt.
+        overlap = 0.12 * half_width * (1.0 - u)
+        x = center + sign * (half_width * width * u - overlap)
+        # Aussenkante leicht anheben, Innenkante oben zur Herzkerbe absenken.
+        y = (y_min + height * v
+             + 0.07 * height * u * math.sin(math.pi * v)
+             - notch * (1.0 - u) * _smoothstep((v - 0.68) / 0.32))
+        # Zur Spitze und zu den Loben hin etwas flacher werden, aber nie
+        # komplett zusammenfallen (sonst entstehen degenerierte Faces).
+        z = z_center + depth * z_half * (0.45 + 0.55 * width)
+        shaped.append((x, y, z))
     return shaped
+
+
+def _closest_point_pair(points_a: Sequence[Point],
+                        points_b: Sequence[Point]) -> Tuple[Point, Point, float]:
+    """Findet das naechste Punktepaar zweier Segment-Vertices."""
+    if not points_a or not points_b:
+        return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 0.0)
+    best = (float("inf"), points_a[0], points_b[0])
+    for a in points_a:
+        ax, ay, az = float(a[0]), float(a[1]), float(a[2])
+        for b in points_b:
+            dx = ax - float(b[0])
+            dy = ay - float(b[1])
+            dz = az - float(b[2])
+            dist2 = dx * dx + dy * dy + dz * dz
+            if dist2 < best[0]:
+                best = (dist2, a, b)
+    return best[1], best[2], math.sqrt(best[0])
+
+
+def _orthonormal_basis(axis: Vec3) -> Tuple[Vec3, Vec3]:
+    """Zwei senkrechte Einheitsvektoren zur Achse (fuer die Manschette)."""
+    seed = (0.0, 0.0, 1.0)
+    if abs(_dot(axis, seed)) > 0.9:
+        seed = (1.0, 0.0, 0.0)
+    first = _normalize(_sub(seed, _mul(axis, _dot(seed, axis))), (1.0, 0.0, 0.0))
+    second = _normalize(_cross(axis, first), (0.0, 1.0, 0.0))
+    return first, second
+
+
+def _dot(a: Sequence[float], b: Sequence[float]) -> float:
+    return float(a[0]) * float(b[0]) + float(a[1]) * float(b[1]) + float(a[2]) * float(b[2])
+
+
+def _cross(a: Sequence[float], b: Sequence[float]) -> Vec3:
+    return (float(a[1]) * float(b[2]) - float(a[2]) * float(b[1]),
+            float(a[2]) * float(b[0]) - float(a[0]) * float(b[2]),
+            float(a[0]) * float(b[1]) - float(a[1]) * float(b[0]))
+
+
+def make_joint_sleeve(points_a: Sequence[Point], points_b: Sequence[Point]
+                      ) -> Optional[MeshData]:
+    """Erzeugt eine glatte Ellipsoid-Manschette zwischen zwei R15-Segmenten.
+
+    Die Achse verbindet die beiden naechstliegenden Vertices, ihr Radius wird
+    aus dem schmaleren Querschnitt der benachbarten Segmente bestimmt. So
+    schliesst die Manschette auch die dreieckigen Luecken, die bei stark
+    gebeugten Ellbogen zwischen den starren Motor6D-Segmenten entstehen.
+    """
+    point_a, point_b, gap = _closest_point_pair(points_a, points_b)
+    if gap < 0.02:
+        return None
+    axis = _normalize(_sub(point_b, point_a), (0.0, 1.0, 0.0))
+    first, second = _orthonormal_basis(axis)
+    center = tuple((point_a[i] + point_b[i]) / 2.0 for i in range(3))
+
+    def radius_of(points: Sequence[Point]) -> float:
+        if not points:
+            return 0.0
+        p1 = [_dot(_sub(p, center), first) for p in points]
+        p2 = [_dot(_sub(p, center), second) for p in points]
+        return 0.5 * min(max(p1) - min(p1), max(p2) - min(p2))
+
+    minor = min(radius_of(points_a), radius_of(points_b)) * 0.88
+    minor = max(0.055, min(0.30, minor))
+    major = 0.5 * gap + 0.72 * minor
+    segments, rings = HEART_SLEEVE_SEGMENTS, HEART_SLEEVE_RINGS
+
+    positions: List[Vec3] = []
+    normals: List[Vec3] = []
+    uvs: List[Tuple[float, float]] = []
+    faces: List[Tuple[int, int, int]] = []
+    for ring in range(rings + 1):
+        phi = math.pi * ring / rings
+        along = math.cos(phi)
+        radial = math.sin(phi)
+        for segment in range(segments + 1):
+            theta = 2.0 * math.pi * segment / segments
+            c, s = math.cos(theta), math.sin(theta)
+            direction = (axis[0] * along + first[0] * radial * c + second[0] * radial * s,
+                         axis[1] * along + first[1] * radial * c + second[1] * radial * s,
+                         axis[2] * along + first[2] * radial * c + second[2] * radial * s)
+            position = (center[0] + axis[0] * along * major
+                        + first[0] * radial * c * minor
+                        + second[0] * radial * s * minor,
+                        center[1] + axis[1] * along * major
+                        + first[1] * radial * c * minor
+                        + second[1] * radial * s * minor,
+                        center[2] + axis[2] * along * major
+                        + first[2] * radial * c * minor
+                        + second[2] * radial * s * minor)
+            positions.append(position)
+            normals.append(_normalize(direction, (0.0, 0.0, 1.0)))
+            uvs.append((segment / segments, ring / rings))
+    for ring in range(rings):
+        for segment in range(segments):
+            a = ring * (segments + 1) + segment
+            b = a + segments + 1
+            faces.append((a, a + 1, b))
+            faces.append((a + 1, b + 1, b))
+    return MeshData(positions=positions, normals=normals, uvs=uvs,
+                    faces=faces, source_version="heart-joint-sleeve")
 
 
 def _mesh_normals(positions: Sequence[Point],
@@ -1129,18 +1279,80 @@ class PoseContext:
             source_version=mesh.source_version,
         )
 
+    def _heart_center_x(self) -> float:
+        """Gemeinsame Herzmitte aus den beiden posierten Handgelenken."""
+        left = _mat4_point(self.transforms["linke_hand"],
+                           self.joints.get("LeftHand", (0.0, 0.0, 0.0)))
+        right = _mat4_point(self.transforms["rechte_hand"],
+                            self.joints.get("RightHand", (0.0, 0.0, 0.0)))
+        return (float(left[0]) + float(right[0])) / 2.0
+
+    def _append_heart_arm_sleeves(self, result: MeshData,
+                                  spans: List[Tuple[str, int, int]]) -> MeshData:
+        """Fuegt weiche Verbindungsstuecke zwischen benachbarten Armsegmenten ein.
+
+        Die neuen Vertices werden an das Ende des Meshes gehaengt; die
+        bestehenden ``segment_spans`` bleiben dadurch gueltig. UVs und Farben
+        werden passend aufgefuellt, alle Normalen am Ende neu geglaettet.
+        """
+        positions: List[Vec3] = list(result.positions)
+        uvs: List[Tuple[float, float]] = list(result.uvs)
+        faces: List[Tuple[int, int, int]] = list(result.faces)
+        colors = list(result.colors) if result.colors else None
+        while len(uvs) < len(positions):
+            uvs.append((0.0, 0.0))
+        if colors is not None:
+            default_color = colors[0] if colors else (255, 255, 255, 255)
+            while len(colors) < len(positions):
+                colors.append(default_color)
+
+        appended = False
+        for (seg_a, start_a, end_a), (seg_b, start_b, end_b) in zip(spans, spans[1:]):
+            if (seg_a not in JOINT_BONE or seg_b not in JOINT_BONE
+                    or end_a <= start_a or end_b <= start_b):
+                continue
+            sleeve = make_joint_sleeve(positions[start_a:end_a],
+                                       positions[start_b:end_b])
+            if sleeve is None:
+                continue
+            offset = len(positions)
+            positions.extend(sleeve.positions)
+            uvs.extend(sleeve.uvs)
+            faces.extend(tuple(index + offset for index in face)
+                         for face in sleeve.faces)
+            if colors is not None:
+                default_color = colors[0] if colors else (255, 255, 255, 255)
+                colors.extend([default_color] * len(sleeve.positions))
+            appended = True
+
+        if not appended:
+            return result
+        return MeshData(
+            positions=positions,
+            normals=_mesh_normals(positions, faces),
+            uvs=uvs,
+            faces=faces,
+            colors=colors,
+            source_version=f"{result.source_version}+heart-sleeves",
+        )
+
     def _apply_segment_spans(self, mesh: MeshData,
-                             spans: List[Tuple[str, int, int]]) -> MeshData:
+                             spans: List[Tuple[str, int, int]],
+                             part_name: str = "") -> MeshData:
         """Starr je R15-Segment transformieren (Motor6D-Semantik).
 
         Jedes Segment bekommt die Transformation ``transforms[bone]`` seines
         Gelenks - Rotation exakt um das Bind-Attachment, Verkettung ueber
-        die Eltern-Gelenke. Kein weiches Verformen: R15-Teile sind starr,
-        dadurch bleiben die Gelenke auch bei starken Posen nahtlos.
+        die Eltern-Gelenke. Fuer ``hand_form = "heart"`` werden anschliessend
+        die Haende zu Halbherzen geformt und die Gelenkluecken der Arme mit
+        glatten Manschetten geschlossen.
         """
         positions: List[Vec3] = list(mesh.positions)
         has_normals = len(mesh.normals) == len(mesh.positions)
         normals: List[Vec3] = list(mesh.normals) if has_normals else []
+        heart_arms = (self.hand_form == "heart"
+                      and part_name in ("links_arm", "rechts_arm"))
+        center_x = self._heart_center_x() if heart_arms else 0.0
         deformed_hands = False
         for seg_name, start, end in spans:
             if end <= start:
@@ -1160,12 +1372,12 @@ class PoseContext:
                 wrist = _mat4_point(transform, self.joints[BONE_JOINT[bone]])
                 side = "Left" if seg_name == "LeftHand" else "Right"
                 positions[start:end] = deform_hand_to_heart(
-                    positions[start:end], wrist, side)
+                    positions[start:end], wrist, side, center_x=center_x)
                 deformed_hands = True
 
         if deformed_hands and has_normals:
             normals = _mesh_normals(positions, mesh.faces)
-        return MeshData(
+        result = MeshData(
             positions=positions,
             normals=normals if has_normals else [],
             uvs=list(mesh.uvs),
@@ -1173,6 +1385,9 @@ class PoseContext:
             colors=list(mesh.colors) if mesh.colors else None,
             source_version=mesh.source_version,
         )
+        if heart_arms:
+            result = self._append_heart_arm_sleeves(result, spans)
+        return result
 
     def apply_body(self, part_name: str, mesh: MeshData) -> MeshData:
         """Verformt ein Koerperteil (torso, Arme, Beine, Kopf, Hals)."""
@@ -1181,7 +1396,7 @@ class PoseContext:
         if self.rig is not None:
             spans = self.rig.segment_spans.get(part_name)
             if spans:
-                return self._apply_segment_spans(mesh, spans)
+                return self._apply_segment_spans(mesh, spans, part_name)
         chain = PART_CHAINS.get(part_name)
         if chain is None:
             return mesh
